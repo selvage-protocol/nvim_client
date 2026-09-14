@@ -72,11 +72,11 @@ harness.wait('the host edit to arrive', harness.deadline_ms, function()
   return harness.contains(harness.markers.host)
 end, harness.observe)
 
--- The host's caret and selection, as the plugin drew them: an overlay caret mark at the
--- host's own column, and a range mark behind it when the host has selected something. The
--- marks can only be the host's — the bridge withholds a cursor for the local peer — and the
--- label is the name this process would use for itself. The document is shared on both sides,
--- so the path the marks are addressed to exists here.
+-- The host's caret and selection, as the plugin drew them: a block at the host's own column,
+-- and a range mark behind it when the host has selected something. The marks can only be the
+-- host's — the bridge withholds a cursor for the local peer — and the caret carries the gutter
+-- sign of the name this process would use for itself. The document is shared on both sides, so
+-- the path the marks are addressed to exists here.
 local function presence_marks()
   local namespace = vim.api.nvim_get_namespaces()['selvage.presence']
   local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
@@ -86,43 +86,38 @@ local function presence_marks()
   return vim.api.nvim_buf_get_extmarks(bufnr, namespace, 0, -1, { details = true })
 end
 
-local function host_mark()
-  local label = vim.env.USER or 'neovim'
-  for _, mark in ipairs(presence_marks()) do
-    local text = mark[4].virt_text
-    if text ~= nil and text[1] ~= nil and text[1][1] ~= nil then
-      if text[1][1]:find(label, 1, true) ~= nil then
-        return mark
-      end
-    end
-  end
-  return nil
-end
-
---- The mark that carries a range, as opposed to the caret's own.
+--- The mark that carries the selection, as opposed to the caret's own: only the caret carries
+--- the gutter sign.
 local function host_selection()
   for _, mark in ipairs(presence_marks()) do
-    if mark[4].end_row ~= nil then
+    if mark[4].end_row ~= nil and mark[4].sign_text == nil then
       return mark
     end
   end
   return nil
 end
 
--- The caret is *at* the host's position: an overlay on the host's own line, not a row of its
--- own above it. The host selected the marker it wrote, so the caret's byte column is that
--- marker's length. A caret is published as soon as the buffer is shared and again from every
--- event that moves it, so the wait is for the one at the host marker rather than for any at
--- all — the earlier one is the caret the marker insert left behind.
+-- The caret is *at* the host's position: a block on the host's own line, not a row of its own
+-- above it. The host selected the marker it wrote, so the caret's byte column is that marker's
+-- length — the end of the line, where there is no cell to fill and the block is the one drawn
+-- after the text. The mark is the host's because the bridge withholds a cursor for the local
+-- peer and because its sign is the host's own name; a caret published as soon as the buffer was
+-- shared, before the host moved, would carry the same sign but sit at the column the insert left
+-- behind, which is why the wait is for the marker's column and not for any caret at all.
 local function host_caret()
-  local mark = host_mark()
-  if mark == nil or mark[4].virt_text_pos ~= 'overlay' then
-    return nil
+  local label = vim.env.USER or 'neovim'
+  for _, mark in ipairs(presence_marks()) do
+    if mark[2] == 0 and mark[3] == #harness.markers.host then
+      local text = mark[4].virt_text
+      local sign = mark[4].sign_text
+      local block = text ~= nil and text[1] ~= nil and mark[4].virt_text_pos ~= nil and #text[1][1] == 1
+      local mine = sign ~= nil and label:sub(1, #sign) == sign
+      if block and mine then
+        return mark
+      end
+    end
   end
-  if mark[2] ~= 0 or mark[3] ~= #harness.markers.host then
-    return nil
-  end
-  return mark
+  return nil
 end
 
 harness.wait('the host caret to be drawn at its column', harness.deadline_ms, function()

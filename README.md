@@ -73,20 +73,23 @@ which is what a convergence question turns on.
 
 ### Remote cursors
 
-A peer's caret is drawn **where the caret is**: an overlay `virt_text` extmark at the peer's own
-row and byte column, in the colour the bridge derived for them, with their name drawn over the
-characters under it rather than shifting them or adding a row. A `virt_lines_above` row of its
-own was the first shape and reads the position wrong — a virtual line starts at the text
-column, so the name cannot sit at the caret's column and the caret appears to be above the
-line rather than in it. A peer who has selected something gets a second extmark over
-`[anchor, head)`, whichever way the range was made, filled with the peer's colour at the alpha
-the bridge computed; a collapsed selection draws nothing, because the caret is already drawn.
-Both ends of both marks are the room's UTF-16 offsets converted to byte columns.
+A peer's caret is drawn **where the caret is**, as a block cursor: the one cell at the peer's own
+row and byte column is filled with the colour the bridge derived for them, and the character under
+it stays readable through the block instead of being covered by a name. Nothing is inserted, so
+the line keeps its width and the block sits against the selection fill rather than one cell away
+from it. A row of its own above the line was the first shape and reads the position wrong — a
+virtual line starts at the text column, not the caret's. At the end of a line there is no cell to
+fill, which is where a peer who is typing always is, so the caret is a single block in the empty
+cell after the text. A peer who has selected something gets a second extmark over `[anchor, head)`,
+whichever way the range was made, filled with the peer's colour at the alpha the bridge computed;
+a collapsed selection draws nothing, because the caret is already drawn. Both ends of both marks
+are the room's UTF-16 offsets converted to byte columns, and the block covers a whole character —
+a wide or an astral one included — rather than one byte of it.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
-highlight, so two peers whose names share an initial — `pi` and `pc` — are not identical signs.
-Every mark is cleared and recreated when presence changes, and every one goes when the session
-ends.
+highlight, so two peers whose names share an initial — `pi` and `pc` — are not identical signs. The
+name is no longer drawn over the text; the gutter is where it lives. Every mark is cleared and
+recreated when presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it — `CursorMoved`, `ModeChanged`,
 entering a buffer — coalesced into one `selection` per 100 ms, and `selectionCleared` goes out
@@ -225,7 +228,6 @@ keystroke in that window every run — which it can only do if the relay is what
 - A room document whose text does not end in a newline gains one here. Neovim's line-array
   buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
   has to add.
-- A peer's caret is an overlay, so its name covers the characters under it, and a peer's
-  selection is the colour blended with the editor's background rather than a real translucent
-  fill: a buffer highlight has no alpha, and a float would cost per-window bookkeeping on every
-  scroll and edit for less than the overlay gives at the same place.
+- A peer's selection is the colour blended with the editor's background rather than a real
+  translucent fill: a buffer highlight has no alpha, and a float would cost per-window
+  bookkeeping on every scroll and edit for less than the block cursor gives at the same place.

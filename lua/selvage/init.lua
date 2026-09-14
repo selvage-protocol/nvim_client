@@ -83,9 +83,9 @@ local function presence_namespace()
   return state.presence_ns
 end
 
---- The highlight group a peer's label and sign are drawn in, made once per peer from the
+--- The highlight group a peer's caret block and sign are drawn in, made once per peer from the
 --- colour the bridge derived, so a peer is the same colour in every client: black on the
---- peer's own colour, a chip over the text and a legible sign in the gutter alike.
+--- peer's own colour, a block over the caret's cell and a legible sign in the gutter alike.
 local function peer_highlight(cursor)
   local name = state.peer_groups[cursor.peerId]
   if name == nil then
@@ -112,7 +112,7 @@ local function fill_alpha(fill)
   return alpha ~= nil and tonumber(alpha, 16) / 255 or 0.25
 end
 
---- The highlight a peer's selection is filled with, made once per peer beside the label one.
+--- The highlight a peer's selection is filled with, made once per peer beside the caret one.
 ---
 --- The bridge hands the fill as `#rrggbbaa` and a buffer highlight takes an opaque
 --- `#rrggbb`, so the alpha is resolved here: against the editor's own background, so the fill
@@ -172,17 +172,24 @@ local function peer_sign(label)
   return vim.fn.strdisplaywidth(two) <= 2 and two or first
 end
 
+--- The byte column just past the character at `col`, which is where the caret's block ends. One
+--- code point, so a wide or an astral character is coloured whole rather than half.
+local function cell_end(line, col)
+  return vim.fn.byteidx(line, vim.fn.charidx(line, col) + 1)
+end
+
 --- Draws the peer carets a presence report resolved, and the ranges behind the ones that
 --- selected something. Every mark is recreated rather than moved: a mark travels with the
 --- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
 --- names would otherwise stay behind.
 ---
---- The caret is a `virt_text` overlay at the peer's own row and column: the name is drawn over
---- the line where the caret is, shifting nothing and adding no row. A row of its own above the
---- line reads the position wrong — a virtual line starts at the text column, so the name
---- cannot sit at the caret's column and the caret appears to be above the text rather than in
---- it. The trade is that the name covers the characters under it, which is the honest cost of
---- being at the right place.
+--- The caret is a block cursor: the one cell the peer is on is filled with their colour, and
+--- the character under it stays readable through the block rather than being covered by a name.
+--- At the end of a line there is no cell to fill, and that is where a peer who is typing is, so
+--- a single block is drawn in the empty cell after the text. Neither inserts anything, so the
+--- line keeps its width and the caret stays against the selection fill rather than beside it.
+--- A row of its own above the line reads the position wrong, as before: a virtual line starts at
+--- the text column, not the caret's.
 local function draw_presence(cursors)
   state.cursors = cursors or {}
   clear_presence()
@@ -192,7 +199,7 @@ local function draw_presence(cursors)
     if document ~= nil and api.nvim_buf_is_valid(document.bufnr) then
       local label = cursor.label or cursor.peerId or 'peer'
       local name = peer_highlight(cursor)
-      -- The selection first, so the caret chip sits over it. `anchor` after `head` is a
+      -- The selection first, so the caret block sits over it. `anchor` after `head` is a
       -- selection made backwards, which is still a selection: the range is the two ends in
       -- order, and a collapsed one is a caret with nothing to fill.
       if cursor.anchor ~= cursor.head then
@@ -213,14 +220,24 @@ local function draw_presence(cursors)
         end
       end
       local row, col = document:position(cursor.head)
-      local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, col, {
-        virt_text = { { label, name } },
-        virt_text_pos = 'overlay',
-        hl_mode = 'replace',
+      local line = document:line(row)
+      local caret = {
         sign_text = peer_sign(label),
         sign_hl_group = name,
-        priority = 100,
-      })
+        -- Above the fill, so the first cell of a backwards selection reads as the caret.
+        priority = 110,
+      }
+      if col < #line then
+        caret.end_row = row
+        caret.end_col = cell_end(line, col)
+        caret.hl_group = name
+      else
+        -- Past the last character there is no cell to fill, and that is where a peer typing at
+        -- the end of a line is: one block in the empty cell after the text says the same thing.
+        caret.virt_text = { { ' ', name } }
+        caret.virt_text_pos = 'overlay'
+      end
+      local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, col, caret)
       if ok then
         state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
       end

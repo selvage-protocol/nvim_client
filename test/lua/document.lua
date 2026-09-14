@@ -80,6 +80,9 @@ check('  and after a two-byte character', caret:offset(1, 3), 7)
 check('  and at the end of the document', caret:offset(1, #'wörld'), 10)
 check('  and position reads the offset back as a row', select(1, caret:position(10)), 1)
 check('  and a byte column', select(2, caret:position(10)), 6)
+check('  and an offset on the astral character is on its row', select(1, caret:position(1)), 0)
+check('  and at the byte column of that character', select(2, caret:position(1)), 1)
+check('  and past the astral pair, at the byte column of the next', select(2, caret:position(3)), 5)
 
 -- -- a remote edit, applied as a range ---------------------------------------
 
