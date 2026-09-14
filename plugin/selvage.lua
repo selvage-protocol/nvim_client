@@ -39,6 +39,10 @@ command('SelvageLeave', function()
   require('selvage').leave()
 end, { nargs = 0, desc = 'Leave the session' })
 
+command('SelvagePeers', function()
+  require('selvage').list_peers()
+end, { nargs = 0, desc = 'List the session participants and the colours their carets are drawn in' })
+
 command('SelvageDisplayName', function(args)
   require('selvage').set_display_name(args.args)
 end, { nargs = '?', desc = 'Set the name other participants see' })
