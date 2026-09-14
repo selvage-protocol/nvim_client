@@ -87,11 +87,14 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 | | |
 |---|---|
 | `:SelvageHost <serverUrl>` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. |
-| `:SelvageJoin <invite>` | Join the room the invite link names. The room's documents open as `selvage://<path>` buffers. |
+| `:SelvageJoin <invite>` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. |
+| `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. |
 
 `vim.g.selvage_display_name` is the name other participants see; it defaults to `$USER`.
+`vim.g.selvage_open_on_join = false` keeps the join from changing the window, while still
+opening the room's documents as buffers `:SelvageOpen` reaches.
 
 The working directory is the grant: a host shares the file buffers under it, and nothing above
 it. A guest's buffers are the room's, not files here — they have nowhere on disk to be written.
@@ -172,10 +175,13 @@ keystroke in that window every run — which it can only do if the relay is what
   lost ("The local IPC" above); when the two are about the same text there is no position to
   move it to, and the room's text is what the buffer ends on. What it cannot do is mangle the
   buffer.
-- A guest's buffer exists as soon as the handshake names the room's documents, which is before
-  the sync carrying their text. A keystroke made in that window is superseded by the room's
-  text: the two are counted together once it lands, so nothing is mangled, but the room's text
-  is what the buffer ends on and the keystroke is in neither the buffer nor the room.
+- A guest's buffer is created and shown as soon as the handshake names the room's documents,
+  which is before the sync carrying their text. A keystroke made in that window is superseded by
+  the room's text: the two are counted together once it lands, so nothing is mangled, but the
+  room's text is what the buffer ends on and the keystroke is in neither the buffer nor the room.
+- A join shows only the room's first document. A room with several leaves the rest as buffers
+  for `:SelvageOpen` rather than opening a window each, and a document the host opens after the
+  join gets a buffer but never takes the guest's window.
 - A room document whose text does not end in a newline gains one here. Neovim's line-array
   buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
   has to add.
