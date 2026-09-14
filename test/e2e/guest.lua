@@ -72,6 +72,35 @@ harness.wait('the host edit to arrive', harness.deadline_ms, function()
   return harness.contains(harness.markers.host)
 end, harness.observe)
 
+-- The host's caret, as the plugin drew it: a name row above the line the host is on. The mark
+-- can only be the host's — the bridge withholds a cursor for the local peer — and its label is
+-- the name this process would use for itself. The document is shared on both sides, so the
+-- path the mark is addressed to exists here.
+local function host_mark()
+  local namespace = vim.api.nvim_get_namespaces()['selvage.presence']
+  local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
+  if namespace == nil or bufnr == -1 then
+    return nil
+  end
+  local label = vim.env.USER or 'neovim'
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, namespace, 0, -1, { details = true })) do
+    local lines = mark[4].virt_lines
+    if lines ~= nil and lines[1] ~= nil and lines[1][1] ~= nil then
+      if lines[1][1][1]:find(label, 1, true) ~= nil then
+        return mark
+      end
+    end
+  end
+  return nil
+end
+
+harness.wait('the host caret to be drawn as a presence mark', harness.deadline_ms, function()
+  return host_mark() ~= nil
+end, function()
+  return 'no presence mark on selvage://' .. harness.seed_path
+end)
+harness.log('the host caret is drawn as a presence mark')
+
 vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { harness.markers.guest })
 harness.log('made the guest edit; buffer now', vim.inspect(harness.text()))
 
