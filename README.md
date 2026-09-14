@@ -133,6 +133,10 @@ Clone the repository and run `npm ci` inside it (the companion needs `yjs`, `y-p
 -- :packadd selvage
 ```
 
+With `nix`, `nix run .#nvim` gives a Neovim that already has the plugin on its runtime path and
+Node on `PATH`, built from the flake. It sits beside the route above rather than replacing it:
+same plugin, assembled from the store instead of from a checkout, and no `npm ci` needed for it.
+
 ## Checks
 
 ```
@@ -141,9 +145,24 @@ npm test                    # the companion, against a replica with no server be
 scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plus actionlint
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
+
+nix flake check             # the same three suites, in a sandbox
+nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
-The last one needs a built `selvaged`, and finds one through `SELVAGE_SELVAGED` when that is
+`nix flake check` runs `typecheck`, the companion suite and the three files under `test/lua/` —
+each in its own Neovim — with no network and no editor session. The two-instance proof is not
+one of them: it needs a `selvaged` from the sibling `reference_server` checkout, which a
+sandboxed build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof
+with the flake's Node and Neovim and whatever `SELVAGE_SELVAGED` names, from the checkout in the
+working directory:
+
+```
+SELVAGE_SELVAGED=/path/to/reference_server/target/debug/selvaged nix run .#e2e
+```
+
+The two-instance proof (`scripts/e2e/run-two-instance.sh`, or `nix run .#e2e`) needs a built
+`selvaged`, and finds one through `SELVAGE_SELVAGED` when that is
 set and otherwise under `../reference_server/target/{debug,release}` — a path relative to this
 checkout. From a git worktree under `.worktrees/` that sibling does not exist, so point it at
 the main checkout's binary:
