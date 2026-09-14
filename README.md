@@ -73,18 +73,35 @@ which is what a convergence question turns on.
 
 ### Remote cursors
 
-A peer's caret is drawn **where the caret is**, as a block cursor: the one cell at the peer's own
-row and byte column is filled with the colour the bridge derived for them, and the character under
-it stays readable through the block instead of being covered by a name. Nothing is inserted, so
-the line keeps its width and the block sits against the selection fill rather than one cell away
-from it. A row of its own above the line was the first shape and reads the position wrong — a
-virtual line starts at the text column, not the caret's. At the end of a line there is no cell to
-fill, which is where a peer who is typing always is, so the caret is a single block in the empty
-cell after the text. A peer who has selected something gets a second extmark over `[anchor, head)`,
-whichever way the range was made, filled with the peer's colour at the alpha the bridge computed;
-a collapsed selection draws nothing, because the caret is already drawn. Both ends of both marks
-are the room's UTF-16 offsets converted to byte columns, and the block covers a whole character —
-a wide or an astral one included — rather than one byte of it.
+A peer's caret is drawn as a block cursor on the cell **before** the offset the room carries: the
+character the caret is *in front of*, not the one it has reached. The block is filled with the
+colour the bridge derived for the peer, and the character under it stays readable through the
+block instead of being covered by a name. Nothing is inserted, so the line keeps its width and the
+block sits against the selection fill rather than one cell away from it. A row of its own above
+the line was the first shape and reads the position wrong — a virtual line starts at the text
+column, not the caret's. The start of a line has no cell before it, so a caret there keeps the
+block on the cell it is on, where a bar at the line's start is drawn — the one place where a
+caret in front of the first character and a caret on it draw the same block; an empty line has no
+cell either, and the caret is then the single block in the empty cell. A peer who has selected
+something gets a second extmark over `[anchor, head)`, whichever way the range was made, filled
+with the peer's colour at the alpha the bridge computed; a collapsed selection draws nothing,
+because the caret is already drawn. Both ends of both marks are the room's UTF-16 offsets
+converted to byte columns, and the block covers a whole character — a wide or an astral one
+included — rather than one byte of it.
+
+**A client's own caret and the block the others see are two different shapes, and this is where
+that shows.** Neovim's cursor rests *on* a character, and its column is that character's byte
+index, so this client publishes the offset of the character the cursor is on — the same offset a
+VS Code caret sitting *in front of* that character publishes. A block over a character and a bar
+between two characters are not the same shape, so one of the two readings has to move, and this
+renderer is the one that moves: a peer running Neovim is shown to everyone else with the block one
+cell to the left of where that peer sees their own cursor. Shifting the publisher instead —
+publishing the offset after the character the cursor is on — would put a Neovim peer's block under
+their own cursor, but a caret and a selection's `head` are the same published number, so it would
+move the end of the selection fill with it. What a Vim visual selection should publish as its
+`head` — the last cell it covers, or the position after it — is a decision about the selection,
+taken on its own, and not one a renderer gets to make. The feed is what the room counts, so it is
+left alone.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial — `pi` and `pc` — are not identical signs. The
