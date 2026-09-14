@@ -653,7 +653,7 @@ local function resolve_display_name(callback)
     callback(fallback)
     return
   end
-  vim.ui.input({ prompt = 'The name other participants see', default = fallback }, function(input)
+  vim.ui.input({ prompt = 'The name other participants see: ', default = fallback }, function(input)
     local name = vim.trim(input or '')
     if name == '' then
       notify(

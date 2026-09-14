@@ -570,6 +570,7 @@ vim.env.SELVAGE_DISPLAY_NAME = nil
 vim.ui.input = function(opts, on_confirm)
   prompted = prompted + 1
   check('  the prompt pre-fills the login name', opts and opts.default, vim.env.USER or 'neovim')
+  check('  and separates the prompt from the value', opts and opts.prompt, 'The name other participants see: ')
   on_confirm('  Ada  ')
 end
 selvage.leave()
