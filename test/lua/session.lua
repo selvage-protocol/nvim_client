@@ -8,6 +8,7 @@
 -- sending into a process that is no longer there.
 
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
+vim.cmd('runtime! plugin/selvage.lua')
 
 local failures = 0
 
@@ -112,6 +113,102 @@ handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomI
 local after_crash = errors()
 handlers().on_exit(1)
 check('a companion that dies on its own is', errors(), after_crash + 1)
+
+-- -- a guest has the room's document put in front of it -----------------------
+--
+-- The room path is the host's working directory plus the path within it — a VS Code host
+-- started above a folder called `workspace` publishes `workspace/README.md` — so it is not a
+-- name a guest can guess, and a guest typing it wrong concluded the join had failed. Joining
+-- now shows the document, and `:SelvageOpen` reaches the ones that are not shown.
+
+vim.cmd('edit! ' .. path)
+selvage.join('ws://127.0.0.1:1/room#tok')
+check('joining sends the command', sent[#sent].type, 'join')
+
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-guest' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'workspace/README.md' } },
+})
+check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage://workspace/README.md')
+check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
+
+-- A document the host opens afterwards gets a buffer but does not take the window: the guest
+-- may be editing the first one.
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'workspace/README.md', 'workspace/other.lua' } },
+})
+check('a document opened later does not steal the window', vim.fn.bufname('%'), 'selvage://workspace/README.md')
+check('  and it is reachable as a buffer', vim.fn.bufnr('selvage://workspace/other.lua') ~= -1, true)
+
+vim.cmd('SelvageOpen workspace/other.lua')
+check(':SelvageOpen shows a document by its room path', vim.fn.bufname('%'), 'selvage://workspace/other.lua')
+
+vim.cmd('SelvageOpen README.md')
+check(':SelvageOpen takes the basename', vim.fn.bufname('%'), 'selvage://workspace/README.md')
+
+check(
+  'completion offers the session documents',
+  table.concat(vim.fn.getcompletion('SelvageOpen workspace/', 'cmdline'), ','),
+  'workspace/README.md,workspace/other.lua'
+)
+
+local offered = nil
+local select = vim.ui.select
+vim.ui.select = function(items, _, on_choice)
+  offered = items
+  on_choice(items[2], 2)
+end
+vim.cmd('SelvageOpen')
+vim.ui.select = select
+check(
+  'a bare :SelvageOpen offers every document',
+  offered and table.concat(offered, ','),
+  'workspace/README.md,workspace/other.lua'
+)
+check('  and shows the one chosen', vim.fn.bufname('%'), 'selvage://workspace/other.lua')
+
+-- A join whose room has several documents shows the first and points at the rest.
+selvage.leave()
+selvage.join('ws://127.0.0.1:1/room#tok')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-two' })
+local before = #notices
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'a/one.lua', 'a/two.lua' } },
+})
+check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
+local pointed = false
+for index = before + 1, #notices do
+  pointed = pointed or notices[index].message:find(':SelvageOpen', 1, true) ~= nil
+end
+check('  and the rest are pointed at', pointed, true)
+
+-- A room with no documents yet shows the first one that arrives.
+selvage.leave()
+vim.cmd('edit! ' .. path)
+local unrelated = vim.fn.bufname('%')
+selvage.join('ws://127.0.0.1:1/room#tok')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-empty' })
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = {} } })
+check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { 'late.md' } } })
+check('  and the first document to arrive is shown', vim.fn.bufname('%'), 'selvage://late.md')
+
+-- The escape hatch: `vim.g.selvage_open_on_join = false` keeps the buffer but not the window.
+selvage.leave()
+vim.g.selvage_open_on_join = false
+selvage.join('ws://127.0.0.1:1/room#tok')
+vim.cmd('edit! ' .. path)
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-off' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'workspace/README.md' } },
+})
+check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated)
+check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
+vim.g.selvage_open_on_join = nil
 
 vim.notify = notify
 
