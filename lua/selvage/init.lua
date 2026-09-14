@@ -164,6 +164,11 @@ local function on_message(message)
 end
 
 local function reset()
+  -- The session is over, so every buffer it shared stops reporting: a callback left attached
+  -- would keep sending into a companion that is gone.
+  for _, document in pairs(state.documents) do
+    document:detach()
+  end
   state.documents = {}
   state.status = 'idle'
   state.role = nil

@@ -177,6 +177,19 @@ function Document:attach()
   return ok
 end
 
+--- Stops reporting this buffer's changes. A session that has ended must not leave an
+--- `on_bytes` behind: the buffer outlives the companion, and the callback it would keep
+--- calling has nothing left to send to.
+function Document:detach()
+  if self.detached then
+    return
+  end
+  self.detached = true
+  if api.nvim_buf_is_valid(self.bufnr) then
+    pcall(api.nvim_buf_detach, self.bufnr)
+  end
+end
+
 --- Re-reads the buffer into the shadow and publishes the whole document as one change.
 function Document:resync()
   local previous = self:text()
