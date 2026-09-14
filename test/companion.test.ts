@@ -72,6 +72,36 @@ function apply(text: string, change: { start: number; end: number; text: string 
 }
 
 /**
+ * The positions in `text` that are one half of a surrogate pair without the other — a code
+ * unit the front-end's `vim.json.decode` refuses when it arrives as a `\uD800`–`\uDFFF`
+ * escape, dropping the whole line and never answering the message it was in. Node's
+ * `JSON.parse` accepts such an escape, so decoding the line is not the whole check; this is
+ * the one thing the two decoders disagree on, and it is what a `text` has to be free of.
+ */
+function loneSurrogates(text: string): number[] {
+  const found: number[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+      } else {
+        found.push(index);
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      found.push(index);
+    }
+  }
+  return found;
+}
+
+/** A message as the companion writes it: `main.ts`'s one JSON object per line. */
+function wire(notification: Notification): string {
+  return `${JSON.stringify(notification)}\n`;
+}
+
+/**
  * The front-end's half of the version protocol, as `lua/selvage/document.lua` applies it: a
  * buffer, a count of the changes it has taken, and the refusal of an `applyEdit` whose version
  * is not this document's own.
@@ -289,6 +319,41 @@ test('a remote change is asked for as a range, not a whole document', async () =
   await it.companion.handle({ type: 'applied', id: 1, ok: true });
   await settle();
   assert.equal(it.applies.length, 1);
+});
+
+test('an astral edit reaches the front-end as whole characters it can decode', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'a\u{1F601}b\n' });
+
+  // A peer replaces one emoji with another. The two share a high surrogate, and a diff that
+  // walked one code unit at a time left the change boundary between the halves: the range was
+  // `[2, 3)` and its text a lone `\ude00`. That is not an edit any editor can make, and the
+  // front-end never saw it — `vim.json.decode` refuses the escape, drops the line, and the
+  // `applyEdit` is never answered, so the bridge holds that document for the rest of the
+  // session, taking no remote edits and publishing no local ones. The change gives up one code
+  // unit at each end instead and carries the whole character.
+  it.engine.remote('notes.txt', 'a\u{1F600}b\n');
+  await settle();
+  assert.deepEqual(
+    change(it.applies[0]),
+    { start: 1, end: 3, text: '\u{1F600}', version: 0 },
+    'one replacement of the whole character, not half of one',
+  );
+
+  // The same edit as the front-end receives it: the serialized line, not the object, decoded
+  // the way the newline-delimited reader hands it on. It has to be JSON a decoder takes, and
+  // its text whole characters — the shape the bug broke and this test exists to keep.
+  const notification = it.applies[0];
+  assert.ok(notification);
+  const line = wire(notification);
+  const decoded = JSON.parse(line) as { start: number; end: number; text: string };
+  assert.deepEqual(loneSurrogates(decoded.text), [], 'no half character reaches the decoder');
+  assert.equal(
+    apply('a\u{1F601}b\n', decoded),
+    'a\u{1F600}b\n',
+    'and the decoded change is the one that gets there',
+  );
 });
 
 test('an edit the front-end refused is offered again where its buffer has it', async () => {
