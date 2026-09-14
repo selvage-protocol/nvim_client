@@ -526,6 +526,134 @@ check('a caret and a selection are up before the session ends', #marks, 2)
 selvage.leave()
 check('leaving the session clears every mark', #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}), 0)
 
+-- -- the name the room sees -----------------------------------------------------
+--
+-- The name travels in the `host`/`join` handshake and nothing carries it afterwards, so a live
+-- session keeps the name it started with. Every source of it is exercised here: the plugin's
+-- global, `SELVAGE_DISPLAY_NAME`, the prompt, and the login name as a last resort. A configured
+-- name is never asked about, and a process with no one to ask falls back rather than block.
+
+--- The notice, if any, a command added since `from`.
+local function said_since(from, needle)
+  for index = from + 1, #notices do
+    if notices[index].message:find(needle, 1, true) ~= nil then
+      return notices[index].message
+    end
+  end
+  return nil
+end
+
+local saved_input = vim.ui.input
+local prompted = 0
+
+vim.g.selvage_display_name = nil
+vim.env.SELVAGE_DISPLAY_NAME = 'Env Name'
+vim.ui.input = function()
+  prompted = prompted + 1
+end
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('SELVAGE_DISPLAY_NAME names the session', last_of('host') and last_of('host').displayName, 'Env Name')
+check('  and it is not asked about', prompted, 0)
+
+-- The global is the plugin's own setting, so it wins over the ambient variable.
+vim.g.selvage_display_name = 'Global Name'
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('the global wins over the environment', last_of('host') and last_of('host').displayName, 'Global Name')
+check('  and it is not asked about either', prompted, 0)
+
+-- With neither set, the user is asked. The answer is used, trimmed, and becomes the global, so
+-- the same Neovim is not asked again.
+vim.g.selvage_display_name = nil
+vim.env.SELVAGE_DISPLAY_NAME = nil
+vim.ui.input = function(opts, on_confirm)
+  prompted = prompted + 1
+  check('  the prompt pre-fills the login name', opts and opts.default, vim.env.USER or 'neovim')
+  on_confirm('  Ada  ')
+end
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('with nothing configured the user is asked', prompted, 1)
+check('  and the answer names the session', last_of('host') and last_of('host').displayName, 'Ada')
+check('  and it becomes the configured name', vim.g.selvage_display_name, 'Ada')
+
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('a configured name is not asked about again', prompted, 1)
+check('  and it names the next session too', last_of('host') and last_of('host').displayName, 'Ada')
+
+-- Dismissing the prompt is not a name; the login name is used for this session, the global is
+-- left unset so the question is asked again, and the reason is said rather than silent.
+vim.g.selvage_display_name = nil
+vim.ui.input = function(_, on_confirm)
+  prompted = prompted + 1
+  on_confirm(nil)
+end
+local before_dismissal = #notices
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check(
+  'a dismissed prompt falls back to the login name',
+  last_of('host') and last_of('host').displayName,
+  vim.env.USER or 'neovim'
+)
+check('  and does not configure it', vim.g.selvage_display_name, nil)
+check('  and the room is told why', said_since(before_dismissal, 'no display name chosen') ~= nil, true)
+
+-- No input at all: the built-in `vim.ui.input` reads a terminal a headless process does not
+-- have, so it is never shown and the fallback's reason is said instead.
+vim.ui.input = saved_input
+local before_headless = #notices
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check(
+  'a process with no one to ask is not prompted',
+  last_of('host') and last_of('host').displayName,
+  vim.env.USER or 'neovim'
+)
+check('  and the room is told why', said_since(before_headless, 'no display name is set') ~= nil, true)
+
+-- `:SelvageName` sets the configured name before a session, says so, and reports the name in
+-- force when given none.
+selvage.leave()
+vim.cmd('SelvageName Grace')
+check(':SelvageName sets the configured name', vim.g.selvage_display_name, 'Grace')
+local before_set = #notices
+vim.cmd('SelvageName Pat')
+check('  it says what it did', said_since(before_set, 'display name set to "Pat"') ~= nil, true)
+check('  and before a session says when it applies', said_since(before_set, 'the next session will use it') ~= nil, true)
+local before_report = #notices
+vim.cmd('SelvageName')
+check('  and with no name reports the one in force', said_since(before_report, 'the name others see is "Pat"') ~= nil, true)
+
+-- A change during a live session is for the next one: the name rode in the handshake, and
+-- nothing after it carries a name. The command says so and sends nothing.
+vim.g.selvage_display_name = nil
+vim.ui.input = function(_, on_confirm)
+  on_confirm('First')
+end
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('the session starts under the chosen name', last_of('host') and last_of('host').displayName, 'First')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-name' })
+local hosts_before = count_type('host')
+local before_live = #notices
+vim.cmd('SelvageName Second')
+check('  :SelvageName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
+check('  and sends nothing to the live session', count_type('host'), hosts_before)
+check(
+  '  and says the change is for the next session',
+  said_since(before_live, 'the change applies to the next host or join') ~= nil,
+  true
+)
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('the next session uses the changed name', last_of('host') and last_of('host').displayName, 'Second')
+selvage.leave()
+vim.ui.input = saved_input
+vim.g.selvage_display_name = nil
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
