@@ -8,7 +8,7 @@
  */
 
 import { SessionBridge } from '../vendor/bridge/index.ts';
-import type { Engine } from '../vendor/bridge/index.ts';
+import type { Engine, TextChange } from '../vendor/bridge/index.ts';
 import { SelvageEngine, isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
@@ -31,6 +31,15 @@ export const realEngines: EngineFactory = {
   join: (invite, displayName) => SelvageEngine.join(invite, displayName),
 };
 
+/**
+ * A document the front-end has opened whose text the room has not sent yet: the text it was
+ * opened with, and the local changes the front-end has counted since.
+ */
+interface Unarrived {
+  text: string;
+  changes: TextChange[];
+}
+
 export interface CompanionOptions {
   send: (notification: Notification) => void;
   engines?: EngineFactory;
@@ -47,8 +56,8 @@ export class Companion {
   private readonly autoSave: boolean;
   private engine?: CompanionEngine;
   private bridge?: SessionBridge;
-  /** Documents the front-end has opened whose text the room has not sent yet, by their own text. */
-  private readonly unarrived = new Map<string, string>();
+  /** Documents the front-end has opened whose text the room has not sent yet — see `open`. */
+  private readonly unarrived = new Map<string, Unarrived>();
   private stopListening?: () => void;
 
   constructor(options: CompanionOptions) {
@@ -90,14 +99,11 @@ export class Companion {
         break;
       }
       case 'change': {
-        const applied = this.editor.changed(request.path, {
+        this.changed(request.path, {
           start: request.start,
           end: request.end,
           text: request.text,
         });
-        if (applied) {
-          this.bridge?.documentChanged(request.path);
-        }
         break;
       }
       case 'applied': {
@@ -151,24 +157,77 @@ export class Companion {
    * there. The hold is what makes the room send the text to this client and what makes its
    * arrival an event this process hears, so waiting for the text without it would wait for
    * ever. A host supplies the text instead of waiting for it, so it opens at once.
+   *
+   * A document opened this way has no mirror until the text arrives, and a change made to it in
+   * the meantime is kept rather than dropped — see `changed`.
    */
   private open(path: string, text: string): void {
     const engine = this.engine;
     if (engine !== undefined && engine.session().role === 'guest' && !engine.has(path)) {
-      this.unarrived.set(path, text);
-      void engine.open(path).catch((error: unknown) => {
-        this.send({
-          type: 'report',
-          report: {
-            kind: 'sessionError',
-            code: isProtocolError(error) ? error.code : 'error',
-            message: `the server refused to open ${path}: ${error instanceof Error ? error.message : String(error)}`,
-          },
+      this.unarrived.set(path, { text, changes: [] });
+      void engine
+        .open(path)
+        .then(() => {
+          // The text can be here before the server's answer to the hold is: the answer and the
+          // sync that carries the text are two messages on one connection, and which arrives
+          // first is the server's to decide. The engine reports an arrival for a document it
+          // holds, so it reports the one that arrives second — the answer, when the text was
+          // already here, is the moment nothing else will report.
+          if (engine.has(path)) {
+            this.arrive(path);
+          }
+        })
+        .catch((error: unknown) => {
+          this.send({
+            type: 'report',
+            report: {
+              kind: 'sessionError',
+              code: isProtocolError(error) ? error.code : 'error',
+              message: `the server refused to open ${path}: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          });
         });
-      });
       return;
     }
     this.editor.opened(path, text);
+    this.bridge?.documentOpened(path);
+  }
+
+  /**
+   * A local edit, from the front-end's `change`.
+   *
+   * The front-end counts every change the moment it makes it, and the mirror counts every change
+   * it takes. A change to a document whose mirror does not exist yet — a guest's document whose
+   * room text has not arrived — would be counted on one side only, and the version an `applyEdit`
+   * carries would then be one the front-end has already left: the range would be refused for
+   * ever, and the buffer's difference from the replica, of which the mirror is this process's
+   * model, would be published to the room. So a change the mirror has no document to take is kept
+   * and applied when the document is made, in the order the front-end counted it.
+   */
+  private changed(path: string, change: TextChange): void {
+    if (this.editor.changed(path, change)) {
+      this.bridge?.documentChanged(path);
+      return;
+    }
+    this.unarrived.get(path)?.changes.push(change);
+  }
+
+  /**
+   * The room's text for a document this client opened before it arrived. The mirror is created
+   * against the text the front-end opened the buffer with, and then takes the local changes the
+   * front-end has counted since — so the two counts start at the same moment and move together,
+   * which is what an `applyEdit`'s version is read against.
+   */
+  private arrive(path: string): void {
+    const held = this.unarrived.get(path);
+    if (held === undefined) {
+      return;
+    }
+    this.unarrived.delete(path);
+    this.editor.opened(path, held.text);
+    for (const change of held.changes) {
+      this.editor.changed(path, change);
+    }
     this.bridge?.documentOpened(path);
   }
 
@@ -205,17 +264,14 @@ export class Companion {
       autoSave: this.autoSave,
     });
     // The event that brings a document's text is the moment a document opened before it can be
-    // reconciled against it. The bridge's own listener was registered first and finds no buffer
-    // for the path, so the reconcile here is the first one the document gets.
+    // reconciled against it. A document opened that way has no buffer yet — `arrive` is what
+    // makes one — so the bridge's own listener, registered first, finds nothing for the path and
+    // the reconcile here is the first one the document gets.
     const stop = engine.on((event) => {
       if (event.type !== 'documentChanged') {
         return;
       }
-      const text = this.unarrived.get(event.path);
-      if (text !== undefined) {
-        this.unarrived.delete(event.path);
-        this.open(event.path, text);
-      }
+      this.arrive(event.path);
     });
     this.stopListening = stop;
     const session = engine.session();
