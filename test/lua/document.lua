@@ -123,5 +123,21 @@ local echoed, _, echoed_sent = document({ 'a' })
 apply(echoed, { start = 0, ['end'] = 0, text = 'z' })
 check('a remote edit is not reported back as a local one', #echoed_sent, 0)
 
+-- -- a document the session has let go ----------------------------------------
+
+local left, left_buf, left_sent = document({ 'a' })
+left:detach()
+vim.api.nvim_buf_set_text(left_buf, 0, 0, 0, 0, { 'X' })
+check('a detached document reports nothing', #left_sent, 0)
+check('  and stops tracking the buffer', left:text(), 'a\n')
+check(
+  '  and a remote edit is not applied to it',
+  left:apply({ start = 0, ['end'] = 0, text = 'y', version = left.version }),
+  false
+)
+check('  and detaching twice is not an error', pcall(function()
+  left:detach()
+end), true)
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

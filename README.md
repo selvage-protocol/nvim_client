@@ -124,17 +124,19 @@ Clone the repository and run `npm ci` inside it (the companion needs `yjs`, `y-p
 npm run typecheck
 npm test                    # the companion, against a replica with no server behind it
 scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plus actionlint
-scripts/test-lua.sh         # the offset arithmetic, in a real headless Neovim
+scripts/test-lua.sh         # the Lua side, in a real headless Neovim
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
 ```
 
 There is no `busted` and no plugin-test framework. Almost every rule worth testing — what enters
 the replica, which change an editor is asked to apply, when a document is written — lives in the
 companion, and is tested there against a fake editor. What is left on the Lua side is
-translation plus one thing that is not: the conversion between Neovim's byte positions and the
-protocol's UTF-16 code units. That one gets `test/lua/document.lua`, which runs in a real
-headless Neovim against a real buffer and a real `on_bytes`, because a framework mocking those
-would be testing the mock.
+translation, the wiring around one session, and one rule of the editor's own: the conversion
+between Neovim's byte positions and the protocol's UTF-16 code units. The first two get
+`test/lua/document.lua` and `test/lua/session.lua`, which run in a real headless Neovim — the
+first against a real buffer and a real `on_bytes`, because a framework mocking those would be
+testing the mock; the second against a stubbed companion, because what it checks is that a
+buffer a session shared is let go of when the session ends.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
 each loading the real plugin and starting its own real companion, one hosting and one joining

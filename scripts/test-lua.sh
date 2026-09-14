@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# The Lua side's own checks, in a real headless Neovim.
+# The Lua side's own checks, in a real headless Neovim: the buffer arithmetic against a real
+# buffer and a real `on_bytes` (`test/lua/document.lua`), and the plugin's own wiring against a
+# stubbed companion (`test/lua/session.lua`).
 #
 #   scripts/test-lua.sh
 #
@@ -12,3 +14,4 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 nvim --headless -l test/lua/document.lua
+nvim --headless -l test/lua/session.lua
