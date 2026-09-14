@@ -180,6 +180,10 @@ export class Companion {
           }
         })
         .catch((error: unknown) => {
+          // A refused hold leaves nothing that will ever open this document, so the entry —
+          // and the changes kept against it — goes with the report rather than growing for the
+          // rest of the session.
+          this.unarrived.delete(path);
           this.send({
             type: 'report',
             report: {
