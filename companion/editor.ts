@@ -32,16 +32,70 @@ interface Document {
    * A remote edit is computed against the mirror and applied to the buffer, and the two are
    * not the same object: an edit the user made in the window between those two moments is a
    * message still in flight, and the range would land on text it was not computed from. The
-   * version is what makes that detectable — an `applyEdit` carries the version it was
-   * computed against, the front-end refuses one that does not match, and the bridge's own
-   * refusal path works the change out again from the mirror the local edit has by then
-   * reached. Both sides count a local change and an applied remote edit as one each.
+   * version is what makes that detectable — an `applyEdit` carries the version it was computed
+   * against and the front-end refuses one that does not match — and it is also what lets the
+   * range be moved through the changes in between and offered again. Both sides count a local
+   * change and an applied remote edit as one each.
    */
   version: number;
 }
 
 interface Pending {
   resolve: (ok: boolean) => void;
+}
+
+/**
+ * An `applyEdit` this host has asked the front-end for and not yet been answered.
+ *
+ * The two extra members are what a refusal is read against. `version` is the mirror's version
+ * the range was computed against — the version the front-end must still be at for the range to
+ * mean what it says — and `withheld` is the local changes the document has taken since, which
+ * the front-end counted after the apply was computed and which a refused range has to be moved
+ * through. Both are empty for the common case, where the front-end answers `true` and the
+ * mirror moves by exactly the change it was asked to apply.
+ */
+interface Offered extends Pending {
+  path: string;
+  change: TextChange;
+  version: number;
+  withheld: TextChange[];
+  offered: number;
+}
+
+/**
+ * How many times a refused range is moved and offered again before the refusal is passed on.
+ * Each offer is one IPC round trip, and a user who keeps typing while a peer's edit is in
+ * flight moves the range rather than reaching the bound: it is reached only by an editor that
+ * refuses every range it is handed.
+ */
+const MAX_REBASED_OFFERS = 3;
+
+/**
+ * A change's range as the document now reads, moved through the local changes made after it was
+ * computed — in order, each counted against the text the one before it left.
+ *
+ * A local change the range sits entirely after moves the range by what it did to the text's
+ * length; one the range sits entirely before leaves it alone. One the range straddles is not
+ * expressible — the peer wrote about the same characters the user did, and there is no position
+ * left to put it at — and answers `undefined`, which is the refusal the bridge's own retry is
+ * for.
+ */
+function rebase(change: TextChange, withheld: readonly TextChange[]): TextChange | undefined {
+  let start = change.start;
+  let end = change.end;
+  for (const local of withheld) {
+    if (local.end <= start) {
+      const moved = local.text.length - (local.end - local.start);
+      start += moved;
+      end += moved;
+      continue;
+    }
+    if (local.start >= end) {
+      continue;
+    }
+    return undefined;
+  }
+  return { start, end, text: change.text };
 }
 
 export interface NvimEditorHostOptions {
@@ -51,7 +105,7 @@ export interface NvimEditorHostOptions {
 
 export class NvimEditorHost implements EditorHost {
   private readonly documents = new Map<string, Document>();
-  private readonly applies = new Map<number, Pending & { path: string; change: TextChange }>();
+  private readonly applies = new Map<number, Offered>();
   private readonly saves = new Map<number, Pending>();
   private nextId = 0;
   private readonly emit: (notification: Notification) => void;
@@ -79,10 +133,30 @@ export class NvimEditorHost implements EditorHost {
     }
     document.text = applyChange(document.text, change);
     document.version += 1;
+    for (const pending of this.applies.values()) {
+      if (pending.path === path) {
+        pending.withheld.push(change);
+      }
+    }
     return true;
   }
 
-  /** The front-end's answer to an `applyEdit`. */
+  /**
+   * The front-end's answer to an `applyEdit`.
+   *
+   * A `false` is not always the end of the edit. The front-end refuses a range whose version
+   * has moved on, and what that says is that the range — not the edit — no longer fits: a local
+   * change the front-end counted has reached this mirror since the range was computed. The edit
+   * is still the one the room wants, so it is offered again moved through those changes, which
+   * lands it where the buffer now has the text it was computed from and leaves the local edit
+   * where the user put it. Handing the refusal to the bridge instead would let it work the
+   * change out again from the mirror, which is the room's text without the local edit, and the
+   * user's keystroke would be dropped rather than merged with the peer's.
+   *
+   * A refusal with no local change behind it — a range that no longer fits for a reason this
+   * side cannot see — is passed on unchanged, as is a range whose local changes overlap it: for
+   * those there is no position to move it to, and the bridge's own retry is the honest answer.
+   */
   settleApply(id: number, ok: boolean): void {
     const pending = this.applies.get(id);
     if (pending === undefined) {
@@ -90,11 +164,28 @@ export class NvimEditorHost implements EditorHost {
     }
     this.applies.delete(id);
     const document = this.documents.get(pending.path);
-    if (ok && document !== undefined) {
+    if (document === undefined) {
+      pending.resolve(false);
+      return;
+    }
+    if (ok && document.version === pending.version) {
       document.text = applyChange(document.text, pending.change);
       document.version += 1;
+      pending.resolve(true);
+      return;
     }
-    pending.resolve(ok);
+    if (!ok && document.version !== pending.version && pending.offered < MAX_REBASED_OFFERS) {
+      const moved = rebase(pending.change, pending.withheld);
+      if (moved !== undefined) {
+        pending.change = moved;
+        pending.version = document.version;
+        pending.withheld = [];
+        pending.offered += 1;
+        this.offer(pending);
+        return;
+      }
+    }
+    pending.resolve(false);
   }
 
   /** The front-end's answer to a `save`. */
@@ -140,18 +231,30 @@ export class NvimEditorHost implements EditorHost {
     if (document === undefined) {
       return Promise.resolve(false);
     }
-    const id = (this.nextId += 1);
     return new Promise<boolean>((resolve) => {
-      this.applies.set(id, { resolve, path, change });
-      this.emit({
-        type: 'applyEdit',
-        id,
+      this.offer({
+        resolve,
         path,
-        start: change.start,
-        end: change.end,
-        text: change.text,
+        change,
         version: document.version,
+        withheld: [],
+        offered: 0,
       });
+    });
+  }
+
+  /** Asks the front-end for one range, and keeps the answer addressed to the promise it holds. */
+  private offer(pending: Offered): void {
+    const id = (this.nextId += 1);
+    this.applies.set(id, pending);
+    this.emit({
+      type: 'applyEdit',
+      id,
+      path: pending.path,
+      start: pending.change.start,
+      end: pending.change.end,
+      text: pending.change.text,
+      version: pending.version,
     });
   }
 
