@@ -296,9 +296,11 @@ vim.wait(300, function()
 end)
 check('  and clearing again sends nothing', count_type('selectionCleared'), cleared)
 
--- A peer's caret is drawn where the caret is: an overlay `virt_text` at their own row and
--- byte column, in the colour the bridge gave them. The column is the conversion from the
--- UTF-16 offset the room counts, and the line is multi-byte so the two cannot be confused.
+-- A peer's caret is drawn where the caret is: the one cell at their own row and byte column,
+-- filled with the colour the bridge gave them and left readable through it. Nothing is inserted,
+-- so the line keeps its width and the block sits against the selection fill rather than beside
+-- it. The column is the conversion from the UTF-16 offset the room counts, and the line is
+-- multi-byte so the two cannot be confused.
 vim.api.nvim_set_current_buf(presence_buf)
 local ns = vim.api.nvim_get_namespaces()['selvage.presence']
 
@@ -307,10 +309,11 @@ local function draw(cursors)
   return vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, { details = true })
 end
 
---- The mark that carries a range, as opposed to the caret's own.
+--- The mark that carries the selection, as opposed to the caret's own. Both cover cells now, but
+--- only the caret carries the sign, and only the selection is a range the peer made.
 local function range_of(marks)
   for _, mark in ipairs(marks) do
-    if mark[4].end_row ~= nil then
+    if mark[4].end_row ~= nil and mark[4].sign_text == nil then
       return mark
     end
   end
@@ -332,19 +335,72 @@ local marks = draw({
 check('a caret-only presence report draws one mark', #marks, 1)
 check('  on the line the peer is on', marks[1] and marks[1][2], 1)
 check("  at the peer's byte column, not their UTF-16 offset", marks[1] and marks[1][3], 3)
+check('  filling the one cell the caret is on', marks[1] and marks[1][4].end_col, 4)
+check('  on that line, adding none', marks[1] and marks[1][4].end_row, 1)
 check(
-  "  with the peer's name over the line there",
-  marks[1] and marks[1][4].virt_text and marks[1][4].virt_text[1][1],
-  'Bob'
+  '  as a block in the peer colour, not text over the line',
+  marks[1] ~= nil and marks[1][4].hl_group ~= nil and marks[1][4].virt_text == nil,
+  true
 )
-check('  as an overlay, adding no row', marks[1] and marks[1][4].virt_text_pos, 'overlay')
 check('  and not as a virtual line of its own', marks[1] ~= nil and marks[1][4].virt_lines == nil, true)
 check(
   '  in the colour the bridge chose',
-  marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].sign_hl_group }).bg,
+  marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].hl_group }).bg,
   tonumber('61afef', 16)
 )
+check(
+  '  with the character under it left a readable colour',
+  marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].hl_group }).fg,
+  tonumber('000000', 16)
+)
 check("  and the sign keeps the name's first two characters", marks[1] and marks[1][4].sign_text, 'Bo')
+
+-- The block covers the whole character, not one byte of it: `😀` is four bytes, and the caret
+-- sits on it at UTF-16 offset 1, where a byte count would say one.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 1,
+    head = 1,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a caret on a multi-byte character draws one mark', #marks, 1)
+check("  at that character's byte column", marks[1] and marks[1][3], 1)
+check('  and fills the whole character, not one byte', marks[1] and marks[1][4].end_col, 5)
+
+-- The end of a line has no cell to fill, and that is where a peer typing at the end of a line
+-- is: a single block in the empty cell after the text, still nothing inserted and nothing
+-- shifted.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 4,
+    head = 4,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a caret at the end of a line draws one mark', #marks, 1)
+check('  past the last character', marks[1] and marks[1][3], 6)
+check(
+  '  as a one-cell block after the text',
+  marks[1] and marks[1][4].virt_text and #marks[1][4].virt_text[1][1],
+  1
+)
+check(
+  '  in the peer colour',
+  marks[1] and marks[1][4].virt_text and marks[1][4].virt_text[1][2],
+  marks[1] and marks[1][4].sign_hl_group
+)
+check('  and not as a range over the text', marks[1] ~= nil and marks[1][4].end_col == nil, true)
 
 -- Two peers whose names share an initial are not identical signs: the second character
 -- separates `pi` from `pc`, and the colour separates whatever the text does not.
@@ -432,7 +488,7 @@ marks = draw({
   },
 })
 check('a collapsed selection is only the caret', #marks, 1)
-check('  with no range mark', marks[1] ~= nil and marks[1][4].end_row == nil, true)
+check('  with no range behind it', range_of(marks) == nil, true)
 
 -- A presence report is the whole set: a peer it no longer names is withdrawn, and a peer in
 -- a document this client does not hold is not drawn at all.
