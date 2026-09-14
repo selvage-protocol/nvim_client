@@ -19,6 +19,10 @@ export class FakeEngine implements CompanionEngine {
   readonly opened: string[] = [];
   readonly closed: string[] = [];
   readonly selections: Array<{ path: string; selection: OffsetSelection }> = [];
+  /** What `presence()` reports, and how `resolveSelection` answers: a test sets both to make
+   * the bridge resolve a real cursor. */
+  presences: Presence[] = [];
+  readonly resolved = new Map<string, OffsetSelection>();
   disconnected = false;
 
   private readonly listeners = new Set<EngineEventListener>();
@@ -119,11 +123,11 @@ export class FakeEngine implements CompanionEngine {
   setAwareness(_state: AwarenessState | null): void {}
 
   presence(): Presence[] {
-    return [];
+    return this.presences;
   }
 
-  resolveSelection(_path: string, _selection: Selection): OffsetSelection | undefined {
-    return undefined;
+  resolveSelection(path: string, _selection: Selection): OffsetSelection | undefined {
+    return this.resolved.get(path);
   }
 
   on(listener: EngineEventListener): () => void {

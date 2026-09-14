@@ -13,6 +13,8 @@
  * seam; the conversion from Neovim's byte positions happens in Lua, where the bytes are.
  */
 
+import type { Cursor } from '../vendor/bridge/index.ts';
+
 /** A message the front-end sends. */
 export type Request =
   /** Mint a room on this server and become its host. */
@@ -70,7 +72,7 @@ export type Notification =
   /** The bridge's own report, passed through unchanged; `kind` says which. */
   | { type: 'report'; report: unknown }
   /** The remote carets this replica can resolve, in buffer offsets. */
-  | { type: 'presence'; cursors: unknown[] };
+  | { type: 'presence'; cursors: Cursor[] };
 
 /** Reads newline-delimited JSON off a byte stream. */
 export class LineReader {
