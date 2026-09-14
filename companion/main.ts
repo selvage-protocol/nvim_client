@@ -1,0 +1,59 @@
+/**
+ * The companion process: newline-delimited JSON in on stdin, the same out on stdout.
+ *
+ * Run by the Lua front-end through `jobstart`, one per Neovim instance. Everything it can
+ * say is in `ipc.ts`; everything it decides is in `vendor/bridge/`.
+ */
+
+import { Companion } from './session.ts';
+import { LineReader } from './ipc.ts';
+import type { Notification, Request } from './ipc.ts';
+
+function write(notification: Notification): void {
+  process.stdout.write(`${JSON.stringify(notification)}\n`);
+}
+
+/**
+ * Anything this process prints on stdout is a message, so a diagnostic goes to stderr —
+ * where Neovim's `on_stderr` can show it — and never into the stream the front-end parses.
+ */
+function warn(message: string): void {
+  process.stderr.write(`selvage-companion: ${message}\n`);
+}
+
+const companion = new Companion({ send: write });
+
+// One message at a time, in the order they arrived: `open` after `host` is an order the
+// front-end relies on, and two overlapping handlers would not keep it.
+let queue: Promise<void> = Promise.resolve();
+
+const reader = new LineReader((line) => {
+  let request: Request;
+  try {
+    request = JSON.parse(line) as Request;
+  } catch (error: unknown) {
+    warn(`ignoring a line that is not JSON: ${error instanceof Error ? error.message : line}`);
+    return;
+  }
+  queue = queue.then(() => companion.handle(request)).catch((error: unknown) => {
+    warn(`handling ${request.type} failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+});
+
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk: string) => {
+  reader.push(chunk);
+});
+
+// The front-end closing the pipe is the session ending: leave the room rather than letting
+// the server hold it open until the grace period expires.
+process.stdin.on('end', () => {
+  queue = queue.then(() => companion.leave()).then(
+    () => {
+      process.exit(0);
+    },
+    () => {
+      process.exit(1);
+    },
+  );
+});
