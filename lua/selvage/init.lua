@@ -184,9 +184,17 @@ local function ensure()
   if state.process ~= nil then
     return state.process
   end
-  local process, err = companion.start({
+  local process, err
+  process, err = companion.start({
     on_message = on_message,
     on_exit = function(code)
+      -- A companion this session stopped is no longer its process — `leave` forgets it before
+      -- stopping it, and the stop is not waited for — so its exit is not news, whether the
+      -- process went on its own or had to be killed. A process the session still knows is one
+      -- that went by itself, and that is worth a word when it did not exit cleanly.
+      if state.process ~= process then
+        return
+      end
       state.process = nil
       reset()
       if code ~= 0 then
@@ -242,9 +250,10 @@ function M.leave()
   if state.process == nil then
     return
   end
-  state.process:send({ type = 'leave' })
-  state.process:stop()
+  local process = state.process
   state.process = nil
+  process:send({ type = 'leave' })
+  process:stop()
   reset()
   notify('left the session')
 end

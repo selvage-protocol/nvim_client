@@ -8,6 +8,7 @@ local M = {}
 
 --- @class selvage.Companion
 --- @field job integer
+--- @field exited boolean the process has been reaped
 local Companion = {}
 Companion.__index = Companion
 
@@ -18,19 +19,31 @@ local function root()
   return vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(here)))
 end
 
+--- How long the companion is given to leave the room on its own before it is killed.
+local STOP_GRACE_MS = 2000
+
+--- How often it is looked in on while that runs out.
+local STOP_POLL_MS = 50
+
 --- Starts the companion.
 --- @param handlers table on_message(message), on_exit(code)
-function M.start(handlers)
-  local self = setmetatable({ pending = '', queue = {}, flushing = false }, Companion)
-  local node = vim.fn.exepath('node')
-  if node == '' then
-    return nil, 'node is not on PATH; the companion needs Node 22.18 or newer'
+--- @param command string[]|nil the process to run; the companion itself unless a test needs one
+---   that does not go on its own when its stdin is closed
+function M.start(handlers, command)
+  local self = setmetatable({ pending = '', queue = {}, flushing = false, exited = false }, Companion)
+  local argv = command
+  if argv == nil then
+    local node = vim.fn.exepath('node')
+    if node == '' then
+      return nil, 'node is not on PATH; the companion needs Node 22.18 or newer'
+    end
+    local entry = root() .. '/companion/main.ts'
+    if vim.fn.filereadable(entry) == 0 then
+      return nil, 'the companion is missing at ' .. entry
+    end
+    argv = { node, entry }
   end
-  local entry = root() .. '/companion/main.ts'
-  if vim.fn.filereadable(entry) == 0 then
-    return nil, 'the companion is missing at ' .. entry
-  end
-  self.job = vim.fn.jobstart({ node, entry }, {
+  self.job = vim.fn.jobstart(argv, {
     cwd = root(),
     on_stdout = function(_, data)
       self:receive(data, handlers.on_message)
@@ -43,11 +56,12 @@ function M.start(handlers)
     end,
     on_exit = function(_, code)
       self.job = nil
+      self.exited = true
       handlers.on_exit(code)
     end,
   })
   if self.job <= 0 then
-    return nil, 'could not start the companion (' .. node .. ' ' .. entry .. ')'
+    return nil, 'could not start the companion (' .. table.concat(argv, ' ') .. ')'
   end
   return self
 end
@@ -107,12 +121,30 @@ function Companion:stop()
   end
   self:flush(job)
   -- Closing stdin is what the companion reads as "leave the room": it disconnects and exits on
-  -- its own. That disconnect is a round trip to the server, so it is waited for rather than
-  -- raced — killing the process here would drop whatever the last edit still had in flight.
+  -- its own. That disconnect is a round trip to the server, so the process is given time rather
+  -- than raced — killing it here would drop whatever the last edit still had in flight. The
+  -- waiting is done on a timer and not in `jobwait`, because a network that has stopped
+  -- answering must not hold the editor for those two seconds: `:SelvageLeave` returns at once,
+  -- and the process is still killed if it has not gone by the end of the grace.
   pcall(vim.fn.chanclose, job, 'stdin')
-  if vim.fn.jobwait({ job }, 2000)[1] == -1 then
-    vim.fn.jobstop(job)
+  local remaining = STOP_GRACE_MS
+  local function wait_and_kill()
+    -- `on_exit` is what says the process is gone: `jobwait` cannot answer that for a job the
+    -- editor has already reaped, and a killed one would be indistinguishable from a timed-out
+    -- wait.
+    if self.exited then
+      return
+    end
+    remaining = remaining - STOP_POLL_MS
+    if remaining <= 0 then
+      -- Not gone within the grace: end it. `jobstop` on a job that has just exited is a no-op
+      -- rather than an error, so this cannot race the exit callback.
+      vim.fn.jobstop(job)
+      return
+    end
+    vim.defer_fn(wait_and_kill, STOP_POLL_MS)
   end
+  vim.defer_fn(wait_and_kill, STOP_POLL_MS)
 end
 
 return M
