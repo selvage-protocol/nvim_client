@@ -180,6 +180,11 @@ end
 --- Stops reporting this buffer's changes. A session that has ended must not leave an
 --- `on_bytes` behind: the buffer outlives the companion, and the callback it would keep
 --- calling has nothing left to send to.
+---
+--- This is the whole buffer's attachment, not Selvage's own callback: Neovim hands out no
+--- handle for one, so `nvim_buf_detach` takes every `on_bytes` this channel holds for the
+--- buffer with it — a formatter's or a diagnostics plugin's as well as this one. Attaching
+--- the buffer again is the only way back, and that is the caller's to do.
 function Document:detach()
   if self.detached then
     return
