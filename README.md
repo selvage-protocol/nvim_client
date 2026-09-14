@@ -128,6 +128,15 @@ scripts/test-lua.sh         # the Lua side, in a real headless Neovim
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
 ```
 
+The last one needs a built `selvaged`, and finds one through `SELVAGE_SELVAGED` when that is
+set and otherwise under `../reference_server/target/{debug,release}` — a path relative to this
+checkout. From a git worktree under `.worktrees/` that sibling does not exist, so point it at
+the main checkout's binary:
+
+```
+SELVAGE_SELVAGED=/path/to/reference_server/target/debug/selvaged scripts/e2e/run-two-instance.sh
+```
+
 There is no `busted` and no plugin-test framework. Almost every rule worth testing — what enters
 the replica, which change an editor is asked to apply, when a document is written — lives in the
 companion, and is tested there against a fake editor. What is left on the Lua side is
@@ -136,13 +145,19 @@ between Neovim's byte positions and the protocol's UTF-16 code units. The first 
 `test/lua/document.lua` and `test/lua/session.lua`, which run in a real headless Neovim — the
 first against a real buffer and a real `on_bytes`, because a framework mocking those would be
 testing the mock; the second against a stubbed companion, because what it checks is that a
-buffer a session shared is let go of when the session ends.
+buffer a session shared is let go of when the session ends. `test/lua/leave.lua` starts a real
+job, one that ignores its stdin, to check what `:SelvageLeave` does to a companion that does not
+go on its own.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
 each loading the real plugin and starting its own real companion, one hosting and one joining
 over a real `selvaged`, converging on the same document and again after a real TCP-level blip
 cuts the guest's connection. It is not part of `npm test` or CI — it needs a `nvim` and a built
-`selvaged` — and `SELVAGE_E2E_RECONNECT=0` runs the convergence half alone.
+`selvaged` — and `SELVAGE_E2E_RECONNECT=0` runs the convergence half alone. The guest reaches
+the server through a relay the orchestrator can cut, and that holds the guest's own bytes back
+by `SELVAGE_E2E_LAG_MS` (300 by default). On loopback the window between the handshake naming the
+room's documents and their text arriving is about a millisecond, and the guest's driver makes a
+keystroke in that window every run — which it can only do if the relay is what widens it.
 
 ## Licence
 
