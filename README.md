@@ -73,6 +73,20 @@ scripts/sync-engine.sh [path-to-vscode_client]
 The script copies `src/engine` and `src/bridge`, removes anything the source has retired, and
 then diffs the result, so a run either brings `vendor/` into agreement or says what it could not.
 
+## Commands
+
+| | |
+|---|---|
+| `:SelvageHost <serverUrl>` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. |
+| `:SelvageJoin <invite>` | Join the room the invite link names. The room's documents open as `selvage://<path>` buffers. |
+| `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
+| `:SelvageLeave` | Leave the session and stop the companion. |
+
+`vim.g.selvage_display_name` is the name other participants see; it defaults to `$USER`.
+
+The working directory is the grant: a host shares the file buffers under it, and nothing above
+it. A guest's buffers are the room's, not files here — they have nowhere on disk to be written.
+
 ## Requirements
 
 - Neovim 0.10 or newer (`vim.str_utfindex`/`vim.str_byteindex` with an encoding argument, with a
@@ -99,15 +113,18 @@ Clone the repository and run `npm ci` inside it (the companion needs `yjs`, `y-p
 
 ```
 npm run typecheck
-npm test
+npm test                   # the companion, against a replica with no server behind it
 scripts/ci-local.sh all    # the same commands as .github/workflows/ci.yml, plus actionlint
+scripts/test-lua.sh        # the offset arithmetic, in a real headless Neovim
 ```
 
-There is no Lua test suite. The rules worth testing — what enters the replica, which change an
-editor is asked to apply, the offset arithmetic — live in the companion and are tested there
-against a fake editor; the Lua side is translation, and the thing that proves it is the
-two-instance run against a real Neovim and a real server rather than a `busted` suite that would
-need its own Neovim to be meaningful anyway.
+There is no `busted` and no plugin-test framework. Almost every rule worth testing — what enters
+the replica, which change an editor is asked to apply, when a document is written — lives in the
+companion, and is tested there against a fake editor. What is left on the Lua side is
+translation plus one thing that is not: the conversion between Neovim's byte positions and the
+protocol's UTF-16 code units. That one gets `test/lua/document.lua`, which runs in a real
+headless Neovim against a real buffer and a real `on_bytes`, because a framework mocking those
+would be testing the mock.
 
 ## Licence
 
