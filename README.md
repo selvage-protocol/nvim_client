@@ -172,6 +172,10 @@ keystroke in that window every run — which it can only do if the relay is what
   lost ("The local IPC" above); when the two are about the same text there is no position to
   move it to, and the room's text is what the buffer ends on. What it cannot do is mangle the
   buffer.
+- A guest's buffer exists as soon as the handshake names the room's documents, which is before
+  the sync carrying their text. A keystroke made in that window is superseded by the room's
+  text: the two are counted together once it lands, so nothing is mangled, but the room's text
+  is what the buffer ends on and the keystroke is in neither the buffer nor the room.
 - A room document whose text does not end in a newline gains one here. Neovim's line-array
   buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
   has to add.
