@@ -197,6 +197,7 @@ export class Companion {
     }
     this.editor.opened(path, text);
     this.bridge?.documentOpened(path);
+    this.renderCursors();
   }
 
   /**
@@ -235,6 +236,19 @@ export class Companion {
       this.editor.changed(path, change);
     }
     this.bridge?.documentOpened(path);
+    this.renderCursors();
+  }
+
+  /**
+   * Asks the bridge for the remote carets now that a document has opened. The bridge reports
+   * them when awareness changes, but a cursor naming a path this client did not yet hold is
+   * skipped then — a peer already in the room when this client joins would never be drawn
+   * until they moved. The VS Code adapter does the same on a visible-editor change.
+   */
+  private renderCursors(): void {
+    if (this.bridge !== undefined) {
+      this.editor.renderCursors(this.bridge.cursors());
+    }
   }
 
   /** Stops sharing a document, whether or not the room's text ever arrived for it. */

@@ -444,6 +444,29 @@ test('a selection is published in the replica offsets', async () => {
   ]);
 });
 
+test('a document opened after a peer moved draws the peer', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  // The peer's awareness and the caret it resolves to are both already here; only the
+  // document is missing, so `cursors()` skips the peer until it opens.
+  it.engine.presences = [
+    {
+      clientId: 2,
+      peer: { peer_id: 'p-bob', display_name: 'Bob', role: 'guest' },
+      state: { path: 'notes.txt', selection: { anchor: { assoc: 0 }, head: { assoc: 0 } } },
+    },
+  ];
+  it.engine.resolved.set('notes.txt', { anchor: 0, head: 2 });
+  assert.equal(it.sent.filter((notification) => notification.type === 'presence').length, 0);
+
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+  const presence = it.sent.filter((notification) => notification.type === 'presence').at(-1);
+  assert.equal(presence?.cursors.length, 1);
+  assert.equal(presence?.cursors[0]?.label, 'Bob');
+  assert.equal(presence?.cursors[0]?.path, 'notes.txt');
+  assert.equal(presence?.cursors[0]?.head, 2);
+});
+
 test('leaving disconnects and forgets the documents', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
