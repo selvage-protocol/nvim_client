@@ -1,0 +1,1385 @@
+/**
+ * The Selvage sync engine: one `Y.Doc`, one `Y.Text` per open document, y-protocols
+ * document sync and awareness, and the `selvage/1` session envelope over a WebSocket.
+ *
+ * This module deliberately imports no editor API. Everything an editor adapter needs is
+ * an event (`on`) or a method on this class, which is the seam `DESIGN.md` §6 draws
+ * between a sync engine and an editor adapter.
+ */
+
+import * as random from 'lib0/random';
+import WebSocket from 'ws';
+import * as Y from 'yjs';
+import { Awareness, removeAwarenessStates } from 'y-protocols/awareness';
+
+import {
+  DEFAULT_KEEPALIVE,
+  WIRE_VERSION,
+  close,
+  code as errCode,
+  event as eventName,
+  helloParams,
+  isTerminalCode,
+  method,
+  parsePeer,
+  parsePeerEvent,
+  parseServerMessage,
+} from './envelope.ts';
+import type {
+  ClientMessage,
+  DocEvent,
+  DocSet,
+  Keepalive,
+  PeerInfo,
+  Role,
+  SessionParams,
+} from './envelope.ts';
+import { EngineClosedError, ProtocolError } from './errors.ts';
+import type { EngineEvent, EngineEventListener } from './events.ts';
+import { fetchMeta, metaAccepts } from './meta.ts';
+import { buildPresence, toAnchor, toRelativePosition } from './presence.ts';
+import type {
+  Anchor,
+  AwarenessState,
+  OffsetSelection,
+  Presence,
+  Selection,
+} from './presence.ts';
+import {
+  applyFrame,
+  encodeAwareness,
+  encodeSyncStep1,
+  encodeUpdate,
+} from './sync.ts';
+import { openSocket } from './transport.ts';
+import type {
+  OpenSocket,
+  WebSocketFactory,
+  WebSocketLike,
+} from './transport.ts';
+import { inviteUrl, parseSessionUrl, sessionUrl } from './urls.ts';
+
+/** How long the session handshake may take before the connection is abandoned. */
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+
+/** How long a request may wait for its answer before the caller is told it will not come. */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** Marks a transaction as this client's own edit: an adapter already has it. */
+const LOCAL_ORIGIN = Symbol('selvage:local');
+
+/** Marks a remote update this client applied, so it is never echoed back into the room. */
+const REMOTE_ORIGIN = Symbol('selvage:remote');
+
+/** Marks a state removal this client made on its own clock rather than on a peer's word. */
+const EXPIRY_ORIGIN = Symbol('selvage:expiry');
+
+const defaultFactory: WebSocketFactory = (url) =>
+  new WebSocket(url) as unknown as WebSocketLike;
+
+/**
+ * The awareness clock this client runs: renew every `renewMs`, forget a remote state
+ * after `expireMs` (spec §8.2). The default comes from the server's `keepalive`.
+ */
+export interface KeepaliveClock {
+  renewMs: number;
+  expireMs: number;
+}
+
+/** Bounded reconnect (spec §9.1): a dropped socket is re-helloed, under a new peer id. */
+export interface ReconnectPolicy {
+  enabled: boolean;
+  initialDelayMs: number;
+  maxDelayMs: number;
+  maxAttempts: number;
+}
+
+const DEFAULT_RECONNECT: ReconnectPolicy = {
+  enabled: true,
+  initialDelayMs: 500,
+  maxDelayMs: 10_000,
+  maxAttempts: 5,
+};
+
+export interface ConnectOptions {
+  /** Scheme and authority, without the `/session` path. */
+  baseUrl: string;
+  displayName: string;
+  /** Joining an existing room: its id. */
+  room?: string;
+  /** Joining an existing room: its invite token. */
+  token?: string;
+  /** Claimed role. `undefined` lets the server decide: host when minting, guest otherwise. */
+  role?: Role;
+  /** Capabilities this client believes it has; the server ignores ones it does not know. */
+  capabilities?: readonly string[];
+  /** Free-form client identifier, for diagnostics. */
+  client?: string;
+  /** Overrides the clock the server advertises. The server's numbers are the session's. */
+  keepalive?: KeepaliveClock;
+  /**
+   * The awareness state to publish once seated, **verbatim**: its anchors are not checked
+   * against this replica and not converted from offsets, which is what resuming a previously
+   * published state needs. `setSelection` is the path that anchors offsets and withholds what
+   * this replica cannot anchor (§8.1); a caller using this one is responsible for the replica
+   * holding the documents the anchors name.
+   */
+  awareness?: AwarenessState;
+  /** Read `GET /meta` first (`'check'`, the default) or skip it (`'skip'`). */
+  meta?: 'check' | 'skip';
+  /** `false` turns reconnection off; the fields override the defaults. */
+  reconnect?: false | Partial<ReconnectPolicy>;
+  webSocketFactory?: WebSocketFactory;
+  fetchImpl?: typeof fetch;
+  handshakeTimeoutMs?: number;
+  /**
+   * How long `open()` and `close()` wait for the server's answer (10 s by default).
+   * The bound belongs to the client, not the wire: a server that holds the socket open
+   * and never answers would otherwise leave the caller waiting for ever.
+   */
+  requestTimeoutMs?: number;
+}
+
+/** What the server said at the end of the handshake. */
+export interface SessionInfo {
+  roomId: string;
+  /** Present only for the connection that minted the room. */
+  token?: string;
+  role: Role;
+  /** This connection's own peer record. */
+  peer: PeerInfo;
+  /** Peers that were already in the room. */
+  peers: PeerInfo[];
+  /** The room's open-document set at the moment of joining. */
+  documents: string[];
+  capabilities: string[];
+  keepalive: Keepalive;
+  /** The server base URL this connection was opened against, without the endpoint path. */
+  baseUrl: string;
+}
+
+/** Options for a host that mints a room, or a guest joining one by invite URL. */
+export type JoinOptions = Omit<
+  ConnectOptions,
+  'baseUrl' | 'displayName' | 'room' | 'token' | 'role'
+>;
+
+interface PendingRequest {
+  kind: 'open' | 'close';
+  path: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  /** The request's own deadline, cleared when its answer arrives. */
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface SeatWaiter {
+  resolve: (info: SessionInfo) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface QueuedFrame {
+  text?: string;
+  binary?: Uint8Array;
+  /** The request this frame carries, so it can be dropped with its connection. */
+  requestId?: number;
+}
+
+interface Refusal {
+  code: string;
+  message: string;
+}
+
+/**
+ * A connected sync engine.
+ *
+ * Frames are written as they are produced and events are delivered to listeners in the
+ * order the frames arrived, so an adapter can react to an event without polling. A
+ * session that drops is re-helloed with a bounded backoff unless reconnection is turned
+ * off; `room_unknown` and the other terminal refusals are not retried.
+ */
+export class SelvageEngine {
+  readonly doc: Y.Doc;
+
+  private readonly options: ConnectOptions;
+  private readonly reconnect: ReconnectPolicy;
+  private readonly factory: WebSocketFactory;
+  private readonly awareness: Awareness;
+  private readonly listeners = new Set<EngineEventListener>();
+  private readonly pending = new Map<number, PendingRequest>();
+  private readonly texts = new Set<string>();
+  private readonly peerMap = new Map<string, PeerInfo>();
+
+  private current?: SessionInfo;
+  private room?: string;
+  private token?: string;
+  private clock: KeepaliveClock;
+  private socket?: OpenSocket;
+  private queue: QueuedFrame[] = [];
+  private paused = false;
+  private seated = false;
+  private disposed = false;
+  private finished = false;
+  private terminal = false;
+  private refusal?: Refusal;
+  private seatWaiter?: SeatWaiter;
+  private handshaking = false;
+  /**
+   * Which connection's events are still this engine's. A socket that a handshake gave up on
+   * is closed, and its close event must not be read as the session ending.
+   */
+  private generation = 0;
+  private requestId = 0;
+  private localState: AwarenessState | null;
+  private roomDocuments: string[] = [];
+  private heldDocuments: string[] = [];
+  private timer?: ReturnType<typeof setInterval>;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private attempts = 0;
+
+  private constructor(options: ConnectOptions) {
+    this.options = options;
+    this.reconnect =
+      options.reconnect === false
+        ? { ...DEFAULT_RECONNECT, enabled: false }
+        : { ...DEFAULT_RECONNECT, ...options.reconnect };
+    this.factory = options.webSocketFactory ?? defaultFactory;
+    this.clock = {
+      renewMs: options.keepalive?.renewMs ?? DEFAULT_KEEPALIVE.awareness_renew_ms,
+      expireMs:
+        options.keepalive?.expireMs ?? DEFAULT_KEEPALIVE.awareness_expire_ms,
+    };
+    this.localState = options.awareness ?? {};
+    this.room = options.room;
+    this.token = options.token;
+
+    this.doc = new Y.Doc();
+    this.awareness = new Awareness(this.doc);
+    // y-protocols runs its own 15 s / 30 s tick. The server's `keepalive` is the
+    // session's clock (spec §8.2), so that tick is stopped and `tick()` drives renewal
+    // and expiry in its place.
+    clearInterval(this.awareness._checkInterval);
+    this.wireAwareness();
+    this.wireDocument();
+    this.publishAwareness();
+  }
+
+  // -- opening a session -----------------------------------------------------
+
+  /** Connects and completes the handshake. */
+  static async connect(options: ConnectOptions): Promise<SelvageEngine> {
+    const engine = new SelvageEngine(options);
+    await engine.start();
+    return engine;
+  }
+
+  /** Mints a room; this connection becomes its host. */
+  static host(
+    baseUrl: string,
+    displayName: string,
+    options: JoinOptions = {},
+  ): Promise<SelvageEngine> {
+    return SelvageEngine.connect({
+      ...options,
+      baseUrl,
+      displayName,
+      role: 'host',
+    });
+  }
+
+  /**
+   * Joins the room an invite URL names — the link itself, not a room id and token taken
+   * out of it. Rejects when the URL does not address the session endpoint or carries no
+   * room and token.
+   */
+  static join(
+    invite: string,
+    displayName: string,
+    options: JoinOptions = {},
+  ): Promise<SelvageEngine> {
+    const parsed = parseSessionUrl(invite);
+    if (
+      parsed === undefined ||
+      parsed.join.room === undefined ||
+      parsed.join.token === undefined
+    ) {
+      return Promise.reject(
+        new ProtocolError(errCode.badParams, `not an invite URL: ${invite}`),
+      );
+    }
+    return SelvageEngine.connect({
+      ...options,
+      baseUrl: parsed.base,
+      displayName,
+      room: parsed.join.room,
+      token: parsed.join.token,
+      role: 'guest',
+    });
+  }
+
+  /** Starts the connection and seats it, or throws the reason it could not be seated. */
+  private async start(): Promise<void> {
+    await this.negotiate();
+    const session = await this.hello();
+    this.seat(session);
+  }
+
+  /** Applies `GET /meta`: advisory when unreachable, decisive when incompatible. */
+  private async negotiate(): Promise<void> {
+    if (this.options.meta === 'skip') {
+      return;
+    }
+    let meta;
+    try {
+      meta = await fetchMeta(this.options.baseUrl, {
+        ...(this.options.fetchImpl === undefined
+          ? {}
+          : { fetchImpl: this.options.fetchImpl }),
+      });
+    } catch {
+      // `/meta` is a convenience, not the handshake: an unreachable one decides nothing.
+      return;
+    }
+    if (!metaAccepts(meta)) {
+      const offered = Array.isArray(meta.wire_versions)
+        ? meta.wire_versions.join(', ')
+        : 'nothing';
+      throw new ProtocolError(
+        errCode.unsupportedVersion,
+        `${this.options.baseUrl} speaks ${offered}, not ${WIRE_VERSION}`,
+      );
+    }
+  }
+
+  /** Opens a socket, sends `session.hello`, and waits to be seated or refused. */
+  private async hello(): Promise<SessionInfo> {
+    this.handshaking = true;
+    const generation = (this.generation += 1);
+    if (generation > 1) {
+      // Spec §9.1: a reconnect is a new peer, not the one it replaces. `yrs` keeps a
+      // tombstone for a removed awareness client id, so reusing it here would have the
+      // first republish silently dropped and a restarted clock never recover (the gap
+      // the Rust reference client avoids by minting a fresh `Y.Doc` per attempt). The
+      // document's content carries over regardless — only the identity does not.
+      this.rotateIdentity();
+    }
+    // Request ids are unique per connection, so a new connection starts counting again.
+    this.requestId = 0;
+    // A refusal belongs to the connection that received it: a close must report the
+    // session.error of *this* handshake, not one left over from the socket before.
+    this.refusal = undefined;
+    const url = sessionUrl(
+      this.options.baseUrl,
+      this.room,
+      this.token,
+    );
+    // One deadline covers the upgrade and the handshake: a transport that never fires
+    // open, error or close must not hold the caller until the OS gives up, so aborting
+    // here closes the socket that never came up.
+    const attempt = new AbortController();
+    const waiting = new Promise<SessionInfo>((resolve, reject) => {
+      this.seatWaiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const error = new ProtocolError(
+            errCode.helloRequired,
+            'the server did not answer session.hello in time',
+          );
+          this.rejectSeat(error);
+          attempt.abort(error);
+        }, this.options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS),
+      };
+    });
+    // A socket that fails before it opens rejects this too, and that rejection is
+    // reported by whichever `await` gets there first.
+    void waiting.catch(() => undefined);
+    const current = (): boolean => this.generation === generation;
+    try {
+      this.socket = await openSocket(
+        url,
+        {
+          onText: (text) => {
+            if (current()) {
+              this.handleText(text);
+            }
+          },
+          onBinary: (bytes) => {
+            if (current()) {
+              this.handleBinary(bytes);
+            }
+          },
+          onClose: (code, reason) => {
+            if (current()) {
+              this.onSocketClosed(code, reason);
+            }
+          },
+          onError: () => {
+            // The close handler reports it; an error alone does not end a session.
+          },
+        },
+        this.factory,
+        attempt.signal,
+      );
+      const hello: ClientMessage = {
+        v: WIRE_VERSION,
+        id: (this.requestId += 1),
+        method: method.sessionHello,
+        params: helloParams({
+          displayName: this.options.displayName,
+          ...(this.options.role === undefined
+            ? {}
+            : { role: this.options.role }),
+          awarenessClientId: this.doc.clientID,
+          ...(this.options.capabilities === undefined
+            ? {}
+            : { capabilities: this.options.capabilities }),
+          ...(this.options.client === undefined
+            ? {}
+            : { client: this.options.client }),
+        }),
+      };
+      this.socket.sendText(JSON.stringify(hello));
+      return await waiting;
+    } catch (error) {
+      // This socket belongs to a connection attempt that gave up: nothing it says counts
+      // any more, and it must not be left open while the next attempt is made.
+      this.generation += 1;
+      attempt.abort(error);
+      this.socket?.close();
+      this.socket = undefined;
+      throw error;
+    } finally {
+      this.handshaking = false;
+    }
+  }
+
+  // -- state an adapter reads ------------------------------------------------
+
+  /** The current session description. It changes on a reconnect: a new peer, same room. */
+  session(): SessionInfo {
+    const session = this.current;
+    if (session === undefined) {
+      throw new EngineClosedError('the engine is not seated');
+    }
+    return session;
+  }
+
+  /** The invite URL for this room, if this connection is the one holding the token. */
+  inviteUrl(): string | undefined {
+    return this.current === undefined ? undefined : inviteUrl(this.current);
+  }
+
+  /** Subscribes to engine events. Returns the unsubscribe function. */
+  on(listener: EngineEventListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** True until the session ends. */
+  get isOpen(): boolean {
+    return !this.finished && !this.disposed;
+  }
+
+  // -- documents -------------------------------------------------------------
+
+  /** Asks the server to open a document: a hold of this connection and of the room. */
+  open(path: string): Promise<void> {
+    return this.request('open', path);
+  }
+
+  /** Releases this connection's hold on a document. The text itself stays. */
+  close(path: string): Promise<void> {
+    return this.request('close', path);
+  }
+
+  /**
+   * The current text of a document: relayed content if there is any, even for a path this
+   * connection never opened. Empty when this replica has received nothing for it.
+   */
+  text(path: string): string {
+    return this.textIfPresent(path)?.toString() ?? '';
+  }
+
+  /**
+   * Whether this replica has received anything at all for a path. A document that has
+   * arrived and been emptied is not the same as one that has never been seen, and a seeder
+   * deciding from `text` alone would put a disk copy back over the former.
+   */
+  has(path: string): boolean {
+    return this.textIfPresent(path) !== undefined;
+  }
+
+  /**
+   * The `Y.Text` behind a path, for an adapter that needs CRDT-relative positions. Creates
+   * it when it is not there yet, which only a local edit otherwise does: an anchor taken
+   * from a document that has not arrived names nothing but the scope, and a caller that
+   * publishes one publishes a position with no element in it (§8.1).
+   */
+  getText(path: string): Y.Text {
+    return this.doc.getText(path);
+  }
+
+  /** Applies a local insert and sends exactly the delta it produced. */
+  insert(path: string, index: number, text: string): void {
+    this.doc.transact(() => {
+      this.doc.getText(path).insert(index, text);
+    }, LOCAL_ORIGIN);
+  }
+
+  /** Applies a local delete and sends exactly the delta it produced. */
+  delete(path: string, index: number, length: number): void {
+    this.doc.transact(() => {
+      this.doc.getText(path).delete(index, length);
+    }, LOCAL_ORIGIN);
+  }
+
+  /** The room's open-document set, as the server owns it. */
+  documents(): string[] {
+    return [...this.roomDocuments];
+  }
+
+  /** The documents this client holds open. */
+  openDocuments(): string[] {
+    return [...this.heldDocuments];
+  }
+
+  /** The CRDT state vector as `[clientId, clock]` pairs, sorted. Synced replicas agree. */
+  stateVector(): Array<[number, number]> {
+    const vector = Y.decodeStateVector(Y.encodeStateVector(this.doc));
+    return [...vector.entries()].sort((a, b) => a[0] - b[0]);
+  }
+
+  // -- presence --------------------------------------------------------------
+
+  /** Publishes this client's presence: document path plus selection. `null` clears it. */
+  setAwareness(state: AwarenessState | null): void {
+    this.localState = state;
+    this.awareness.setLocalState(state);
+  }
+
+  /**
+   * Publishes a selection given as editor offsets (UTF-16 code units), converting each
+   * endpoint to the anchor the wire carries (§8.1). Offsets stop at this seam.
+   *
+   * A selection this replica cannot anchor is not published: when the text is not here yet, or
+   * an endpoint is past its end, the state carries the path and no selection (§8.1). The
+   * scope-only fallback would be indistinguishable on the wire from a real caret at the end.
+   */
+  setSelection(path: string, selection: OffsetSelection): void {
+    const text = this.textIfPresent(path);
+    if (
+      text === undefined ||
+      selection.anchor > text.length ||
+      selection.head > text.length
+    ) {
+      this.setAwareness({ path });
+      return;
+    }
+    this.setAwareness({
+      path,
+      selection: {
+        anchor: this.anchorIn(text, selection.anchor),
+        head: this.anchorIn(text, selection.head),
+      },
+    });
+  }
+
+  /** The `Y.Text` a path already names, without creating one (§8.1's sender rule). */
+  private textIfPresent(path: string): Y.Text | undefined {
+    // `share` holds a type for the name as soon as this replica has one — created by a local
+    // edit, or arrived in a peer's update — and nothing at all before that. The entry can
+    // still be the decoder's placeholder rather than a materialised `Y.Text`, so `getText`
+    // returns the type itself and creates nothing new.
+    return this.doc.share.has(path) ? this.doc.getText(path) : undefined;
+  }
+
+  /**
+   * The anchor for an offset into `path`, with `assoc` as §8.1 defines it, or `undefined`
+   * when this replica has received nothing for it. Reading a path must not bring a text
+   * into being: an anchor for a document that has not arrived names nothing but the scope,
+   * and §8.1 forbids publishing one.
+   */
+  anchorAt(path: string, index: number, assoc = 0): Anchor | undefined {
+    const text = this.textIfPresent(path);
+    return text === undefined ? undefined : this.anchorIn(text, index, assoc);
+  }
+
+  /** The anchor for an offset into a text this replica already has. */
+  private anchorIn(text: Y.Text, index: number, assoc = 0): Anchor {
+    return toAnchor(Y.createRelativePositionFromTypeIndex(text, index, assoc));
+  }
+
+  /**
+   * Resolves a peer's selection to offsets in this replica, or `undefined` when either
+   * endpoint does not resolve — a document that has not arrived yet resolves later, which
+   * is why a caller resolves on demand rather than the parser resolving once (§8.1). A
+   * path this replica has received nothing for is one of those refusals: resolving it
+   * against an empty text would put the peer's cursor at 0 in a document nobody has seen.
+   */
+  resolveSelection(path: string, selection: Selection): OffsetSelection | undefined {
+    const text = this.textIfPresent(path);
+    if (text === undefined) {
+      return undefined;
+    }
+    const anchor = this.resolveAnchor(path, text, selection.anchor);
+    const head = this.resolveAnchor(path, text, selection.head);
+    if (anchor === undefined || head === undefined) {
+      return undefined;
+    }
+    return { anchor, head };
+  }
+
+  /** One endpoint, against the `Y.Text` named by `path` and no other type (§8.1). */
+  private resolveAnchor(path: string, text: Y.Text, anchor: Anchor): number | undefined {
+    if (anchor.tname !== undefined && anchor.tname !== path) {
+      return undefined;
+    }
+    const absolute = Y.createAbsolutePositionFromRelativePosition(
+      toRelativePosition(anchor),
+      this.doc,
+    );
+    if (absolute === null || absolute.type !== text) {
+      return undefined;
+    }
+    return absolute.index;
+  }
+
+  /** Every presence record this engine holds, including its own. */
+  presence(): Presence[] {
+    const local = this.current?.peer;
+    if (local === undefined) {
+      return [];
+    }
+    return buildPresence(this.awareness, this.peerMap.values(), local);
+  }
+
+  /** Remote participants, excluding this client. */
+  peers(): PeerInfo[] {
+    return [...this.peerMap.values()].sort((a, b) =>
+      a.peer_id < b.peer_id ? -1 : a.peer_id > b.peer_id ? 1 : 0,
+    );
+  }
+
+  // -- outbound control ------------------------------------------------------
+
+  /**
+   * Holds (or releases) outbound frames. While paused, local edits accumulate and are
+   * sent on resume, which is the deterministic way to make two edits concurrent.
+   */
+  pauseOutbound(paused: boolean): void {
+    this.paused = paused;
+    if (!paused) {
+      this.flush();
+    }
+  }
+
+  /**
+   * Ends the session. No `disconnected` event is emitted for a disconnect this client
+   * asked for; the reference client behaves the same way.
+   */
+  async disconnect(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.clearTimers();
+    // Tell peers the cursor is gone, then end the socket (spec §8.2: a peer's state is
+    // dropped when it leaves).
+    if (this.seated && this.socket?.isOpen === true) {
+      this.awareness.setLocalState(null);
+      this.flush();
+    }
+    this.socket?.close(1000, 'client left');
+    this.socket = undefined;
+    this.seated = false;
+    this.rejectSeat(new EngineClosedError());
+    this.failPending();
+    this.awareness.destroy();
+    this.doc.destroy();
+  }
+
+  // -- connection lifecycle --------------------------------------------------
+
+  private async reopen(): Promise<void> {
+    try {
+      const session = await this.hello();
+      this.attempts = 0;
+      this.seat(session);
+    } catch (error) {
+      if (error instanceof ProtocolError && isTerminalCode(error.code)) {
+        this.emit({
+          type: 'sessionError',
+          code: error.code,
+          message: error.message,
+        });
+        this.finish();
+        return;
+      }
+      this.scheduleReconnect();
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.disposed || this.finished) {
+      return;
+    }
+    if (!this.reconnect.enabled || this.attempts >= this.reconnect.maxAttempts) {
+      this.finish();
+      return;
+    }
+    const delay = Math.min(
+      this.reconnect.initialDelayMs * 2 ** this.attempts,
+      this.reconnect.maxDelayMs,
+    );
+    this.attempts += 1;
+    this.retryTimer = setTimeout(() => {
+      void this.reopen();
+    }, delay);
+  }
+
+  /** Applies a completed handshake: peers, the document set, the sync handshake. */
+  private seat(session: SessionInfo): void {
+    this.current = session;
+    // A host learns the room id and token from the reply it minted the room with. They
+    // are what a reconnection has to carry, or it would mint a second room instead of
+    // reclaiming this one (spec §9.1).
+    this.room = session.roomId;
+    this.token = session.token ?? this.token;
+    this.clock = {
+      renewMs:
+        this.options.keepalive?.renewMs ?? session.keepalive.awareness_renew_ms,
+      expireMs:
+        this.options.keepalive?.expireMs ?? session.keepalive.awareness_expire_ms,
+    };
+    this.roomDocuments = [...session.documents];
+    this.peerMap.clear();
+    for (const peer of session.peers) {
+      this.peerMap.set(peer.peer_id, peer);
+    }
+    this.seated = true;
+    this.refusal = undefined;
+    // §7: immediately after seating, SyncStep1 with our state vector — every peer replies
+    // with what we are missing. Then publish our awareness, so a newcomer's presence is
+    // complete before anyone moves a cursor.
+    this.enqueueBinary(encodeSyncStep1(this.doc));
+    this.publishAwareness();
+    this.flush();
+    this.clearTimers();
+    this.timer = setInterval(() => {
+      this.tick();
+    }, this.clock.renewMs);
+    // §9.1: what a dropped socket loses is local, so the documents this client still
+    // holds open are re-opened. Content is not replayed: the sync handshake brings it
+    // back from the peers. This happens before the events below, so an adapter that
+    // re-opens a document in answer to them is ordered after the engine's own re-opens.
+    for (const path of [...this.heldDocuments]) {
+      void this.open(path).catch((error: unknown) => {
+        // A method-level refusal is an error response, not a close: the connection stays
+        // up, so this is the only place that can say the document was not re-opened.
+        if (error instanceof ProtocolError) {
+          this.emit({
+            type: 'sessionError',
+            code: error.code,
+            message: error.message,
+          });
+        }
+      });
+    }
+    this.emit({ type: 'documentsChanged', documents: this.documents() });
+    this.emit({ type: 'peersChanged', peers: this.peers() });
+  }
+
+  private onSocketClosed(code: number, reason: string): void {
+    this.socket = undefined;
+    const wasSeated = this.seated;
+    this.seated = false;
+    // Every request went out on the socket that just died; no answer can arrive on the
+    // next one, and their frames must not be replayed there.
+    this.failPending();
+    if (this.disposed || this.finished) {
+      return;
+    }
+    if (this.handshaking) {
+      // A handshake owns this socket, whether it is the first one or a retry: the
+      // rejection carries the reason, and the caller decides whether to retry. Every
+      // 4000 close means a different fault (§11), so the code the server named wins
+      // over the close code, and an unmapped close is a handshake that did not finish.
+      this.rejectSeat(
+        new ProtocolError(
+          this.refusal?.code ?? closeCodeName(code) ?? errCode.helloRequired,
+          reason === '' ? `the connection closed with ${code}` : reason,
+        ),
+      );
+      return;
+    }
+    if (!wasSeated) {
+      this.finish();
+      return;
+    }
+    if (this.refusal !== undefined) {
+      this.emit({
+        type: 'sessionError',
+        code: this.refusal.code,
+        message: this.refusal.message,
+      });
+    }
+    if (this.terminal || isTerminalCode(this.refusal?.code)) {
+      this.finish();
+      return;
+    }
+    this.scheduleReconnect();
+  }
+
+  private finish(): void {
+    if (this.finished) {
+      return;
+    }
+    this.finished = true;
+    this.generation += 1;
+    this.clearTimers();
+    this.failPending();
+    this.emit({ type: 'disconnected' });
+  }
+
+  private clearTimers(): void {
+    if (this.timer !== undefined) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+    if (this.retryTimer !== undefined) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
+    }
+  }
+
+  // -- the awareness clock ---------------------------------------------------
+
+  /**
+   * Mints a fresh awareness client id for this replica, ahead of a reconnect's
+   * `session.hello`. `doc.clientID` and `awareness.clientID` are ordinary mutable fields —
+   * yjs itself reassigns `doc.clientID` this way on an id collision (`Transaction.js`) — so
+   * this changes only which id future local operations and awareness updates are attributed
+   * to; it does not touch the document content already held under the old id. The old id's
+   * own local-state entry is this connection's leftover, not a new peer's, so it is dropped
+   * here rather than left to linger until the awareness clock would otherwise expire it.
+   */
+  private rotateIdentity(): void {
+    const previousId = this.awareness.clientID;
+    const id = random.uint32();
+    this.doc.clientID = id;
+    this.awareness.clientID = id;
+    this.awareness.states.delete(previousId);
+    this.awareness.meta.delete(previousId);
+  }
+
+  /** Publishes the local awareness state, unless the adapter cleared it. */
+  private publishAwareness(): void {
+    // A cleared state stays cleared: publishing `{}` would put a live empty presence —
+    // a cursor at nowhere — back on the wire.
+    if (this.localState !== null) {
+      this.awareness.setLocalState(this.localState);
+    }
+  }
+
+  /** Renewal and expiry, on the server's clock (spec §8.2). */
+  private tick(): void {
+    if (!this.seated) {
+      return;
+    }
+    // Renewing means republishing the same state with a newer awareness clock. Remote
+    // states are forgotten on this tick, so a state goes at the first tick after
+    // `last_updated + awareness_expire_ms` — within one renewal of the advertised value.
+    this.publishAwareness();
+    const deadline = Date.now() - this.clock.expireMs;
+    const stale: number[] = [];
+    for (const [clientId, meta] of this.awareness.meta) {
+      if (
+        clientId !== this.awareness.clientID &&
+        meta.lastUpdated <= deadline &&
+        this.awareness.states.has(clientId)
+      ) {
+        stale.push(clientId);
+      }
+    }
+    if (stale.length > 0) {
+      removeAwarenessStates(this.awareness, stale, EXPIRY_ORIGIN);
+    }
+  }
+
+  private wireAwareness(): void {
+    this.awareness.on(
+      'update',
+      (
+        changes: { added: number[]; updated: number[]; removed: number[] },
+        origin: unknown,
+      ) => {
+        if (origin !== 'local') {
+          // A state applied from a peer's frame is not re-broadcast: awareness converges
+          // peer to peer, and the server relays and forgets (spec §8).
+          return;
+        }
+        const clients = [
+          ...changes.added,
+          ...changes.updated,
+          ...changes.removed,
+        ];
+        if (clients.length === 0 || !this.seated) {
+          return;
+        }
+        this.enqueueBinary(encodeAwareness(this.awareness, clients));
+      },
+    );
+    this.awareness.on('change', () => {
+      this.emit({ type: 'presenceChanged', presence: this.presence() });
+    });
+  }
+
+  private wireDocument(): void {
+    this.doc.on('update', (update: Uint8Array, origin: unknown) => {
+      // A held document that has just arrived can now be observed, and its arrival is itself
+      // a change an adapter needs to hear about.
+      this.observeArrived(origin);
+      if (origin === REMOTE_ORIGIN) {
+        // Applying a peer's update must not echo it back into the room.
+        return;
+      }
+      this.enqueueBinary(encodeUpdate(update));
+    });
+  }
+
+  /**
+   * Observes a held document, so a remote change reports the path it changed and no other.
+   *
+   * A document that has not arrived yet has no text to observe, and creating one would make
+   * it look like an empty document that had — which is a distinction §8.1 needs a sender to
+   * keep. `observeArrived` attaches the observer when the text does appear.
+   */
+  private observe(path: string): void {
+    const text = this.textIfPresent(path);
+    if (text !== undefined) {
+      this.attach(path, text);
+    }
+  }
+
+  private attach(path: string, text: Y.Text): void {
+    if (this.texts.has(path)) {
+      return;
+    }
+    text.observe((_event: Y.YTextEvent, transaction: Y.Transaction) => {
+      if (transaction.origin === LOCAL_ORIGIN) {
+        return;
+      }
+      this.emit({ type: 'documentChanged', path });
+    });
+    this.texts.add(path);
+  }
+
+  /**
+   * Attaches the observer to any held document that has now arrived, and reports the
+   * arrival. A document this client created with its own edit reports nothing: the adapter
+   * already has that change.
+   */
+  private observeArrived(origin: unknown): void {
+    for (const path of this.heldDocuments) {
+      if (this.texts.has(path)) {
+        continue;
+      }
+      const text = this.textIfPresent(path);
+      if (text === undefined) {
+        continue;
+      }
+      this.attach(path, text);
+      if (origin !== LOCAL_ORIGIN) {
+        this.emit({ type: 'documentChanged', path });
+      }
+    }
+  }
+
+  // -- requests --------------------------------------------------------------
+
+  private request(kind: 'open' | 'close', path: string): Promise<void> {
+    if (this.finished || this.disposed) {
+      return Promise.reject(new EngineClosedError());
+    }
+    // A request is answered on the connection that carries it. With no seated connection
+    // there is nowhere to send it, and queueing it for the next one would replay it under
+    // an id this client has meanwhile reused (spec §9.1: a reconnect is a new peer).
+    if (!this.seated || this.socket === undefined || !this.socket.isOpen) {
+      return Promise.reject(new EngineClosedError('the connection is down'));
+    }
+    const id = (this.requestId += 1);
+    const message: ClientMessage = {
+      v: WIRE_VERSION,
+      id,
+      method: kind === 'open' ? method.docOpen : method.docClose,
+      params: { path },
+    };
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // The server took the request and did not answer it. Whether it applied it is
+        // unknowable and must not be guessed, so nothing moves: the caller is told, and
+        // both methods are idempotent, so re-asking is how it is settled.
+        if (this.pending.delete(id)) {
+          this.dropQueuedRequest(id);
+          reject(
+            new EngineClosedError(`the server did not answer ${message.method} in time`),
+          );
+        }
+      }, this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+      this.pending.set(id, { kind, path, resolve, reject, timer });
+      this.enqueueText(JSON.stringify(message), id);
+    });
+  }
+
+  private resolveRequest(message: {
+    id?: number;
+    result?: unknown;
+    error?: Refusal;
+  }): void {
+    const id = message.id;
+    if (id === undefined) {
+      return;
+    }
+    const pending = this.pending.get(id);
+    if (pending === undefined) {
+      return;
+    }
+    this.pending.delete(id);
+    clearTimeout(pending.timer);
+    if (message.error !== undefined) {
+      pending.reject(
+        new ProtocolError(message.error.code, message.error.message),
+      );
+      return;
+    }
+    this.accept(pending, message.result);
+    pending.resolve();
+  }
+
+  /** Moves local state to what the server accepted, then reports the room's set. */
+  private accept(pending: PendingRequest, result: unknown): void {
+    const body = (result ?? {}) as DocSet;
+    if (Array.isArray(body.documents)) {
+      this.roomDocuments = body.documents.filter(
+        (path): path is string => typeof path === 'string',
+      );
+    }
+    if (pending.kind === 'open') {
+      if (!this.heldDocuments.includes(pending.path)) {
+        this.heldDocuments.push(pending.path);
+      }
+      this.observe(pending.path);
+    } else {
+      this.heldDocuments = this.heldDocuments.filter(
+        (path) => path !== pending.path,
+      );
+    }
+    this.emit({ type: 'documentsChanged', documents: this.documents() });
+  }
+
+  /**
+   * Fails every request still waiting. The connection they went out on is gone, so no
+   * answer can reach them — and their frames must not outlive it either, or the next
+   * connection would answer them under an id it has reissued.
+   */
+  private failPending(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new EngineClosedError());
+    }
+    this.pending.clear();
+    this.queue = this.queue.filter((frame) => frame.requestId === undefined);
+  }
+
+  /** Removes a request's frame if it was never written to a socket. */
+  private dropQueuedRequest(id: number): void {
+    this.queue = this.queue.filter((frame) => frame.requestId !== id);
+  }
+
+  // -- inbound ---------------------------------------------------------------
+
+  private handleText(text: string): void {
+    const message = parseServerMessage(text);
+    if (message === undefined) {
+      return;
+    }
+    if (message.id !== undefined) {
+      this.resolveRequest(message);
+      return;
+    }
+    switch (message.event) {
+      case eventName.roomCreated:
+      case eventName.roomJoined: {
+        this.settleSeat(message.params);
+        break;
+      }
+      case eventName.peerJoined: {
+        const peer = parsePeerEvent(message.params);
+        if (peer !== undefined) {
+          this.peerMap.set(peer.peer_id, peer);
+          this.emit({ type: 'peersChanged', peers: this.peers() });
+          // A newcomer has no awareness of us yet: republish ours, so its presence list
+          // is complete before anyone moves a cursor.
+          this.publishAwareness();
+        }
+        break;
+      }
+      case eventName.peerLeft: {
+        this.peerLeft(message.params);
+        break;
+      }
+      case eventName.docOpened:
+      case eventName.docClosed: {
+        const params = message.params as DocEvent | undefined;
+        if (params !== undefined && Array.isArray(params.documents)) {
+          this.roomDocuments = params.documents.filter(
+            (path): path is string => typeof path === 'string',
+          );
+        }
+        this.emit({ type: 'documentsChanged', documents: this.documents() });
+        break;
+      }
+      case eventName.hostDetached: {
+        const graceMs = numberParam(message.params, 'grace_ms') ?? 0;
+        this.emit({ type: 'hostDetached', graceMs });
+        break;
+      }
+      case eventName.hostAttached: {
+        const peer = parsePeerEvent(message.params);
+        if (peer !== undefined) {
+          this.peerMap.set(peer.peer_id, peer);
+          this.emit({ type: 'hostAttached', peer });
+          this.emit({ type: 'peersChanged', peers: this.peers() });
+        }
+        break;
+      }
+      case eventName.roomGone: {
+        this.terminal = true;
+        const reason = textParam(message.params, 'reason') ?? 'room gone';
+        this.emit({ type: 'roomGone', reason });
+        break;
+      }
+      case eventName.sessionError: {
+        const refusal: Refusal = {
+          code: textParam(message.params, 'code') ?? 'error',
+          message:
+            textParam(message.params, 'message') ??
+            'the server reported a fault',
+        };
+        this.refusal = refusal;
+        if (isTerminalCode(refusal.code)) {
+          this.terminal = true;
+        }
+        if (this.seatWaiter === undefined) {
+          this.emit({
+            type: 'sessionError',
+            code: refusal.code,
+            message: refusal.message,
+          });
+        }
+        break;
+      }
+      default: {
+        // Unknown events and reserved `x.` names are ignored (§10.1).
+        break;
+      }
+    }
+  }
+
+  private peerLeft(params: unknown): void {
+    const peerId = textParam(params, 'peer_id');
+    if (peerId === undefined) {
+      return;
+    }
+    const peer = this.peerMap.get(peerId);
+    this.peerMap.delete(peerId);
+    if (peer?.awareness_client_id !== undefined) {
+      // The peer's cursor is gone with the peer (§8.4).
+      removeAwarenessStates(
+        this.awareness,
+        [peer.awareness_client_id],
+        'peer-left',
+      );
+    }
+    this.emit({ type: 'peersChanged', peers: this.peers() });
+  }
+
+  private handleBinary(frame: Uint8Array): void {
+    let replies: Uint8Array[];
+    try {
+      replies = applyFrame(frame, this.doc, this.awareness, REMOTE_ORIGIN)
+        .replies;
+    } catch {
+      // A payload this client cannot decode is a peer bug; the session goes on.
+      return;
+    }
+    for (const reply of replies) {
+      this.enqueueBinary(reply);
+    }
+    this.flush();
+  }
+
+  /** Resolves the waiter `hello()` left behind when the server seats this connection. */
+  private settleSeat(params: unknown): void {
+    const waiter = this.seatWaiter;
+    if (waiter === undefined) {
+      return;
+    }
+    const session = sessionFrom(params, this.options.baseUrl);
+    if (session === undefined) {
+      this.rejectSeat(
+        new ProtocolError(
+          errCode.badMessage,
+          'the server sent a malformed session reply',
+        ),
+      );
+      return;
+    }
+    this.seatWaiter = undefined;
+    clearTimeout(waiter.timer);
+    waiter.resolve(session);
+  }
+
+  private rejectSeat(error: Error): void {
+    const waiter = this.seatWaiter;
+    if (waiter === undefined) {
+      return;
+    }
+    this.seatWaiter = undefined;
+    clearTimeout(waiter.timer);
+    waiter.reject(error);
+  }
+
+  // -- outbound --------------------------------------------------------------
+
+  private enqueueText(text: string, requestId?: number): void {
+    this.queue.push(requestId === undefined ? { text } : { text, requestId });
+    this.flush();
+  }
+
+  private enqueueBinary(binary: Uint8Array): void {
+    this.queue.push({ binary });
+    this.flush();
+  }
+
+  private flush(): void {
+    if (this.paused || this.socket === undefined || !this.socket.isOpen) {
+      return;
+    }
+    while (this.queue.length > 0) {
+      const frame = this.queue[0];
+      this.queue.shift();
+      if (frame.text !== undefined) {
+        this.socket.sendText(frame.text);
+      } else if (frame.binary !== undefined) {
+        this.socket.sendBinary(frame.binary);
+      }
+    }
+  }
+
+  private emit(event: EngineEvent): void {
+    for (const listener of [...this.listeners]) {
+      listener(event);
+    }
+  }
+}
+
+/** The session error code a close code stands for, where it stands for one. */
+function closeCodeName(code: number): string | undefined {
+  switch (code) {
+    case close.roomUnknown:
+      return errCode.roomUnknown;
+    case close.tokenInvalid:
+      return errCode.tokenInvalid;
+    case close.roomGone:
+      return errCode.roomGone;
+    case close.hostPresent:
+      return errCode.hostPresent;
+    case close.unsupportedVersion:
+      return errCode.unsupportedVersion;
+    // 4000 is protocol_error, the general refusal, which §11 spells `bad_message`.
+    case close.protocolError:
+      return errCode.badMessage;
+    default:
+      return undefined;
+  }
+}
+
+function textParam(params: unknown, key: string): string | undefined {
+  const value =
+    typeof params === 'object' && params !== null
+      ? (params as Record<string, unknown>)[key]
+      : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numberParam(params: unknown, key: string): number | undefined {
+  const value =
+    typeof params === 'object' && params !== null
+      ? (params as Record<string, unknown>)[key]
+      : undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Reads a `room.created` / `room.joined` params object into a session description. */
+function sessionFrom(params: unknown, baseUrl: string): SessionInfo | undefined {
+  const body = params as SessionParams | undefined;
+  const peer = parsePeer(body?.self);
+  const roomId = body?.room_id;
+  // A session without a room id is not a session: seating it would leave every later
+  // reconnect minting a fresh room instead of reclaiming this one (spec §9.1).
+  if (
+    body === undefined ||
+    peer === undefined ||
+    typeof roomId !== 'string' ||
+    roomId === ''
+  ) {
+    return undefined;
+  }
+  const peers: PeerInfo[] = [];
+  for (const raw of body.peers ?? []) {
+    const parsed = parsePeer(raw);
+    if (parsed !== undefined) {
+      peers.push(parsed);
+    }
+  }
+  const keepalive = body.keepalive;
+  return {
+    roomId,
+    ...(typeof body.token === 'string' ? { token: body.token } : {}),
+    role: peer.role,
+    peer,
+    peers,
+    documents: (body.documents ?? []).filter(
+      (path): path is string => typeof path === 'string',
+    ),
+    capabilities: (body.capabilities ?? []).filter(
+      (name): name is string => typeof name === 'string',
+    ),
+    keepalive: {
+      ping_interval_ms: pick(
+        keepalive?.ping_interval_ms,
+        DEFAULT_KEEPALIVE.ping_interval_ms,
+      ),
+      awareness_renew_ms: pick(
+        keepalive?.awareness_renew_ms,
+        DEFAULT_KEEPALIVE.awareness_renew_ms,
+      ),
+      awareness_expire_ms: pick(
+        keepalive?.awareness_expire_ms,
+        DEFAULT_KEEPALIVE.awareness_expire_ms,
+      ),
+    },
+    baseUrl,
+  };
+}
+
+function pick(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
