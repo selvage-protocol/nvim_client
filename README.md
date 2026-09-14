@@ -105,14 +105,14 @@ left alone.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial — `pi` and `pc` — are not identical signs. The
-name is no longer drawn over the text; the gutter is where it lives, and two cells is all
-`sign_text` takes, so a peer called `thisismylongusername` is `th` there and nothing more. The
-whole name is discoverable two ways, both of them in the very highlight the caret and the sign
-are drawn with: a peer's full display name appears in a float over their caret for 1.2 s after it
-moves, or when they first appear — the glance at the moment the question is asked — and
-`:SelvagePeers` lists everyone the gutter drew, sign and whole name and room path, as the
-reference to look the two cells up in. Every mark is cleared and recreated when presence changes,
-and every one goes when the session ends, names with them.
+name is never drawn over the text: the gutter is where it lives, and two cells is all `sign_text`
+takes, so a peer called `thisismylongusername` is `th` there and nothing more. `:SelvagePeers`
+lists everyone the gutter drew — sign, whole display name and room path — as the reference to
+look the two cells up in, and it prints each sign in the very highlight that peer's caret and
+sign are drawn with, because a list that explains the gutter has to agree with it cell for cell.
+Nothing is put over the document when a peer moves; a name over their caret would cover a line
+and a half of the buffer, which is worse than the two cells it explains. Every mark is cleared
+and recreated when presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it — `CursorMoved`, `ModeChanged`,
 entering a buffer — coalesced into one `selection` per 100 ms, and `selectionCleared` goes out

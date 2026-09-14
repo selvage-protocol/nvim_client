@@ -31,10 +31,6 @@ local state = {
   cursors = {},
   -- The peers the last presence report drew, as rows for `:SelvagePeers` to print.
   peers = {},
-  -- The transient name floats peers carry over their carets, one per peer id, and where each
-  -- peer's caret was drawn last, so a name is only shown when the caret is news.
-  peer_names = {},
-  peer_positions = {},
   selection_armed = false,
   selection_path = nil,
   generation = 0,
@@ -199,101 +195,6 @@ local function cell_before(line, col)
   return vim.fn.byteidx(line, index)
 end
 
---- How long a peer's name stays over their caret after it moves: long enough to read, short
---- enough that a room of peers moving about does not paper the window with names.
-local PEER_NAME_MS = 1200
-
---- The window a document is on display in, or nil when nobody is looking at it.
-local function window_showing(bufnr)
-  for _, win in ipairs(api.nvim_list_wins()) do
-    if api.nvim_win_get_buf(win) == bufnr then
-      return win
-    end
-  end
-  return nil
-end
-
---- Takes a peer's name down, if it is up.
-local function hide_peer_name(peerId)
-  local shown = state.peer_names[peerId]
-  if shown == nil then
-    return
-  end
-  state.peer_names[peerId] = nil
-  if api.nvim_win_is_valid(shown.win) then
-    pcall(api.nvim_win_close, shown.win, true)
-  end
-end
-
---- Shows a peer's whole display name in a float over their caret, in their own colour, for
---- `PEER_NAME_MS`.
----
---- The gutter's `sign_text` is two cells by Neovim's own limit, so a peer called
---- `thisismylongusername` is `th` and the colour is all else there is to go on. This is the
---- name itself, at the moment the reader asks who that is; `:SelvagePeers` is the list to look
---- it up in afterwards.
----
---- The float is anchored to the window the document is on display in, so a peer whose buffer
---- nobody is looking at is not named — and neither is one scrolled out of the window, because
---- a float pinned to a line that is not on the screen says nothing. It takes no focus and no
---- mouse and closes itself, so nothing under it changes.
-local function show_peer_name(cursor, document, row, col, highlight)
-  local win = window_showing(document.bufnr)
-  if win == nil then
-    return
-  end
-  local screen_row = row - (vim.fn.line('w0', win) - 1)
-  if screen_row < 0 or screen_row >= api.nvim_win_get_height(win) then
-    return
-  end
-  local label = cursor.label or cursor.peerId or 'peer'
-  local bufnr = api.nvim_create_buf(false, true)
-  api.nvim_buf_set_lines(bufnr, 0, -1, false, { ' ' .. label .. ' ' })
-  vim.bo[bufnr].bufhidden = 'wipe'
-  local win_width = api.nvim_win_get_width(win)
-  local win_height = api.nvim_win_get_height(win)
-  local width = math.min(vim.fn.strdisplaywidth(label) + 2, win_width)
-  -- Above the caret where there is a line to be, below it where the caret is on the window's
-  -- first line, and over its own line only where the window is one line tall and there is
-  -- nowhere else to be. Keeping the caret's line itself readable is what the placement is for.
-  local placement
-  if screen_row > 0 then
-    placement = screen_row - 1
-  elseif screen_row + 1 < win_height then
-    placement = screen_row + 1
-  else
-    placement = screen_row
-  end
-  local left = vim.fn.strdisplaywidth(document:line(row):sub(1, col))
-  local ok, float = pcall(api.nvim_open_win, bufnr, false, {
-    relative = 'win',
-    win = win,
-    row = placement,
-    col = math.max(0, math.min(left, win_width - width)),
-    width = width,
-    height = 1,
-    focusable = false,
-    mouse = false,
-    style = 'minimal',
-    -- No frame: the peer's colour is the whole of it, and `winborder` here would be a second
-    -- and third line of the text it is naming covered, for a chip that is one line tall.
-    border = 'none',
-    zindex = 60,
-  })
-  if not ok then
-    pcall(api.nvim_buf_delete, bufnr, { force = true })
-    return
-  end
-  vim.wo[float].winhl = 'Normal:' .. highlight
-  local shown = { win = float }
-  state.peer_names[cursor.peerId] = shown
-  vim.defer_fn(function()
-    if state.peer_names[cursor.peerId] == shown then
-      hide_peer_name(cursor.peerId)
-    end
-  end, PEER_NAME_MS)
-end
-
 --- Draws the peer carets a presence report resolved, and the ranges behind the ones that
 --- selected something. Every mark is recreated rather than moved: a mark travels with the
 --- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
@@ -303,7 +204,7 @@ end
 --- is in front of, not the one it has reached. The room's offset names a position between two
 --- cells, and a block has to pick one; the one it picks is the cell to the left of the caret,
 --- which is what a caret drawn as a bar in front of a character means. The character under the
---- block stays readable through it rather than being covered by a name. The start of a line has
+--- block stays readable through it. The start of a line has
 --- no cell to the left, so the block stays on the cell the caret is on, where a bar at the
 --- line's start is drawn; an empty line has no cell either, and the block is the single one
 --- placed in the empty cell. Neither inserts anything, so the line keeps its width and the caret
@@ -314,7 +215,6 @@ local function draw_presence(cursors)
   state.peers = {}
   clear_presence()
   local ns = presence_namespace()
-  local named = {}
   for _, cursor in ipairs(state.cursors) do
     local document = state.documents[cursor.path]
     if document ~= nil and api.nvim_buf_is_valid(document.bufnr) then
@@ -359,17 +259,6 @@ local function draw_presence(cursors)
       if from == nil then
         from = col
       end
-      -- A peer who is new, or who has moved, is named over their caret for a beat; a report
-      -- that only moves somebody else leaves the name where it was. The position is the caret
-      -- itself, so a peer typing where a line and a cell can both hold the block is still
-      -- named, and the float is pinned to the cell the block ended on.
-      named[cursor.peerId] = true
-      local position = ('%s:%d'):format(cursor.path, cursor.head)
-      if state.peer_positions[cursor.peerId] ~= position then
-        hide_peer_name(cursor.peerId)
-        show_peer_name(cursor, document, row, from, name)
-      end
-      state.peer_positions[cursor.peerId] = position
       local caret = {
         sign_text = peer_sign(label),
         sign_hl_group = name,
@@ -390,12 +279,6 @@ local function draw_presence(cursors)
       if ok then
         state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
       end
-    end
-  end
-  -- A peer the report no longer names loses their name with their caret.
-  for peerId in pairs(state.peer_names) do
-    if not named[peerId] then
-      hide_peer_name(peerId)
     end
   end
 end
@@ -737,11 +620,6 @@ local function reset()
   end
   state.documents = {}
   clear_presence()
-  -- A name over a caret is part of what the session drew, so it goes with the carets.
-  for peerId in pairs(state.peer_names) do
-    hide_peer_name(peerId)
-  end
-  state.peer_positions = {}
   state.peers = {}
   state.cursors = {}
   for _, name in pairs(state.peer_groups) do
