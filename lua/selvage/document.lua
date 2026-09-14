@@ -181,22 +181,24 @@ end
 --- `on_bytes` behind: the buffer outlives the companion, and the callback it would keep
 --- calling has nothing left to send to.
 ---
---- This is the whole buffer's attachment, not Selvage's own callback: Neovim hands out no
---- handle for one, so `nvim_buf_detach` takes every `on_bytes` this channel holds for the
---- buffer with it — a formatter's or a diagnostics plugin's as well as this one. Attaching
---- the buffer again is the only way back, and that is the caller's to do.
+--- What ends this document's callbacks is Neovim's own `api-lua-detach`: `on_bytes` returning
+--- `true` detaches every callback the one `nvim_buf_attach` call it made registered, and leaves
+--- a formatter's or a diagnostics plugin's own attach alone. It lands on the buffer change that
+--- returns it, so until then the flag is what keeps this document quiet. There is nothing to
+--- call in its place: `nvim_buf_detach` is RPC-only, acts on a channel's buffer updates, and
+--- is not in the Lua API at all.
 function Document:detach()
   if self.detached then
     return
   end
   self.detached = true
-  if api.nvim_buf_is_valid(self.bufnr) then
-    pcall(api.nvim_buf_detach, self.bufnr)
-  end
 end
 
 --- Re-reads the buffer into the shadow and publishes the whole document as one change.
 function Document:resync()
+  if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
+    return
+  end
   local previous = self:text()
   self.lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, true)
   for index, line in ipairs(self.lines) do
