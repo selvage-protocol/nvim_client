@@ -581,53 +581,28 @@ check(
 -- -- the name behind the gutter sign -------------------------------------------
 --
 -- `sign_text` is one or two cells, so a peer called `thisismylongusername` is `th` and the
--- colour is all else the gutter holds. Two things answer for the rest: the whole name in a
--- float over the peer's caret for a beat after it moves, and `:SelvagePeers`, the list the two
--- cells are looked up in. Both carry the very colour the caret and the sign are drawn in, since
--- the list exists to explain the gutter and a name that disagrees with it explains nothing.
+-- colour is all else the gutter holds. `:SelvagePeers` answers for the rest: the list the two
+-- cells are looked up in, in the very colour the caret and the sign are drawn with, since a
+-- list that explains the gutter has to agree with it cell for cell.
+--
+-- Nothing draws a peer's name over the document, however long it is: a name over the text is a
+-- line and a half of the buffer covered whenever that peer moves, which is worse than the two
+-- cells it explains. The gutter is where the name lives, and the caret is a block.
 
 check('a peer whose document this client does not hold has no gutter sign to explain', #selvage.peers(), 0)
 
---- The floats carrying a peer's whole name, as they are configured on screen.
-local function name_floats()
-  local floats = {}
+--- The floating windows on screen, which is where a name over the document would have to be.
+local function overlay_windows()
+  local floats = 0
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local config = vim.api.nvim_win_get_config(win)
-    if config.relative == 'win' then
-      local bufnr = vim.api.nvim_win_get_buf(win)
-      floats[#floats + 1] = {
-        win = win,
-        relative = config.relative,
-        anchored = config.win,
-        text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n'),
-        focusable = config.focusable,
-        mouse = config.mouse,
-        style = config.style,
-        winhl = vim.wo[win].winhl,
-      }
+    if vim.api.nvim_win_get_config(win).relative ~= '' then
+      floats = floats + 1
     end
   end
   return floats
 end
 
-local clearances = count_type('selectionCleared')
--- A peer whose line is not on the screen is not named either: a float pinned to a line nobody
--- can see says nothing, and the window it would be pinned to has no cell to put it in.
-vim.api.nvim_win_set_height(0, 1)
-marks = draw({
-  {
-    peerId = 'p-bob',
-    label = 'Bob',
-    role = 'guest',
-    path = presence_room,
-    anchor = 17,
-    head = 17,
-    colour = '#61afef',
-    fill = '#61afef40',
-  },
-})
-check('a peer scrolled out of the window is not named', #name_floats(), 0)
-vim.api.nvim_win_set_height(0, 12)
+check('nothing is drawn over the document before a peer is', overlay_windows(), 0)
 
 marks = draw({
   {
@@ -642,44 +617,13 @@ marks = draw({
   },
 })
 check('a long name is still two cells in the gutter', marks[1] and marks[1][4].sign_text, 'th')
-local name_hl = marks[1] and marks[1][4].sign_hl_group
-
-local floats = name_floats()
-check('a peer who arrives is named over their caret', #floats, 1)
-check('  with the whole display name, not the two gutter cells', floats[1] and floats[1].text, ' thisismylongusername ')
-check('  anchored to a window rather than the editor', floats[1] and floats[1].relative, 'win')
+check('  and draws nothing over the document', overlay_windows(), 0)
 check(
-  '  the one the peer\'s document is displayed in',
-  floats[1] and floats[1].anchored,
-  vim.api.nvim_get_current_win()
+  '  the caret being a cell of the line with nothing written over it',
+  marks[1] ~= nil and marks[1][4].virt_text == nil and marks[1][4].end_col ~= nil,
+  true
 )
-check('  that takes no focus', floats[1] and floats[1].focusable, false)
-check('  and no mouse', floats[1] and floats[1].mouse, false)
-check('  minimal, so it carries the name and nothing else', floats[1] and floats[1].style, 'minimal')
-check('  drawn in the colour the caret and the sign are', floats[1] and floats[1].winhl, 'Normal:' .. tostring(name_hl))
-
--- The name is news, not furniture: it goes after a beat, and a report that leaves the peer where
--- they are draws none again. The wait is also the window in which a float that took the caret
--- would have published a `selectionCleared` this user never made.
-vim.wait(2500, function()
-  return #name_floats() == 0
-end)
-check('the name goes after a beat', #name_floats(), 0)
-check('  and showing it took no caret', count_type('selectionCleared'), clearances)
-
-marks = draw({
-  {
-    peerId = 'p-long',
-    label = 'thisismylongusername',
-    role = 'guest',
-    path = presence_room,
-    anchor = 5,
-    head = 5,
-    colour = '#98c379',
-    fill = '#98c37940',
-  },
-})
-check('a report that leaves the peer where they are shows no name again', #name_floats(), 0)
+local name_hl = marks[1] and marks[1][4].sign_hl_group
 
 marks = draw({
   {
@@ -693,7 +637,7 @@ marks = draw({
     fill = '#98c37940',
   },
 })
-check('a peer who moves is named again', #name_floats(), 1)
+check('a peer who moves draws nothing over the document with them', overlay_windows(), 0)
 
 local peers = selvage.peers()
 check('the session lists the peers the last report drew', #peers, 1)
@@ -739,10 +683,9 @@ marks = draw({
   },
 })
 check('a caret and a selection are up before the session ends', #marks, 2)
-check('  and a name with them', #name_floats(), 1)
 selvage.leave()
 check('leaving the session clears every mark', #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}), 0)
-check('  and every name', #name_floats(), 0)
+check('  and draws nothing over the document', overlay_windows(), 0)
 check('  and the list with them', #selvage.peers(), 0)
 
 -- -- the name the room sees -----------------------------------------------------
