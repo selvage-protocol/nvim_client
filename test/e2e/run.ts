@@ -40,6 +40,11 @@ const SEED_PATH = 'notes.txt';
 // Deliberately not ASCII: every offset on the wire is a UTF-16 code unit and every offset in
 // Neovim is a byte, and a document made only of ASCII would not tell the two apart.
 const SEED_TEXT = 'a dokument twö real editors are about to share \u{1f9f5}\n';
+// The room's own text, as the host wrote it to disk. It has to be in the final text: a guest
+// that opens its buffer before this text arrives must not publish its own over the room's, and
+// convergence alone would not notice — both sides would still agree on whatever they ended up
+// with, which is exactly how the overwrite stayed invisible.
+const SEED_LINE = SEED_TEXT.trimEnd();
 
 const RECONNECT = process.env['SELVAGE_E2E_RECONNECT'] !== '0';
 const DEADLINE_MS = Number(process.env['SELVAGE_E2E_DEADLINE_MS'] ?? '20000');
@@ -323,7 +328,8 @@ async function main(): Promise<void> {
         guestOutcome?.phase1 !== undefined &&
         hostOutcome.phase1.text === guestOutcome.phase1.text &&
         hostOutcome.phase1.text.includes(MARKER_HOST) &&
-        hostOutcome.phase1.text.includes(MARKER_GUEST),
+        hostOutcome.phase1.text.includes(MARKER_GUEST) &&
+        hostOutcome.phase1.text.includes(SEED_LINE),
       hostText: hostOutcome?.phase1?.text,
       guestText: guestOutcome?.phase1?.text,
     },
@@ -333,7 +339,7 @@ async function main(): Promise<void> {
             hostOutcome?.phase2 !== undefined &&
             guestOutcome?.phase2 !== undefined &&
             hostOutcome.phase2.text === guestOutcome.phase2.text &&
-            [MARKER_HOST, MARKER_GUEST, MARKER_HOST_2, MARKER_GUEST_2].every((marker) =>
+            [MARKER_HOST, MARKER_GUEST, MARKER_HOST_2, MARKER_GUEST_2, SEED_LINE].every((marker) =>
               hostOutcome.phase2?.text.includes(marker),
             ),
           hostText: hostOutcome?.phase2?.text,
