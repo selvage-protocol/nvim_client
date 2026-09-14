@@ -817,6 +817,122 @@ selvage.leave()
 vim.ui.input = saved_input
 vim.g.selvage_display_name = nil
 
+-- -- the room's limit on a name --------------------------------------------------
+--
+-- A display name is at most 32 UTF-16 code units, the unit the protocol counts, so an astral
+-- character costs two. An over-long name is refused, never shortened: the room must see the
+-- name its owner chose or no name at all. Where the name was typed the user is asked again
+-- with its length; where it came from a setting there is nobody to re-ask, so the session is
+-- not started and the refusal names the setting.
+
+local utf16 = require('selvage.utf16')
+check('a name is counted in UTF-16 code units', utf16.len('🧵'), 2)
+check('  which is not its bytes', #('🧵'), 4)
+check('  nor its characters', vim.fn.strchars('🧵'), 1)
+
+-- 32 units exactly, all ASCII: allowed, and it reaches the room whole.
+local at_limit = string.rep('a', 32)
+vim.ui.input = function() end
+vim.cmd('SelvageDisplayName ' .. at_limit)
+check('a name of exactly 32 units is accepted', vim.g.selvage_display_name, at_limit)
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('  and names the session', last_of('host') and last_of('host').displayName, at_limit)
+
+-- One unit more is refused, the name in force is kept, and the refusal says the limit and the
+-- count so the answer is a shorter name rather than a guess.
+local before_long = #notices
+vim.cmd('SelvageDisplayName ' .. string.rep('b', 33))
+check('a name of 33 units is refused', vim.g.selvage_display_name, at_limit)
+check(
+  '  with the count and the limit',
+  said_since(before_long, '33 UTF-16 code units and the room allows 32') ~= nil,
+  true
+)
+check('  and it says what to do', said_since(before_long, 'give a shorter one') ~= nil, true)
+
+-- An astral character costs two units, so 30 of them plus one is exactly 32 units — 34 bytes
+-- and 31 characters. A byte count would refuse this name and a character count would let 31
+-- ASCII plus one astral through as if it were 32, which is why the count is pinned here.
+local astral_at_limit = string.rep('e', 30) .. '🧵'
+vim.cmd('SelvageDisplayName ' .. astral_at_limit)
+check('32 units ending in an astral character are accepted', vim.g.selvage_display_name, astral_at_limit)
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('  and name the session', last_of('host') and last_of('host').displayName, astral_at_limit)
+local before_astral = #notices
+vim.cmd('SelvageDisplayName ' .. string.rep('e', 31) .. '🧵')
+check('33 units ending in an astral character are refused', vim.g.selvage_display_name, astral_at_limit)
+check('  with its count', said_since(before_astral, '33 UTF-16 code units') ~= nil, true)
+
+-- At the prompt the question is asked again, so a typed name over the limit costs a keystroke
+-- and not the session.
+vim.g.selvage_display_name = nil
+local answers = { string.rep('c', 33), 'Cara' }
+local asked = 0
+vim.ui.input = function(_, on_confirm)
+  asked = asked + 1
+  on_confirm(answers[asked])
+end
+local before_prompt = #notices
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('a 33-unit answer at the prompt is asked for again', asked, 2)
+check(
+  '  with the count and the limit',
+  said_since(before_prompt, '33 UTF-16 code units and the room allows 32') ~= nil,
+  true
+)
+check('  and the shorter answer names the session', last_of('host') and last_of('host').displayName, 'Cara')
+check('  and becomes the configured name', vim.g.selvage_display_name, 'Cara')
+
+-- An over-long name the environment carried has nobody to re-ask: it stops the session and
+-- is refused by name, rather than being shortened or swapped for the login name.
+vim.g.selvage_display_name = nil
+vim.env.SELVAGE_DISPLAY_NAME = string.rep('d', 33)
+asked = 0
+local hosts_before_env = count_type('host')
+local before_env = #notices
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('an over-long SELVAGE_DISPLAY_NAME starts nothing', count_type('host'), hosts_before_env)
+check('  and is not asked about', asked, 0)
+check('  and the refusal names the variable', said_since(before_env, 'SELVAGE_DISPLAY_NAME is 33') ~= nil, true)
+check('  and says the session was not started', said_since(before_env, 'the session was not started') ~= nil, true)
+
+-- A script can set the global without going through the command; the check is at the point
+-- the session starts for exactly that reason.
+vim.env.SELVAGE_DISPLAY_NAME = nil
+vim.g.selvage_display_name = string.rep('f', 33)
+local hosts_before_global = count_type('host')
+local before_global = #notices
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('an over-long global a script set starts nothing', count_type('host'), hosts_before_global)
+check('  and the refusal names the global', said_since(before_global, 'vim.g.selvage_display_name is 33') ~= nil, true)
+
+-- Reporting it rather than joining under it: with no argument the command says the name in
+-- force would not start a session, because the name in force is not one the room would take.
+local before_report = #notices
+vim.cmd('SelvageDisplayName')
+check('an over-long name in force is not reported as the name others see', said_since(before_report, 'the name others see') == nil, true)
+check('  and why the next session would not start', said_since(before_report, 'the next session will not start') ~= nil, true)
+vim.g.selvage_display_name = nil
+
+-- The login-name fallback is bounded too: with nobody to ask and `$USER` itself over the
+-- limit, there is no name the room would take and the session stops instead of sending one.
+local saved_user = vim.env.USER
+vim.env.USER = string.rep('g', 33)
+vim.ui.input = saved_input
+local hosts_before_fallback = count_type('host')
+local before_fallback = #notices
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+check('an over-long login name starts nothing', count_type('host'), hosts_before_fallback)
+check('  naming it', said_since(before_fallback, 'the login name ($USER)') ~= nil, true)
+vim.env.USER = saved_user
+vim.g.selvage_display_name = nil
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
