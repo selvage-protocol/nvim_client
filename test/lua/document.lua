@@ -67,6 +67,20 @@ vim.api.nvim_buf_set_text(pair_buf, 0, 6, 0, 6, { '!' })
 check('a character outside the BMP counts two', change(pair_sent[1]), '4..4 "!"')
 check('and the shadow still tracks', pair:text(), buffer_text(pair_buf))
 
+-- -- the caret's UTF-16 offset ------------------------------------------------
+--
+-- Where a caret is published. This is `position` read backwards, and the case that matters is
+-- the one where a byte column and a UTF-16 offset differ: an astral character beside a
+-- two-byte one, and a column inside a multi-byte character.
+local caret = document({ 'a😀b', 'wörld' })
+check('a caret after an astral character', caret:offset(0, #'a😀b'), 4)
+check('  and before it', caret:offset(0, 1), 1)
+check('  and in the second line', caret:offset(1, 1), 6)
+check('  and after a two-byte character', caret:offset(1, 3), 7)
+check('  and at the end of the document', caret:offset(1, #'wörld'), 10)
+check('  and position reads the offset back as a row', select(1, caret:position(10)), 1)
+check('  and a byte column', select(2, caret:position(10)), 6)
+
 -- -- a remote edit, applied as a range ---------------------------------------
 
 local appended, appended_buf = document({ 'a' })
