@@ -23,15 +23,41 @@ harness.log('joining', invite)
 
 selvage.join(invite)
 
+-- The window the guest's own seed used to be lost in: the handshake names the room's documents
+-- and the sync that carries their text is a later message, so this client's buffer for one
+-- exists — and is counting — before the room has put anything in it. A keystroke made here must
+-- leave neither the buffer nor the room behind: the room's text has to land in the buffer all
+-- the same, and the buffer's text must not be published over the room's.
+--
+-- The relay holds the guest's own bytes back so that this happens every run; without it the
+-- window is about a millisecond wide on loopback and this would be a race with the sync.
+harness.wait('the room document to be named', harness.deadline_ms, function()
+  return vim.fn.bufnr('selvage://' .. harness.seed_path) ~= -1
+end, function()
+  return vim.inspect(selvage.session())
+end)
+
+local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
+harness.log('the buffer exists and holds', vim.inspect(harness.text()))
+if harness.text() ~= '\n' then
+  harness.fail('the room text arrived before the buffer could be edited; the relay lag is too small to open the window this checks')
+end
+vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { '[[GUEST-BEFORE-ARRIVAL]]' })
+local before_arrival = harness.text()
+harness.log('edited it before the room text arrived; it holds', vim.inspect(before_arrival))
+
+-- Waited for as a change from what the buffer holds now: the room's text is nothing this driver
+-- knows — it knows nothing about the document but what the room sends it — and what it is
+-- waiting for is that text landing.
 harness.wait('the room document to arrive', harness.deadline_ms, function()
   local text = harness.text()
-  return text ~= nil and text ~= '\n'
+  return text ~= nil and text ~= before_arrival
 end, function()
   return vim.inspect(selvage.session())
 end)
 harness.log('joined with', vim.inspect(harness.text()))
 
-local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
+bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
 if bufnr == -1 then
   harness.fail('the room document did not open as a buffer')
 end
