@@ -84,22 +84,33 @@ function Companion:send(message)
   self.flushing = true
   vim.schedule(function()
     self.flushing = false
-    if self.job == nil then
-      return
-    end
-    local batch = table.concat(self.queue)
-    self.queue = {}
-    vim.fn.chansend(self.job, batch)
+    self:flush(self.job)
   end)
+end
+
+--- Writes whatever is queued. Called on the scheduled tick, and once more on the way out so
+--- that a message queued in the same tick as `:SelvageLeave` is not dropped on the floor.
+function Companion:flush(job)
+  if job == nil or #self.queue == 0 then
+    return
+  end
+  local batch = table.concat(self.queue)
+  self.queue = {}
+  vim.fn.chansend(job, batch)
 end
 
 function Companion:stop()
   local job = self.job
   self.job = nil
-  self.queue = {}
-  if job ~= nil then
-    -- Closing stdin is what the companion reads as "leave the room"; it exits on its own.
-    pcall(vim.fn.chanclose, job, 'stdin')
+  if job == nil then
+    return
+  end
+  self:flush(job)
+  -- Closing stdin is what the companion reads as "leave the room": it disconnects and exits on
+  -- its own. That disconnect is a round trip to the server, so it is waited for rather than
+  -- raced — killing the process here would drop whatever the last edit still had in flight.
+  pcall(vim.fn.chanclose, job, 'stdin')
+  if vim.fn.jobwait({ job }, 2000)[1] == -1 then
     vim.fn.jobstop(job)
   end
 end
