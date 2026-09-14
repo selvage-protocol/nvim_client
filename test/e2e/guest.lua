@@ -72,21 +72,26 @@ harness.wait('the host edit to arrive', harness.deadline_ms, function()
   return harness.contains(harness.markers.host)
 end, harness.observe)
 
--- The host's caret, as the plugin drew it: a name row above the line the host is on. The mark
--- can only be the host's — the bridge withholds a cursor for the local peer — and its label is
--- the name this process would use for itself. The document is shared on both sides, so the
--- path the mark is addressed to exists here.
-local function host_mark()
+-- The host's caret and selection, as the plugin drew them: an overlay caret mark at the
+-- host's own column, and a range mark behind it when the host has selected something. The
+-- marks can only be the host's — the bridge withholds a cursor for the local peer — and the
+-- label is the name this process would use for itself. The document is shared on both sides,
+-- so the path the marks are addressed to exists here.
+local function presence_marks()
   local namespace = vim.api.nvim_get_namespaces()['selvage.presence']
   local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
   if namespace == nil or bufnr == -1 then
-    return nil
+    return {}
   end
+  return vim.api.nvim_buf_get_extmarks(bufnr, namespace, 0, -1, { details = true })
+end
+
+local function host_mark()
   local label = vim.env.USER or 'neovim'
-  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, namespace, 0, -1, { details = true })) do
-    local lines = mark[4].virt_lines
-    if lines ~= nil and lines[1] ~= nil and lines[1][1] ~= nil then
-      if lines[1][1][1]:find(label, 1, true) ~= nil then
+  for _, mark in ipairs(presence_marks()) do
+    local text = mark[4].virt_text
+    if text ~= nil and text[1] ~= nil and text[1][1] ~= nil then
+      if text[1][1]:find(label, 1, true) ~= nil then
         return mark
       end
     end
@@ -94,12 +99,52 @@ local function host_mark()
   return nil
 end
 
-harness.wait('the host caret to be drawn as a presence mark', harness.deadline_ms, function()
-  return host_mark() ~= nil
+--- The mark that carries a range, as opposed to the caret's own.
+local function host_selection()
+  for _, mark in ipairs(presence_marks()) do
+    if mark[4].end_row ~= nil then
+      return mark
+    end
+  end
+  return nil
+end
+
+-- The caret is *at* the host's position: an overlay on the host's own line, not a row of its
+-- own above it. The host selected the marker it wrote, so the caret's byte column is that
+-- marker's length. A caret is published as soon as the buffer is shared and again from every
+-- event that moves it, so the wait is for the one at the host marker rather than for any at
+-- all — the earlier one is the caret the marker insert left behind.
+local function host_caret()
+  local mark = host_mark()
+  if mark == nil or mark[4].virt_text_pos ~= 'overlay' then
+    return nil
+  end
+  if mark[2] ~= 0 or mark[3] ~= #harness.markers.host then
+    return nil
+  end
+  return mark
+end
+
+harness.wait('the host caret to be drawn at its column', harness.deadline_ms, function()
+  return host_caret() ~= nil
 end, function()
-  return 'no presence mark on selvage://' .. harness.seed_path
+  return 'no caret at the host marker; marks: ' .. vim.inspect(presence_marks())
 end)
-harness.log('the host caret is drawn as a presence mark')
+harness.log('the host caret is drawn at its column')
+
+-- The selection arrives the same way: a range mark, in the host's colour, from the marker's
+-- start to the host caret's column.
+harness.wait('the host selection to be drawn', harness.deadline_ms, function()
+  local mark = host_selection()
+  return mark ~= nil
+    and mark[2] == 0
+    and mark[3] == 0
+    and mark[4].end_row == 0
+    and mark[4].end_col == #harness.markers.host
+end, function()
+  return 'no selection over the host marker; marks: ' .. vim.inspect(presence_marks())
+end)
+harness.log('the host selection is drawn')
 
 vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { harness.markers.guest })
 harness.log('made the guest edit; buffer now', vim.inspect(harness.text()))

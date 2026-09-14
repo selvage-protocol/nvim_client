@@ -26,6 +26,7 @@ local state = {
   presence_ns = nil,
   presence_marks = {},
   peer_groups = {},
+  peer_fills = {},
   peer_count = 0,
   cursors = {},
   selection_armed = false,
@@ -82,8 +83,9 @@ local function presence_namespace()
   return state.presence_ns
 end
 
---- The highlight group a peer's name row and sign are drawn in, made once per peer from the
---- colour the bridge derived, so a peer is the same colour in every client.
+--- The highlight group a peer's label and sign are drawn in, made once per peer from the
+--- colour the bridge derived, so a peer is the same colour in every client: black on the
+--- peer's own colour, a chip over the text and a legible sign in the gutter alike.
 local function peer_highlight(cursor)
   local name = state.peer_groups[cursor.peerId]
   if name == nil then
@@ -92,6 +94,55 @@ local function peer_highlight(cursor)
     state.peer_groups[cursor.peerId] = name
   end
   api.nvim_set_hl(0, name, { fg = '#000000', bg = cursor.colour or '#888888', bold = true })
+  return name
+end
+
+--- The RGB channels of a `#rrggbb` colour, or nil for anything else.
+local function channels(colour)
+  local r, g, b = tostring(colour or ''):match('^#(%x%x)(%x%x)(%x%x)')
+  if r == nil then
+    return nil
+  end
+  return tonumber(r, 16), tonumber(g, 16), tonumber(b, 16)
+end
+
+--- The alpha the bridge gave a selection's fill, or its own quarter when it named none.
+local function fill_alpha(fill)
+  local alpha = tostring(fill or ''):match('^#%x%x%x%x%x%x(%x%x)$')
+  return alpha ~= nil and tonumber(alpha, 16) / 255 or 0.25
+end
+
+--- The highlight a peer's selection is filled with, made once per peer beside the label one.
+---
+--- The bridge hands the fill as `#rrggbbaa` and a buffer highlight takes an opaque
+--- `#rrggbb`, so the alpha is resolved here: against the editor's own background, so the fill
+--- is a tint the text stays legible on rather than the peer's colour painted over it, which is
+--- the trade a `Visual` highlight makes too. A theme with no `Normal` background has the
+--- colour its `background` option names.
+local function peer_fill(cursor)
+  local name = state.peer_fills[cursor.peerId]
+  if name == nil then
+    state.peer_count = state.peer_count + 1
+    name = 'SelvagePeer' .. state.peer_count .. 'Fill'
+    state.peer_fills[cursor.peerId] = name
+  end
+  local r, g, b = channels(cursor.colour)
+  if r == nil then
+    api.nvim_set_hl(0, name, {})
+    return name
+  end
+  local background = api.nvim_get_hl(0, { name = 'Normal' }).bg
+  if background == nil then
+    background = vim.o.background == 'light' and 0xffffff or 0x000000
+  end
+  local nr = math.floor(background / 65536) % 256
+  local ng = math.floor(background / 256) % 256
+  local nb = background % 256
+  local alpha = fill_alpha(cursor.fill)
+  local function mix(fore, back)
+    return math.floor(fore * alpha + back * (1 - alpha) + 0.5)
+  end
+  api.nvim_set_hl(0, name, { bg = ('#%02x%02x%02x'):format(mix(r, nr), mix(g, ng), mix(b, nb)) })
   return name
 end
 
@@ -108,16 +159,30 @@ local function clear_presence()
   state.presence_marks = {}
 end
 
---- The first character of a peer's name, for the sign column. `sign_text` takes one or two
---- cells; a name is not required to be ASCII, so take a character rather than a byte.
+--- The sign a peer's caret carries in the gutter. `sign_text` takes one or two cells: the
+--- first two characters of the name tell two peers whose names share an initial apart — `pi`
+--- and `pc` both begin with `p` — and the colour tells the rest apart. A wide character takes
+--- both cells on its own, so the second character is only taken when it still fits.
 local function peer_sign(label)
   local first = vim.fn.strcharpart(label or '', 0, 1)
-  return first ~= '' and first or '•'
+  if first == '' then
+    return '•'
+  end
+  local two = vim.fn.strcharpart(label, 0, 2)
+  return vim.fn.strdisplaywidth(two) <= 2 and two or first
 end
 
---- Draws the carets a presence report resolved. Every mark is recreated rather than moved: a
---- mark travels with the buffer's edits, but where a peer *is* changes, and a mark for a peer
---- the report no longer names would otherwise stay behind.
+--- Draws the peer carets a presence report resolved, and the ranges behind the ones that
+--- selected something. Every mark is recreated rather than moved: a mark travels with the
+--- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
+--- names would otherwise stay behind.
+---
+--- The caret is a `virt_text` overlay at the peer's own row and column: the name is drawn over
+--- the line where the caret is, shifting nothing and adding no row. A row of its own above the
+--- line reads the position wrong — a virtual line starts at the text column, so the name
+--- cannot sit at the caret's column and the caret appears to be above the text rather than in
+--- it. The trade is that the name covers the characters under it, which is the honest cost of
+--- being at the right place.
 local function draw_presence(cursors)
   state.cursors = cursors or {}
   clear_presence()
@@ -125,12 +190,33 @@ local function draw_presence(cursors)
   for _, cursor in ipairs(state.cursors) do
     local document = state.documents[cursor.path]
     if document ~= nil and api.nvim_buf_is_valid(document.bufnr) then
-      local row, col = document:position(cursor.head)
       local label = cursor.label or cursor.peerId or 'peer'
       local name = peer_highlight(cursor)
+      -- The selection first, so the caret chip sits over it. `anchor` after `head` is a
+      -- selection made backwards, which is still a selection: the range is the two ends in
+      -- order, and a collapsed one is a caret with nothing to fill.
+      if cursor.anchor ~= cursor.head then
+        local from, to = cursor.anchor, cursor.head
+        if from > to then
+          from, to = to, from
+        end
+        local from_row, from_col = document:position(from)
+        local to_row, to_col = document:position(to)
+        local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, from_row, from_col, {
+          end_row = to_row,
+          end_col = to_col,
+          hl_group = peer_fill(cursor),
+          priority = 100,
+        })
+        if ok then
+          state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
+        end
+      end
+      local row, col = document:position(cursor.head)
       local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, col, {
-        virt_lines = { { { ' ' .. label .. ' ', name } } },
-        virt_lines_above = true,
+        virt_text = { { label, name } },
+        virt_text_pos = 'overlay',
+        hl_mode = 'replace',
         sign_text = peer_sign(label),
         sign_hl_group = name,
         priority = 100,
@@ -447,7 +533,11 @@ local function reset()
   for _, name in pairs(state.peer_groups) do
     pcall(api.nvim_set_hl, 0, name, {})
   end
+  for _, name in pairs(state.peer_fills) do
+    pcall(api.nvim_set_hl, 0, name, {})
+  end
   state.peer_groups = {}
+  state.peer_fills = {}
   state.peer_count = 0
   state.generation = state.generation + 1
   state.selection_armed = false
