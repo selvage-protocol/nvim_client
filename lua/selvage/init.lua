@@ -20,7 +20,17 @@ local state = {
   --- @type table<string, table> room path to document
   documents = {},
   group = nil,
+  -- Whether the next document the room names is still the one to put in front of the user.
+  -- Set when a guest joins; cleared by the first document shown.
+  auto_open = false,
 }
+
+--- The room paths this session holds, ordered so that completion and a prompt agree.
+function M.documents()
+  local paths = vim.tbl_keys(state.documents)
+  table.sort(paths)
+  return paths
+end
 
 --- Where the session stands, for a statusline or a script.
 function M.session()
@@ -29,7 +39,7 @@ function M.session()
     role = state.role,
     room = state.room,
     invite = state.invite,
-    documents = vim.tbl_keys(state.documents),
+    documents = M.documents(),
   }
 end
 
@@ -95,6 +105,72 @@ local function share_current()
   end
 end
 
+--- Puts a buffer in the window the user is looking at.
+local function show(bufnr)
+  if bufnr == nil or not api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  return pcall(api.nvim_win_set_buf, 0, bufnr)
+end
+
+--- The room path a user's words name: the room path, its `selvage://` buffer name, or a
+--- suffix of the path at a directory boundary. A host above a folder called `workspace`
+--- publishes `workspace/README.md`; a guest who types `README.md` means that one.
+local function resolve(wanted)
+  wanted = wanted:gsub('^selvage://', '')
+  if state.documents[wanted] ~= nil then
+    return wanted, {}
+  end
+  local matches = {}
+  for _, candidate in ipairs(M.documents()) do
+    if candidate:sub(-(#wanted + 1)) == '/' .. wanted then
+      matches[#matches + 1] = candidate
+    end
+  end
+  if #matches == 1 then
+    return matches[1], matches
+  end
+  return nil, matches
+end
+
+local function choose(paths)
+  vim.ui.select(paths, { prompt = 'selvage: open which document?' }, function(choice)
+    if choice ~= nil then
+      show(state.documents[choice].bufnr)
+    end
+  end)
+end
+
+--- Opens one of the room's documents in the current window.
+---
+--- With no argument and one document, that document; with several, the user is asked which.
+function M.open(path)
+  local paths = M.documents()
+  if #paths == 0 then
+    notify('no shared documents; join a session first', vim.log.levels.WARN)
+    return
+  end
+  local wanted = vim.trim(path or '')
+  if wanted == '' then
+    if #paths == 1 then
+      show(state.documents[paths[1]].bufnr)
+    else
+      choose(paths)
+    end
+    return
+  end
+  local resolved, candidates = resolve(wanted)
+  if resolved == nil then
+    if #candidates > 1 then
+      notify('"' .. wanted .. '" matches several: ' .. table.concat(candidates, ', '), vim.log.levels.WARN)
+    else
+      notify('no shared document matches "' .. wanted .. '"; :SelvageOpen alone offers them', vim.log.levels.WARN)
+    end
+    return
+  end
+  show(state.documents[resolved].bufnr)
+end
+
 --- A host shares what it opens for as long as the session lasts.
 local function watch_buffers()
   state.group = api.nvim_create_augroup('SelvageHost', { clear = true })
@@ -122,6 +198,7 @@ local function on_status(message)
     watch_buffers()
   elseif message.state == 'joined' then
     notify('joined ' .. tostring(message.roomId))
+    state.auto_open = true
   elseif message.state == 'error' then
     notify(tostring(message.message), vim.log.levels.ERROR)
   end
@@ -130,8 +207,24 @@ end
 local function on_report(report)
   if report.kind == 'documents' then
     if state.role == 'guest' then
+      local first = nil
       for _, path in ipairs(report.documents) do
-        share(guest_buffer(path), path)
+        local bufnr = guest_buffer(path)
+        first = first or bufnr
+        share(bufnr, path)
+      end
+      -- Once, for the report that follows the join: the room's document set is what the user
+      -- who just ran `:SelvageJoin` asked to be shown. A document the host opens later gets a
+      -- buffer and waits for `:SelvageOpen` — stealing the window then would interrupt
+      -- whatever the guest is already editing.
+      if state.auto_open and first ~= nil then
+        state.auto_open = false
+        if vim.g.selvage_open_on_join ~= false then
+          show(first)
+          if #report.documents > 1 then
+            notify(('opened %s; %d more, :SelvageOpen to choose'):format(report.documents[1], #report.documents - 1))
+          end
+        end
       end
     end
   elseif report.kind == 'roomGone' then
@@ -174,6 +267,7 @@ local function reset()
   state.role = nil
   state.room = nil
   state.invite = nil
+  state.auto_open = false
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil

@@ -19,6 +19,22 @@ command('SelvageCopyInvite', function()
   require('selvage').copy_invite()
 end, { nargs = 0, desc = 'Copy the invite link' })
 
+command('SelvageOpen', function(args)
+  require('selvage').open(args.args)
+end, {
+  nargs = '?',
+  desc = 'Open a document the session shares',
+  complete = function(lead)
+    local matches = {}
+    for _, path in ipairs(require('selvage').documents()) do
+      if path:sub(1, #lead) == lead then
+        matches[#matches + 1] = path
+      end
+    end
+    return matches
+  end,
+})
+
 command('SelvageLeave', function()
   require('selvage').leave()
 end, { nargs = 0, desc = 'Leave the session' })
