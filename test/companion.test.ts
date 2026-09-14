@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LineReader } from '../companion/ipc.ts';
-import type { Notification } from '../companion/ipc.ts';
+import type { Notification, Request } from '../companion/ipc.ts';
 import { Companion } from '../companion/session.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
@@ -63,6 +63,53 @@ function change(
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 8; turn += 1) {
     await Promise.resolve();
+  }
+}
+
+/** A change as the text it names would take it. */
+function apply(text: string, change: { start: number; end: number; text: string }): string {
+  return text.slice(0, change.start) + change.text + text.slice(Math.max(change.end, change.start));
+}
+
+/**
+ * The front-end's half of the version protocol, as `lua/selvage/document.lua` applies it: a
+ * buffer, a count of the changes it has taken, and the refusal of an `applyEdit` whose version
+ * is not this document's own.
+ *
+ * Only the counting is modelled, in the companion's own text: where a range lands in a real
+ * buffer is the Lua side's arithmetic, and `test/lua/document.lua` is where that is tested.
+ * What cannot be tested there is the companion's half of the protocol, which is only observable
+ * against a front-end that counts and refuses the way this one does.
+ */
+class FrontEnd {
+  text: string;
+  version = 0;
+  private readonly toCompanion: Request[];
+
+  constructor(toCompanion: Request[], text: string) {
+    this.toCompanion = toCompanion;
+    this.text = text;
+  }
+
+  /** A local edit: the buffer takes it, the count moves, and the companion is told. */
+  edit(path: string, change: { start: number; end: number; text: string }): void {
+    this.text = apply(this.text, change);
+    this.version += 1;
+    this.toCompanion.push({ type: 'change', path, ...change });
+  }
+
+  /** One message from the companion. A local change and an applied remote edit are one each. */
+  receive(notification: Notification): void {
+    if (notification.type !== 'applyEdit') {
+      return;
+    }
+    if (notification.version !== this.version) {
+      this.toCompanion.push({ type: 'applied', id: notification.id, ok: false });
+      return;
+    }
+    this.text = apply(this.text, notification);
+    this.version += 1;
+    this.toCompanion.push({ type: 'applied', id: notification.id, ok: true });
   }
 }
 
@@ -131,6 +178,87 @@ test('a guest does not reconcile a buffer against a replica that has not arrived
   assert.deepEqual(it.applies, [
     { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room', version: 0 },
   ]);
+});
+
+test('a guest whose text arrived before the hold was answered is opened too', async () => {
+  const it = harness('guest', ['notes.txt']);
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  // The hold goes out against a replica that has nothing, and the answer to it and the sync
+  // that carries the text are two messages on one connection: which arrives first is the
+  // server's to decide. This is the text arriving first — the engine has nothing left to report
+  // an arrival for, so the answer to the hold is the moment the document is opened.
+  const opened = it.companion.handle({ type: 'open', path: 'notes.txt', text: '\n' });
+  it.engine.texts.set('notes.txt', 'from the room\n');
+  await opened;
+  await settle();
+
+  assert.deepEqual(it.applies, [
+    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room', version: 0 },
+  ]);
+});
+test("a guest's edit before the room's text arrives keeps the two counts together", async () => {
+  const it = harness('guest', ['notes.txt']);
+  const toCompanion: Request[] = [];
+  const front = new FrontEnd(toCompanion, '\n');
+  let delivered = 0;
+
+  /** Runs the two sides against each other until neither has anything left to say. */
+  const drain = async (): Promise<void> => {
+    for (let turn = 0; turn < 32; turn += 1) {
+      await settle();
+      if (toCompanion.length === 0 && delivered === it.sent.length) {
+        return;
+      }
+      while (toCompanion.length > 0) {
+        await it.companion.handle(toCompanion.shift() as Request);
+      }
+      while (delivered < it.sent.length) {
+        front.receive(it.sent[delivered] as Notification);
+        delivered += 1;
+      }
+    }
+    assert.fail('the companion and the front-end never settled');
+  };
+
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: front.text });
+  await drain();
+
+  // The user types into the buffer before the room's text arrives. The front-end counts the
+  // edit the moment it makes it, and the companion is told a moment later.
+  front.edit('notes.txt', { start: 0, end: 0, text: 'x' });
+  await drain();
+  assert.equal(front.version, 1, 'the front-end has counted the edit');
+
+  // The room's text lands. The count the companion offers the seed against has to be the
+  // front-end's own, or the range is refused — and a range refused at a version the mirror
+  // has already reached cannot be rebased, so the buffer never takes the room's text and the
+  // next keystroke publishes the buffer's difference from the replica into the room.
+  it.engine.remote('notes.txt', 'from the room\n');
+  await drain();
+
+  assert.equal(it.applies.length, 1, 'the buffer is seeded once the text arrives');
+  assert.deepEqual(
+    change(it.applies[0]),
+    { start: 0, end: 1, text: 'from the room', version: 1 },
+    "the seed is offered against the count the front-end's own document has reached",
+  );
+  const complaints = it.sent.filter(
+    (notification) =>
+      notification.type === 'report' &&
+      ['applyRefused', 'divergence'].includes((notification.report as { kind: string }).kind),
+  );
+  assert.deepEqual(complaints, [], 'the buffer takes the room\'s text without a complaint');
+  assert.equal(front.text, 'from the room\n');
+  assert.equal(it.engine.text('notes.txt'), 'from the room\n');
+
+  // A keystroke after the arrival is a keystroke: the buffer already holds the room's text, so
+  // what reaches the room is the user's edit and not the buffer's difference from it.
+  front.edit('notes.txt', { start: 0, end: 0, text: 'y' });
+  await drain();
+  assert.equal(it.engine.text('notes.txt'), 'yfrom the room\n');
+  assert.equal(front.text, 'yfrom the room\n');
 });
 
 test('a local change reaches the replica as the smallest edit', async () => {
