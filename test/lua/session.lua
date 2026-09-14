@@ -213,8 +213,8 @@ vim.g.selvage_open_on_join = nil
 -- -- presence: the caret out, the peers' carets in ------------------------------
 --
 -- The two directions of the IPC's `selection`/`presence`. This user's caret reaches the room
--- from the events that move it, throttled to one message per interval; a peer's caret arrives
--- as a report and is drawn as a name row above the line they are on.
+-- from the events that move it, throttled to one message per interval; a peer's caret and
+-- selection arrive as a report and are drawn where the peer is.
 
 local function count_type(kind)
   local count = 0
@@ -296,74 +296,177 @@ vim.wait(300, function()
 end)
 check('  and clearing again sends nothing', count_type('selectionCleared'), cleared)
 
--- A peer's caret is a name row above their line, in the colour the bridge gave them.
+-- A peer's caret is drawn where the caret is: an overlay `virt_text` at their own row and
+-- byte column, in the colour the bridge gave them. The column is the conversion from the
+-- UTF-16 offset the room counts, and the line is multi-byte so the two cannot be confused.
 vim.api.nvim_set_current_buf(presence_buf)
 local ns = vim.api.nvim_get_namespaces()['selvage.presence']
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-bob',
-      label = 'Bob',
-      role = 'guest',
-      path = presence_room,
-      anchor = 4,
-      head = 4,
-      colour = '#61afef',
-      fill = '#61afef40',
-    },
+
+local function draw(cursors)
+  handlers().on_message({ type = 'presence', cursors = cursors })
+  return vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, { details = true })
+end
+
+--- The mark that carries a range, as opposed to the caret's own.
+local function range_of(marks)
+  for _, mark in ipairs(marks) do
+    if mark[4].end_row ~= nil then
+      return mark
+    end
+  end
+  return nil
+end
+
+local marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 7,
+    head = 7,
+    colour = '#61afef',
+    fill = '#61afef40',
   },
 })
-local marks = vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, { details = true })
-check('a presence report draws a mark', #marks, 1)
-check('  above the line the peer is on', marks[1] and marks[1][2], 0)
-check("  with the peer's name in it", marks[1] and marks[1][4].virt_lines[1][1][1], ' Bob ')
-check('  and above the line, not below', marks[1] and marks[1][4].virt_lines_above, true)
+check('a caret-only presence report draws one mark', #marks, 1)
+check('  on the line the peer is on', marks[1] and marks[1][2], 1)
+check("  at the peer's byte column, not their UTF-16 offset", marks[1] and marks[1][3], 3)
+check(
+  "  with the peer's name over the line there",
+  marks[1] and marks[1][4].virt_text and marks[1][4].virt_text[1][1],
+  'Bob'
+)
+check('  as an overlay, adding no row', marks[1] and marks[1][4].virt_text_pos, 'overlay')
+check('  and not as a virtual line of its own', marks[1] ~= nil and marks[1][4].virt_lines == nil, true)
 check(
   '  in the colour the bridge chose',
   marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].sign_hl_group }).bg,
   tonumber('61afef', 16)
 )
+check("  and the sign keeps the name's first two characters", marks[1] and marks[1][4].sign_text, 'Bo')
+
+-- Two peers whose names share an initial are not identical signs: the second character
+-- separates `pi` from `pc`, and the colour separates whatever the text does not.
+marks = draw({
+  { peerId = 'p-pi', label = 'pi', role = 'guest', path = presence_room, anchor = 5, head = 5, colour = '#e06c75' },
+  { peerId = 'p-pc', label = 'pc', role = 'guest', path = presence_room, anchor = 5, head = 5, colour = '#98c379' },
+})
+check('two peers are two marks', #marks, 2)
+local signs, colours = {}, {}
+for _, mark in ipairs(marks) do
+  signs[#signs + 1] = mark[4].sign_text
+  colours[#colours + 1] = vim.api.nvim_get_hl(0, { name = mark[4].sign_hl_group }).bg
+end
+table.sort(signs)
+check('  whose signs do not collide on the first character', table.concat(signs, ','), 'pc,pi')
+check('  and whose colours differ', colours[1] ~= colours[2], true)
+
+-- A selection is a range filled in the peer's own colour, so the text under it stays legible.
+-- Both ends are UTF-16 offsets converted to byte columns here, and `a😀b` is the case where
+-- the two disagree: anchor 0 to head 3 is two characters, six bytes.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 0,
+    head = 3,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a selection draws a range and its caret', #marks, 2)
+local selection = range_of(marks)
+check('  from the anchor line', selection and selection[2], 0)
+check('  at the anchor byte column', selection and selection[3], 0)
+check('  to the head line', selection and selection[4].end_row, 0)
+check('  at the head byte column, past the astral pair', selection and selection[4].end_col, 5)
+check(
+  '  filled with a background',
+  selection ~= nil and vim.api.nvim_get_hl(0, { name = selection[4].hl_group }).bg ~= nil,
+  true
+)
+check(
+  '  in a tint, not the opaque peer colour painted over the text',
+  selection ~= nil and vim.api.nvim_get_hl(0, { name = selection[4].hl_group }).bg ~= tonumber('61afef', 16),
+  true
+)
+check(
+  '  leaving the text its own colour',
+  selection ~= nil and vim.api.nvim_get_hl(0, { name = selection[4].hl_group }).fg == nil,
+  true
+)
+
+-- A selection made backwards — `v` from the right end — is still a selection, and the same
+-- one: `anchor` after `head` is the two ends in the other order.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 3,
+    head = 0,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a backwards selection draws the same range', #marks, 2)
+selection = range_of(marks)
+check('  from the smaller end', selection ~= nil and selection[2] == 0 and selection[3] == 0, true)
+check('  to the larger', selection ~= nil and selection[4].end_row == 0 and selection[4].end_col == 5, true)
+
+-- A collapsed selection is a caret and nothing else: there is no range to fill.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 7,
+    head = 7,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a collapsed selection is only the caret', #marks, 1)
+check('  with no range mark', marks[1] ~= nil and marks[1][4].end_row == nil, true)
 
 -- A presence report is the whole set: a peer it no longer names is withdrawn, and a peer in
 -- a document this client does not hold is not drawn at all.
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-ann',
-      label = 'Ann',
-      role = 'guest',
-      path = 'a-document-nobody-holds.txt',
-      anchor = 0,
-      head = 0,
-      colour = '#e06c75',
-    },
+marks = draw({
+  {
+    peerId = 'p-ann',
+    label = 'Ann',
+    role = 'guest',
+    path = 'a-document-nobody-holds.txt',
+    anchor = 0,
+    head = 0,
+    colour = '#e06c75',
   },
 })
 check(
   'a report without a peer withdraws their mark, and does not draw one for a document nobody holds',
-  #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}),
+  #marks,
   0
 )
 
 -- End of the session: every mark goes with it, whatever buffer it was on.
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-bob',
-      label = 'Bob',
-      role = 'guest',
-      path = presence_room,
-      anchor = 4,
-      head = 4,
-      colour = '#61afef',
-      fill = '#61afef40',
-    },
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 0,
+    head = 3,
+    colour = '#61afef',
+    fill = '#61afef40',
   },
 })
-check('a mark is up before the session ends', #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}), 1)
+check('a caret and a selection are up before the session ends', #marks, 2)
 selvage.leave()
 check('leaving the session clears every mark', #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}), 0)
 

@@ -73,11 +73,20 @@ which is what a convergence question turns on.
 
 ### Remote cursors
 
-A peer's caret is drawn as a **name row above the line they are on**: a `virt_lines_above`
-extmark per peer, in the colour the bridge derived for them, with their initial in the sign
-column. The name row is a real screen row for each peer on that line, and it sits above the
-line rather than at the caret's column — a virtual line starts at the text column. Every mark
-is cleared and recreated when presence changes, and every one goes when the session ends.
+A peer's caret is drawn **where the caret is**: an overlay `virt_text` extmark at the peer's own
+row and byte column, in the colour the bridge derived for them, with their name drawn over the
+characters under it rather than shifting them or adding a row. A `virt_lines_above` row of its
+own was the first shape and reads the position wrong — a virtual line starts at the text
+column, so the name cannot sit at the caret's column and the caret appears to be above the
+line rather than in it. A peer who has selected something gets a second extmark over
+`[anchor, head)`, whichever way the range was made, filled with the peer's colour at the alpha
+the bridge computed; a collapsed selection draws nothing, because the caret is already drawn.
+Both ends of both marks are the room's UTF-16 offsets converted to byte columns.
+
+The sign column carries the first two characters of a peer's name, coloured with the peer's own
+highlight, so two peers whose names share an initial — `pi` and `pc` — are not identical signs.
+Every mark is cleared and recreated when presence changes, and every one goes when the session
+ends.
 
 This user's own caret is published from the events that move it — `CursorMoved`, `ModeChanged`,
 entering a buffer — coalesced into one `selection` per 100 ms, and `selectionCleared` goes out
@@ -180,9 +189,9 @@ between Neovim's byte positions and the protocol's UTF-16 code units. The first 
 first against a real buffer and a real `on_bytes`, because a framework mocking those would be
 testing the mock; the second against a stubbed companion, because what it checks is the wiring
 around a session — which buffers it shares, that it lets them go when the session ends, and
-that a caret is published and a peer's caret drawn. `test/lua/leave.lua` starts a real
-job, one that ignores its stdin, to check what `:SelvageLeave` does to a companion that does not
-go on its own.
+that a caret is published and a peer's caret and selection are drawn at the peer's position.
+`test/lua/leave.lua` starts a real job, one that ignores its stdin, to check what
+`:SelvageLeave` does to a companion that does not go on its own.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
 each loading the real plugin and starting its own real companion, one hosting and one joining
@@ -216,3 +225,7 @@ keystroke in that window every run — which it can only do if the relay is what
 - A room document whose text does not end in a newline gains one here. Neovim's line-array
   buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
   has to add.
+- A peer's caret is an overlay, so its name covers the characters under it, and a peer's
+  selection is the colour blended with the editor's background rather than a real translucent
+  fill: a buffer highlight has no alpha, and a float would cost per-window bookkeeping on every
+  scroll and edit for less than the overlay gives at the same place.

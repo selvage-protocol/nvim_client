@@ -33,11 +33,15 @@ harness.wait_for_file('the guest to report it has joined', harness.deadline_ms, 
 
 vim.api.nvim_buf_set_lines(bufnr, 0, 0, true, { harness.markers.host })
 harness.log('made the host edit; buffer now', vim.inspect(harness.text()))
--- A caret for the guest to see. Where the caret is only reaches the room through the events
--- that move it, and a headless Neovim moves nothing on its own, so the event is made the way a
--- keystroke would.
+-- A caret and a selection for the guest to see. Where either is only reaches the room through
+-- the events that move the caret, and a headless Neovim moves nothing on its own, so the
+-- events are made the way keystrokes would. The selection is over the marker this driver just
+-- wrote, which is the text the guest waits for before it looks.
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.cmd('normal! v')
+vim.api.nvim_win_set_cursor(0, { 1, #harness.markers.host })
 vim.api.nvim_exec_autocmds('CursorMoved', { buffer = bufnr })
+vim.api.nvim_exec_autocmds('ModeChanged', { buffer = bufnr })
 
 harness.wait('the guest edit to arrive', harness.deadline_ms, function()
   return harness.contains(harness.markers.guest)
