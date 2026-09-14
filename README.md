@@ -62,6 +62,11 @@ and an applied remote edit are one each — the `applyEdit` carries the count it
 against, and the plugin refuses one that does not match. The bridge then works the edit out
 again from the mirror the local change has by that point reached.
 
+Setting `SELVAGE_COMPANION_LOG` to a path makes the companion append every message it sends and
+receives, with the time and the process id. The two sides of this IPC are two processes, so the
+order the messages actually crossed in is the one thing a log of either end alone cannot show —
+which is what a convergence question turns on.
+
 ### The vendored engine
 
 `vendor/` is a copy, never edited here. Refresh it from a sibling `vscode_client` checkout:
@@ -113,9 +118,10 @@ Clone the repository and run `npm ci` inside it (the companion needs `yjs`, `y-p
 
 ```
 npm run typecheck
-npm test                   # the companion, against a replica with no server behind it
-scripts/ci-local.sh all    # the same commands as .github/workflows/ci.yml, plus actionlint
-scripts/test-lua.sh        # the offset arithmetic, in a real headless Neovim
+npm test                    # the companion, against a replica with no server behind it
+scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plus actionlint
+scripts/test-lua.sh         # the offset arithmetic, in a real headless Neovim
+scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
 ```
 
 There is no `busted` and no plugin-test framework. Almost every rule worth testing — what enters
@@ -125,6 +131,12 @@ translation plus one thing that is not: the conversion between Neovim's byte pos
 protocol's UTF-16 code units. That one gets `test/lua/document.lua`, which runs in a real
 headless Neovim against a real buffer and a real `on_bytes`, because a framework mocking those
 would be testing the mock.
+
+`scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
+each loading the real plugin and starting its own real companion, one hosting and one joining
+over a real `selvaged`, converging on the same document and again after a real TCP-level blip
+cuts the guest's connection. It is not part of `npm test` or CI — it needs a `nvim` and a built
+`selvaged` — and `SELVAGE_E2E_RECONNECT=0` runs the convergence half alone.
 
 ## Licence
 

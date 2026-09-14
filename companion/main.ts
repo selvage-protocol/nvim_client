@@ -5,11 +5,36 @@
  * say is in `ipc.ts`; everything it decides is in `vendor/bridge/`.
  */
 
+import { appendFileSync } from 'node:fs';
+
 import { Companion } from './session.ts';
 import { LineReader } from './ipc.ts';
 import type { Notification, Request } from './ipc.ts';
 
+/**
+ * Every message, both ways, with the time it crossed — written only when
+ * `SELVAGE_COMPANION_LOG` names a file. The two sides of this IPC are two processes, so the
+ * order the messages actually crossed in is the one thing a log of either side alone cannot
+ * show; this is where a convergence question gets answered.
+ */
+const traceFile = process.env['SELVAGE_COMPANION_LOG'];
+
+function trace(direction: '>' | '<', payload: unknown): void {
+  if (traceFile === undefined || traceFile === '') {
+    return;
+  }
+  try {
+    appendFileSync(
+      traceFile,
+      `${new Date().toISOString()} ${String(process.pid)} ${direction} ${JSON.stringify(payload)}\n`,
+    );
+  } catch {
+    // A trace that cannot be written is not worth failing a session over.
+  }
+}
+
 function write(notification: Notification): void {
+  trace('>', notification);
   process.stdout.write(`${JSON.stringify(notification)}\n`);
 }
 
@@ -35,6 +60,7 @@ const reader = new LineReader((line) => {
     warn(`ignoring a line that is not JSON: ${error instanceof Error ? error.message : line}`);
     return;
   }
+  trace('<', request);
   queue = queue.then(() => companion.handle(request)).catch((error: unknown) => {
     warn(`handling ${request.type} failed: ${error instanceof Error ? error.message : String(error)}`);
   });

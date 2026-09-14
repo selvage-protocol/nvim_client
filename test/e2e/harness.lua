@@ -1,0 +1,164 @@
+-- What both e2e drivers need: bounded waits, the environment the orchestrator passes, and the
+-- result file it reads back.
+--
+-- Every wait here has a deadline and reports what it actually saw when it expires. A run that
+-- fails says which condition never became true and what the buffer held instead.
+
+local M = {}
+
+M.role = 'driver'
+
+--- @return string
+local function required(name)
+  local value = vim.env[name]
+  if value == nil or value == '' then
+    error(name .. ' is not set; this script is run by test/e2e/run.ts')
+  end
+  return value
+end
+
+M.env = {
+  required = required,
+  optional = function(name)
+    local value = vim.env[name]
+    if value == nil or value == '' then
+      return nil
+    end
+    return value
+  end,
+}
+
+M.seed_path = nil
+M.result_file = nil
+M.deadline_ms = 20000
+M.reconnect_deadline_ms = 40000
+
+function M.setup(role)
+  M.role = role
+  M.seed_path = required('SELVAGE_E2E_SEED_PATH')
+  M.result_file = required('SELVAGE_E2E_RESULT_FILE')
+  M.invite_file = required('SELVAGE_E2E_INVITE_FILE')
+  M.markers = {
+    host = required('SELVAGE_E2E_MARKER_HOST'),
+    guest = required('SELVAGE_E2E_MARKER_GUEST'),
+    host2 = required('SELVAGE_E2E_MARKER_HOST_2'),
+    guest2 = required('SELVAGE_E2E_MARKER_GUEST_2'),
+  }
+  M.joined_file = required('SELVAGE_E2E_JOINED_FILE')
+  M.ack_file = required('SELVAGE_E2E_ACK_FILE')
+  M.control_file = M.env.optional('SELVAGE_E2E_CONTROL_FILE')
+  M.deadline_ms = tonumber(M.env.optional('SELVAGE_E2E_DEADLINE_MS') or '20000')
+  M.reconnect_deadline_ms = tonumber(M.env.optional('SELVAGE_E2E_RECONNECT_DEADLINE_MS') or '40000')
+  M.outcome = { role = role }
+end
+
+function M.log(...)
+  local parts = {}
+  for _, part in ipairs({ ... }) do
+    parts[#parts + 1] = type(part) == 'string' and part or vim.inspect(part)
+  end
+  io.stdout:write(('[%s] %s\n'):format(M.role, table.concat(parts, ' ')))
+  io.stdout:flush()
+end
+
+function M.write_file(path, contents)
+  local handle = assert(io.open(path, 'w'))
+  handle:write(contents)
+  handle:close()
+end
+
+function M.read_file(path)
+  local handle = io.open(path, 'r')
+  if handle == nil then
+    return nil
+  end
+  local contents = handle:read('*a')
+  handle:close()
+  if contents == '' then
+    return nil
+  end
+  return contents
+end
+
+--- Records what this instance reached, so the orchestrator can compare the two.
+function M.record(phase, text)
+  M.outcome[phase] = { text = text }
+  M.write_file(M.result_file, vim.json.encode(M.outcome))
+end
+
+--- The host says a phase has landed on its side. Until it has, the guest cannot leave: an edit
+--- the guest has made is a message still on its way to the room, and a process that exits takes
+--- it with it.
+function M.ack(phase)
+  M.write_file(M.ack_file .. '.' .. phase, 'ok')
+end
+
+function M.wait_ack(phase, deadline_ms)
+  return M.wait_for_file('the host to confirm ' .. phase, deadline_ms, M.ack_file .. '.' .. phase)
+end
+
+--- Waits for `condition` with a deadline, reporting `observe()` when it expires.
+function M.wait(label, deadline_ms, condition, observe)
+  M.log('waiting for ' .. label .. ' (deadline ' .. deadline_ms .. 'ms)')
+  local ok = vim.wait(deadline_ms, condition, 50)
+  if not ok then
+    local seen = observe and observe() or '(nothing observed)'
+    M.fail(('timed out after %dms waiting for %s; observed: %s'):format(deadline_ms, label, seen))
+  end
+  M.log('  ' .. label .. ': reached')
+  return true
+end
+
+function M.wait_for_file(label, deadline_ms, path)
+  local contents
+  M.wait(label, deadline_ms, function()
+    contents = M.read_file(path)
+    return contents ~= nil
+  end, function()
+    return 'no ' .. path
+  end)
+  return (contents:gsub('%s+$', ''))
+end
+
+function M.fail(message)
+  M.outcome.error = message
+  if M.result_file ~= nil then
+    M.write_file(M.result_file, vim.json.encode(M.outcome))
+  end
+  M.log('FAILED: ' .. message)
+  vim.cmd('qall!')
+  os.exit(1)
+end
+
+--- The text the plugin holds for the shared document, as the room counts it.
+function M.text()
+  return require('selvage').text(M.seed_path)
+end
+
+function M.contains(marker)
+  local text = M.text()
+  return text ~= nil and text:find(marker, 1, true) ~= nil
+end
+
+function M.observe()
+  return vim.inspect(M.text())
+end
+
+--- Loads the real plugin out of this checkout.
+function M.load_plugin()
+  local root = vim.env.SELVAGE_E2E_PLUGIN_ROOT
+  if root == nil or root == '' then
+    error('SELVAGE_E2E_PLUGIN_ROOT is not set')
+  end
+  vim.opt.runtimepath:prepend(root)
+  vim.cmd('runtime! plugin/selvage.lua')
+  return require('selvage')
+end
+
+function M.done()
+  M.log('OK')
+  vim.cmd('qall!')
+  os.exit(0)
+end
+
+return M
