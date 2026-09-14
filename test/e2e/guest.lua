@@ -31,13 +31,17 @@ selvage.join(invite)
 --
 -- The relay holds the guest's own bytes back so that this happens every run; without it the
 -- window is about a millisecond wide on loopback and this would be a race with the sync.
-harness.wait('the room document to be named', harness.deadline_ms, function()
-  return vim.fn.bufnr('selvage://' .. harness.seed_path) ~= -1
+--
+-- The document is waited for in the *window*, not just as a buffer: joining is what puts it in
+-- front of the user, and a buffer that was created but never shown is the failure this proof
+-- exists to catch.
+harness.wait('the room document to open in the window', harness.deadline_ms, function()
+  return vim.fn.bufname('%') == 'selvage://' .. harness.seed_path
 end, function()
   return vim.inspect(selvage.session())
 end)
 
-local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
+local bufnr = vim.api.nvim_get_current_buf()
 harness.log('the buffer exists and holds', vim.inspect(harness.text()))
 if harness.text() ~= '\n' then
   harness.fail('the room text arrived before the buffer could be edited; the relay lag is too small to open the window this checks')
