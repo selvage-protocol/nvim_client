@@ -154,9 +154,11 @@ export class Companion {
    * the two would hold different texts from the first keystroke.
    *
    * Such a document is held in the room now, and put in front of the bridge when its text is
-   * there. The hold is what makes the room send the text to this client and what makes its
-   * arrival an event this process hears, so waiting for the text without it would wait for
-   * ever. A host supplies the text instead of waiting for it, so it opens at once.
+   * there. The hold is what makes the room send the text to this client, and the text's arrival
+   * is what this process hears — either as the engine's event for a document it holds, or, when
+   * the text was here before the hold was answered, as that answer itself. Waiting for the text
+   * without the hold would wait for ever. A host supplies the text instead of waiting for it, so
+   * it opens at once.
    *
    * A document opened this way has no mirror until the text arrives, and a change made to it in
    * the meantime is kept rather than dropped — see `changed`.
