@@ -150,6 +150,11 @@ in: a headless process falls back to the login name and says so, so a room is ne
 given a name nobody chose. The name rides in the `host`/`join` handshake and nothing carries it
 afterwards, so a change made while a session is live applies to the next host or join, not the
 current one.
+A name is at most **32 UTF-16 code units** — the unit the protocol counts, so an astral
+character costs two — and one over that is refused rather than shortened, because a room must
+see the name its owner chose or none at all. A name typed at the prompt that is too long says
+how long it is and asks again; one that arrived from the global or the environment has nobody
+to re-ask, so the session is not started and the refusal names the setting to change.
 `vim.g.selvage_open_on_join = false` keeps the join from changing the window, while still
 opening the room's documents as buffers `:SelvageOpen` reaches.
 

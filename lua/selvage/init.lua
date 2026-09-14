@@ -6,6 +6,7 @@
 
 local companion = require('selvage.companion')
 local Document = require('selvage.document')
+local utf16 = require('selvage.utf16')
 
 local api = vim.api
 
@@ -679,18 +680,45 @@ local function ensure()
   return process
 end
 
+--- The room's limit on a display name, counted the way the protocol counts: UTF-16 code units,
+--- so an astral character costs two. A name at the limit is allowed and one over it is refused,
+--- never shortened, because the room must see the name its owner chose or no name at all.
+local MAX_DISPLAY_NAME = 32
+
+--- How long `name` is beside the limit, as a refusal says it. `#value` would count bytes and
+--- `vim.fn.strchars` characters; neither is the unit the room counts.
+local function over_long(name)
+  return ('%d UTF-16 code units and the room allows %d'):format(utf16.len(name), MAX_DISPLAY_NAME)
+end
+
+--- Whether a name with nobody to re-ask fits the limit, saying so and naming `source` when it
+--- does not. A false answer means the session or the command did not happen: `did` says which.
+local function acceptable(name, source, did)
+  if utf16.len(name) <= MAX_DISPLAY_NAME then
+    return true
+  end
+  notify(
+    ('%s is %s, so %s: a name is never shortened; set a shorter one'):format(source, over_long(name), did),
+    vim.log.levels.ERROR
+  )
+  return false
+end
+
 --- The name the room is told this client is, when one has been configured: the plugin's own
 --- global first, then `SELVAGE_DISPLAY_NAME`, the variable the launcher and the runbook set.
---- Nil when there is neither, because that is the case that asks.
+--- Nil when there is neither, because that is the case that asks. The second value names the
+--- source, so a refusal can say which setting to change.
 local function configured_display_name()
   local name = vim.g.selvage_display_name
+  local source = 'vim.g.selvage_display_name'
   if name == nil or vim.trim(tostring(name)) == '' then
     name = vim.env.SELVAGE_DISPLAY_NAME
+    source = 'SELVAGE_DISPLAY_NAME'
   end
   if name == nil or vim.trim(tostring(name)) == '' then
     return nil
   end
-  return vim.trim(tostring(name))
+  return vim.trim(tostring(name)), source
 end
 
 --- The `vim.ui.input` the plugin was loaded with. A replaced one — a GUI prompt, another
@@ -711,14 +739,23 @@ end
 --- next session is not asked again. A prompt is only shown where there is someone to answer it;
 --- a process with no UI falls back to the login name and says so, rather than showing a room a
 --- name nobody chose in silence.
+---
+--- Every one of those names has to fit the room's limit. A name the user typed is asked for again
+--- with its length; one that came from the global or the environment has nobody to re-ask, so it
+--- stops the session rather than being shortened or quietly swapped for the login name.
 local function resolve_display_name(callback)
-  local configured = configured_display_name()
+  local configured, source = configured_display_name()
   if configured ~= nil then
-    callback(configured)
+    if acceptable(configured, source, 'the session was not started') then
+      callback(configured)
+    end
     return
   end
   local fallback = vim.env.USER or 'neovim'
   if not can_prompt() then
+    if not acceptable(fallback, 'the login name ($USER)', 'the session was not started') then
+      return
+    end
     notify(
       ('no display name is set and there is no one to ask; the room will see "%s" (set vim.g.selvage_display_name, SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName)'):format(
         fallback
@@ -728,21 +765,32 @@ local function resolve_display_name(callback)
     callback(fallback)
     return
   end
-  vim.ui.input({ prompt = 'The name other participants see: ', default = fallback }, function(input)
-    local name = vim.trim(input or '')
-    if name == '' then
-      notify(
-        ('no display name chosen; the room will see "%s" (set vim.g.selvage_display_name or run :SelvageDisplayName)'):format(
-          fallback
-        ),
-        vim.log.levels.WARN
-      )
-      callback(fallback)
-      return
-    end
-    vim.g.selvage_display_name = name
-    callback(name)
-  end)
+  local function ask()
+    vim.ui.input({ prompt = 'The name other participants see: ', default = fallback }, function(input)
+      local name = vim.trim(input or '')
+      if name == '' then
+        if not acceptable(fallback, 'the login name ($USER)', 'the session was not started') then
+          return
+        end
+        notify(
+          ('no display name chosen; the room will see "%s" (set vim.g.selvage_display_name or run :SelvageDisplayName)'):format(
+            fallback
+          ),
+          vim.log.levels.WARN
+        )
+        callback(fallback)
+        return
+      end
+      if utf16.len(name) > MAX_DISPLAY_NAME then
+        notify(('the display name is %s; say a shorter one'):format(over_long(name)), vim.log.levels.WARN)
+        ask()
+        return
+      end
+      vim.g.selvage_display_name = name
+      callback(name)
+    end)
+  end
+  ask()
 end
 
 --- Mints a room on `url` and shares the current buffer.
@@ -799,20 +847,33 @@ end
 
 --- The name other participants see, resolved without asking: the configured global, the
 --- environment's name, or the login name. A script that reads this is never prompted — a name
---- that has not been chosen yet is `M.resolve_display_name`'s business, not this one's.
+--- that has not been chosen yet is `M.resolve_display_name`'s business, not this one's. It
+--- reports whatever was configured, so a name over the room's limit comes back too; that one
+--- stops a session rather than being shortened, and `:SelvageDisplayName` says so.
 function M.display_name()
-  return configured_display_name() or (vim.env.USER or 'neovim')
+  local configured = configured_display_name()
+  return configured or (vim.env.USER or 'neovim')
 end
 
 --- Sets the name other participants see, and says when it takes effect.
 ---
 --- The name travels in the `host`/`join` handshake and nothing carries it afterwards, so a
 --- session that is already live keeps the name it started with; the change is for the next one.
---- With no name, it reports the one now in force instead of setting an empty one.
+--- With no name, it reports the one now in force instead of setting an empty one. A name over
+--- the room's limit is refused with its length, before either, since a session cannot join under
+--- one and a report of it as the name in force would be a lie.
 function M.set_display_name(name)
   local wanted = vim.trim(name or '')
   if wanted == '' then
+    local configured, source = configured_display_name()
+    if configured ~= nil and not acceptable(configured, source, 'the next session will not start') then
+      return
+    end
     notify(('the name others see is "%s"; :SelvageDisplayName <name> to change it'):format(M.display_name()))
+    return
+  end
+  if utf16.len(wanted) > MAX_DISPLAY_NAME then
+    notify(('the display name is %s; give a shorter one'):format(over_long(wanted)), vim.log.levels.ERROR)
     return
   end
   vim.g.selvage_display_name = wanted
