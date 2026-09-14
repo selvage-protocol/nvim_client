@@ -242,9 +242,12 @@ vim.wait(200, function()
 end)
 
 -- A character outside the BMP, so a published offset can only be right if the byte to UTF-16
--- conversion ran. `a😀b` is six bytes and four UTF-16 code units.
+-- conversion ran. `a😀b` is six bytes and four UTF-16 code units. `guest` is the plain line the
+-- caret's cell is asserted on, and the empty line is the one position a line offers with no cell
+-- in it at all. Where each line starts: `a😀b` at 0, `wörld` at 5, `guest` at 11, the empty
+-- line at 17.
 local presence_path = '.tmp/lua-presence.txt'
-vim.fn.writefile({ 'a😀b', 'wörld' }, presence_path)
+vim.fn.writefile({ 'a😀b', 'wörld', 'guest', '' }, presence_path)
 vim.cmd('edit! ' .. vim.fn.fnameescape(presence_path))
 local presence_buf = vim.api.nvim_get_current_buf()
 local presence_room = vim.fn.fnamemodify(presence_path, ':.')
@@ -296,11 +299,12 @@ vim.wait(300, function()
 end)
 check('  and clearing again sends nothing', count_type('selectionCleared'), cleared)
 
--- A peer's caret is drawn where the caret is: the one cell at their own row and byte column,
--- filled with the colour the bridge gave them and left readable through it. Nothing is inserted,
--- so the line keeps its width and the block sits against the selection fill rather than beside
--- it. The column is the conversion from the UTF-16 offset the room counts, and the line is
--- multi-byte so the two cannot be confused.
+-- A peer's caret is a block on the cell *before* the room's offset: the character the caret is
+-- in front of, not the one it has reached, so a caret published at the offset of `e` in `guest`
+-- fills `u`. The colour is the one the bridge gave the peer and the character under the block
+-- stays readable through it. Nothing is inserted, so the line keeps its width and the block sits
+-- against the selection fill rather than beside it. The column is the conversion from the UTF-16
+-- offset the room counts, and the lines are multi-byte so the two cannot be confused.
 vim.api.nvim_set_current_buf(presence_buf)
 local ns = vim.api.nvim_get_namespaces()['selvage.presence']
 
@@ -334,8 +338,12 @@ local marks = draw({
 })
 check('a caret-only presence report draws one mark', #marks, 1)
 check('  on the line the peer is on', marks[1] and marks[1][2], 1)
-check("  at the peer's byte column, not their UTF-16 offset", marks[1] and marks[1][3], 3)
-check('  filling the one cell the caret is on', marks[1] and marks[1][4].end_col, 4)
+check(
+  "  on the byte column of the cell before the offset, not the offset's own",
+  marks[1] and marks[1][3],
+  1
+)
+check('  filling that character, not one byte of it: `ö` is two bytes', marks[1] and marks[1][4].end_col, 3)
 check('  on that line, adding none', marks[1] and marks[1][4].end_row, 1)
 check(
   '  as a block in the peer colour, not text over the line',
@@ -355,27 +363,68 @@ check(
 )
 check("  and the sign keeps the name's first two characters", marks[1] and marks[1][4].sign_text, 'Bo')
 
--- The block covers the whole character, not one byte of it: `😀` is four bytes, and the caret
--- sits on it at UTF-16 offset 1, where a byte count would say one.
+-- The owner's case, and the one an off-by-one shows up in: a caret between two characters is
+-- in front of the second of them, so `gu|est` fills `u`. `guest` starts at UTF-16 offset 11,
+-- so the offset in front of its `e` is 13 — reading the offset as the cell it names fills `e`
+-- instead, which is what this asserts against.
 marks = draw({
   {
     peerId = 'p-bob',
     label = 'Bob',
     role = 'guest',
     path = presence_room,
-    anchor = 1,
-    head = 1,
+    anchor = 13,
+    head = 13,
     colour = '#61afef',
     fill = '#61afef40',
   },
 })
-check('a caret on a multi-byte character draws one mark', #marks, 1)
+check('a caret between two characters draws one mark', #marks, 1)
+check('  on the line the offset is on', marks[1] and marks[1][2], 2)
+check('  on the character before the offset, not the one at it', marks[1] and marks[1][3], 1)
+check('  filling that one cell', marks[1] and marks[1][4].end_col, 2)
+
+-- Offset 0 has no cell before it, so the block stays on the first cell of the line, where a
+-- bar at the line's start is drawn: not on another line, and not off the text. The character
+-- under it is the one the offset's own cell holds, because there is no other cell there.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 0,
+    head = 0,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a caret at the start of a line draws one mark', #marks, 1)
+check('  on the line the offset is on', marks[1] and marks[1][2], 0)
+check('  on the first cell, having none on its left', marks[1] and marks[1][3], 0)
+check('  filling it', marks[1] and marks[1][4].end_col, 1)
+
+-- The block covers the whole character, not one byte of it: `😀` is four bytes and two UTF-16
+-- units, and the caret in front of `b` is at offset 2, where a byte count would say five.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 2,
+    head = 2,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a caret with a multi-byte character before it draws one mark', #marks, 1)
 check("  at that character's byte column", marks[1] and marks[1][3], 1)
 check('  and fills the whole character, not one byte', marks[1] and marks[1][4].end_col, 5)
 
--- The end of a line has no cell to fill, and that is where a peer typing at the end of a line
--- is: a single block in the empty cell after the text, still nothing inserted and nothing
--- shifted.
+-- A caret at the end of a line — the offset after the last character — is in front of the last
+-- character, so that is the cell filled: a peer typing at the end of a line is drawn on the
+-- text, not after it. Nothing is inserted and nothing is shifted either way.
 marks = draw({
   {
     peerId = 'p-bob',
@@ -389,9 +438,29 @@ marks = draw({
   },
 })
 check('a caret at the end of a line draws one mark', #marks, 1)
-check('  past the last character', marks[1] and marks[1][3], 6)
+check('  on the last character of the line', marks[1] and marks[1][3], 5)
+check('  filling it', marks[1] and marks[1][4].end_col, 6)
+check('  and not as text placed after the line', marks[1] ~= nil and marks[1][4].virt_text == nil, true)
+
+-- An empty line is the one position with no cell before the caret and none under it, and a
+-- block cursor is still owed there: the single block in the empty cell, as before.
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 17,
+    head = 17,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a caret on an empty line draws one mark', #marks, 1)
+check('  on that line', marks[1] and marks[1][2], 3)
+check('  in the one cell it has', marks[1] and marks[1][3], 0)
 check(
-  '  as a one-cell block after the text',
+  '  as a one-cell block',
   marks[1] and marks[1][4].virt_text and #marks[1][4].virt_text[1][1],
   1
 )
@@ -400,7 +469,7 @@ check(
   marks[1] and marks[1][4].virt_text and marks[1][4].virt_text[1][2],
   marks[1] and marks[1][4].sign_hl_group
 )
-check('  and not as a range over the text', marks[1] ~= nil and marks[1][4].end_col == nil, true)
+check('  and not as a range over nothing', marks[1] ~= nil and marks[1][4].end_col == nil, true)
 
 -- Two peers whose names share an initial are not identical signs: the second character
 -- separates `pi` from `pc`, and the colour separates whatever the text does not.

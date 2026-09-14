@@ -172,10 +172,25 @@ local function peer_sign(label)
   return vim.fn.strdisplaywidth(two) <= 2 and two or first
 end
 
---- The byte column just past the character at `col`, which is where the caret's block ends. One
+--- The byte column just past the character at `col`, which is where a cell's block ends. One
 --- code point, so a wide or an astral character is coloured whole rather than half.
 local function cell_end(line, col)
   return vim.fn.byteidx(line, vim.fn.charidx(line, col) + 1)
+end
+
+--- The byte column the character before `col` starts at, or nil when there is none: the start
+--- of a line. That character is the cell a caret at this offset is drawn on — the one the caret
+--- is in front of rather than the one it has reached. A column inside a character, which the
+--- room's offsets never produce, names the character before it.
+local function cell_before(line, col)
+  if col <= 0 then
+    return nil
+  end
+  local index = vim.fn.charidx(line, col) - 1
+  if index < 0 then
+    return nil
+  end
+  return vim.fn.byteidx(line, index)
 end
 
 --- Draws the peer carets a presence report resolved, and the ranges behind the ones that
@@ -183,13 +198,16 @@ end
 --- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
 --- names would otherwise stay behind.
 ---
---- The caret is a block cursor: the one cell the peer is on is filled with their colour, and
---- the character under it stays readable through the block rather than being covered by a name.
---- At the end of a line there is no cell to fill, and that is where a peer who is typing is, so
---- a single block is drawn in the empty cell after the text. Neither inserts anything, so the
---- line keeps its width and the caret stays against the selection fill rather than beside it.
---- A row of its own above the line reads the position wrong, as before: a virtual line starts at
---- the text column, not the caret's.
+--- The caret is a block cursor on the cell *before* the room's offset: the character the peer
+--- is in front of, not the one it has reached. The room's offset names a position between two
+--- cells, and a block has to pick one; the one it picks is the cell to the left of the caret,
+--- which is what a caret drawn as a bar in front of a character means. The character under the
+--- block stays readable through it rather than being covered by a name. The start of a line has
+--- no cell to the left, so the block stays on the cell the caret is on, where a bar at the
+--- line's start is drawn; an empty line has no cell either, and the block is the single one
+--- placed in the empty cell. Neither inserts anything, so the line keeps its width and the caret
+--- stays against the selection fill rather than beside it. A row of its own above the line reads
+--- the position wrong, as before: a virtual line starts at the text column, not the caret's.
 local function draw_presence(cursors)
   state.cursors = cursors or {}
   clear_presence()
@@ -221,23 +239,29 @@ local function draw_presence(cursors)
       end
       local row, col = document:position(cursor.head)
       local line = document:line(row)
+      -- The offset names a position between two cells; the block goes on the one to the left.
+      -- The start of a line has none, so the block falls back to the cell the caret is on.
+      local from = cell_before(line, col)
+      if from == nil then
+        from = col
+      end
       local caret = {
         sign_text = peer_sign(label),
         sign_hl_group = name,
         -- Above the fill, so the first cell of a backwards selection reads as the caret.
         priority = 110,
       }
-      if col < #line then
+      if from < #line then
         caret.end_row = row
-        caret.end_col = cell_end(line, col)
+        caret.end_col = cell_end(line, from)
         caret.hl_group = name
       else
-        -- Past the last character there is no cell to fill, and that is where a peer typing at
-        -- the end of a line is: one block in the empty cell after the text says the same thing.
+        -- No cell at the caret either — an empty line — so the block is the one drawn in the
+        -- empty cell. Nothing is inserted, so the line keeps its width.
         caret.virt_text = { { ' ', name } }
         caret.virt_text_pos = 'overlay'
       end
-      local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, col, caret)
+      local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, from, caret)
       if ok then
         state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
       end

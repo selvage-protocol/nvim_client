@@ -97,21 +97,22 @@ local function host_selection()
   return nil
 end
 
--- The caret is *at* the host's position: a block on the host's own line, not a row of its own
--- above it. The host selected the marker it wrote, so the caret's byte column is that marker's
--- length — the end of the line, where there is no cell to fill and the block is the one drawn
--- after the text. The mark is the host's because the bridge withholds a cursor for the local
--- peer and because its sign is the host's own name; a caret published as soon as the buffer was
--- shared, before the host moved, would carry the same sign but sit at the column the insert left
--- behind, which is why the wait is for the marker's column and not for any caret at all.
+-- The caret is drawn on the cell *before* the host's offset — the character the caret is in
+-- front of — and the host's caret is at the end of the marker line, so the block fills the
+-- marker's last character rather than the empty cell after it. The mark is the host's because
+-- the bridge withholds a cursor for the local peer and because its sign is the host's own name;
+-- a caret published as soon as the buffer was shared, before the host moved, would carry the
+-- same sign but sit at the column the insert left behind, which is why the wait is for the
+-- marker's column and not for any caret at all.
 local function host_caret()
   local label = vim.env.SELVAGE_E2E_HOST_DISPLAY_NAME or vim.env.USER or 'neovim'
   for _, mark in ipairs(presence_marks()) do
-    if mark[2] == 0 and mark[3] == #harness.markers.host then
-      local text = mark[4].virt_text
+    if mark[2] == 0 and mark[3] == #harness.markers.host - 1 then
       local sign = mark[4].sign_text
-      local block = text ~= nil and text[1] ~= nil and mark[4].virt_text_pos ~= nil and #text[1][1] == 1
       local mine = sign ~= nil and label:sub(1, #sign) == sign
+      local block = mark[4].hl_group ~= nil
+        and mark[4].end_row == 0
+        and mark[4].end_col == #harness.markers.host
       if block and mine then
         return mark
       end
@@ -128,7 +129,8 @@ end)
 harness.log('the host caret is drawn at its column')
 
 -- The selection arrives the same way: a range mark, in the host's colour, from the marker's
--- start to the host caret's column.
+-- start to the host caret's offset — `[anchor, head)`, which a selection keeps whatever the
+-- caret's block does with its cell.
 harness.wait('the host selection to be drawn', harness.deadline_ms, function()
   local mark = host_selection()
   return mark ~= nil
