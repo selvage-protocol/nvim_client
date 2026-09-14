@@ -109,6 +109,30 @@ test('a guest does not seed, and is filled from the replica', async () => {
   ]);
 });
 
+test('a guest does not reconcile a buffer against a replica that has not arrived', async () => {  const it = harness('guest', ['notes.txt']);
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  // The handshake names the room's documents; their text arrives with the sync, which is a
+  // later message. Until it does the replica holds nothing for the path, and a buffer
+  // reconciled against nothing is asked to hold the empty document — which a Neovim buffer
+  // cannot, because its text always ends in a newline.
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: '\n' });
+  assert.deepEqual(it.applies, [], 'nothing is asked of a buffer with no replica to be reconciled with');
+  assert.deepEqual(
+    it.engine.opened,
+    ['notes.txt'],
+    'and it is held in the room, which is what makes its arrival something this process hears',
+  );
+
+  // The room's text lands, and the buffer is opened against it: the edit is the seed, not a
+  // removal of the newline the buffer has and the room's document does not.
+  it.engine.remote('notes.txt', 'from the room\n');
+  await settle();
+  assert.deepEqual(it.applies, [
+    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room', version: 0 },
+  ]);
+});
+
 test('a local change reaches the replica as the smallest edit', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });

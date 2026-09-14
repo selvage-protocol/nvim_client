@@ -9,7 +9,7 @@
 
 import { SessionBridge } from '../vendor/bridge/index.ts';
 import type { Engine } from '../vendor/bridge/index.ts';
-import { SelvageEngine } from '../vendor/engine/index.ts';
+import { SelvageEngine, isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
 import type { Notification, Request } from './ipc.ts';
@@ -47,6 +47,9 @@ export class Companion {
   private readonly autoSave: boolean;
   private engine?: CompanionEngine;
   private bridge?: SessionBridge;
+  /** Documents the front-end has opened whose text the room has not sent yet, by their own text. */
+  private readonly unarrived = new Map<string, string>();
+  private stopListening?: () => void;
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
@@ -79,13 +82,11 @@ export class Companion {
         break;
       }
       case 'open': {
-        this.editor.opened(request.path, request.text);
-        this.bridge?.documentOpened(request.path);
+        this.open(request.path, request.text);
         break;
       }
       case 'close': {
-        this.bridge?.documentClosed(request.path);
-        this.editor.closed(request.path);
+        this.close(request.path);
         break;
       }
       case 'change': {
@@ -125,6 +126,9 @@ export class Companion {
   async leave(): Promise<void> {
     this.bridge?.dispose();
     this.bridge = undefined;
+    this.stopListening?.();
+    this.stopListening = undefined;
+    this.unarrived.clear();
     const engine = this.engine;
     this.engine = undefined;
     this.editor.reset();
@@ -132,6 +136,52 @@ export class Companion {
       await engine.disconnect();
     }
     this.send({ type: 'status', state: 'idle' });
+  }
+
+  /**
+   * Puts a document in front of the bridge.
+   *
+   * A guest hears the room's open-document set in the handshake, and the sync that carries the
+   * text is a later message. Reconciling a buffer against a replica that has received nothing
+   * asks it to hold the empty document, which a Neovim buffer cannot: its text always ends in a
+   * newline, so the buffer would keep one the room does not have, the mirror would drop it, and
+   * the two would hold different texts from the first keystroke.
+   *
+   * Such a document is held in the room now, and put in front of the bridge when its text is
+   * there. The hold is what makes the room send the text to this client and what makes its
+   * arrival an event this process hears, so waiting for the text without it would wait for
+   * ever. A host supplies the text instead of waiting for it, so it opens at once.
+   */
+  private open(path: string, text: string): void {
+    const engine = this.engine;
+    if (engine !== undefined && engine.session().role === 'guest' && !engine.has(path)) {
+      this.unarrived.set(path, text);
+      void engine.open(path).catch((error: unknown) => {
+        this.send({
+          type: 'report',
+          report: {
+            kind: 'sessionError',
+            code: isProtocolError(error) ? error.code : 'error',
+            message: `the server refused to open ${path}: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        });
+      });
+      return;
+    }
+    this.editor.opened(path, text);
+    this.bridge?.documentOpened(path);
+  }
+
+  /** Stops sharing a document, whether or not the room's text ever arrived for it. */
+  private close(path: string): void {
+    if (this.unarrived.delete(path)) {
+      // Nothing was put in front of the bridge, so the hold this process took is its own to
+      // give back.
+      void this.engine?.close(path).catch(() => undefined);
+      return;
+    }
+    this.bridge?.documentClosed(path);
+    this.editor.closed(path);
   }
 
   private async connect(open: () => Promise<CompanionEngine>): Promise<void> {
@@ -154,6 +204,20 @@ export class Companion {
       host: this.editor,
       autoSave: this.autoSave,
     });
+    // The event that brings a document's text is the moment a document opened before it can be
+    // reconciled against it. The bridge's own listener was registered first and finds no buffer
+    // for the path, so the reconcile here is the first one the document gets.
+    const stop = engine.on((event) => {
+      if (event.type !== 'documentChanged') {
+        return;
+      }
+      const text = this.unarrived.get(event.path);
+      if (text !== undefined) {
+        this.unarrived.delete(event.path);
+        this.open(event.path, text);
+      }
+    });
+    this.stopListening = stop;
     const session = engine.session();
     const invite = engine.inviteUrl();
     this.send({

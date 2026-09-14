@@ -47,10 +47,19 @@ export class FakeEngine implements CompanionEngine {
     };
   }
 
-  /** Moves the replica the way a peer's edit would, and tells the bridge. */
+  /** Moves the replica the way a peer's edit would, and tells the bridge.
+   *
+   * Only a document this replica holds is reported: an engine attaches its observer to a
+   * document when the text does appear, and a document nobody has opened has nobody to tell.
+   * An edit that brings a text in still reports it — that is a document arriving, which is the
+   * one thing a client that opened before the room sent anything has to hear.
+   */
   remote(path: string, text: string): void {
+    const arrival = !this.texts.has(path);
     this.texts.set(path, text);
-    this.emit({ type: 'documentChanged', path });
+    if (arrival || this.opened.includes(path)) {
+      this.emit({ type: 'documentChanged', path });
+    }
   }
 
   emit(event: EngineEvent): void {
