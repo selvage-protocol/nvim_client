@@ -112,7 +112,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 |---|---|
 | `:SelvageHost <serverUrl>` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. |
 | `:SelvageJoin <invite>` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. |
-| `:SelvageName [name]` | Set the name other participants see, for the next host or join. With no name it reports the one in force. |
+| `:SelvageDisplayName [name]` | Set the name other participants see, for the next host or join. With no name it reports the one in force. |
 | `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. |
@@ -120,7 +120,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 The name other participants see is resolved when a session starts, in this order:
 `vim.g.selvage_display_name`, then the `SELVAGE_DISPLAY_NAME` environment variable, then a
 `vim.ui.input` prompt pre-filled with the login name, and finally `$USER` (or `neovim`).
-`:SelvageName` sets the global, and the prompt remembers its answer there, so the same Neovim
+`:SelvageDisplayName` sets the global, and the prompt remembers its answer there, so the same Neovim
 is not asked again. The prompt is only shown where there is a UI to show it
 in: a headless process falls back to the login name and says so, so a room is never silently
 given a name nobody chose. The name rides in the `host`/`join` handshake and nothing carries it

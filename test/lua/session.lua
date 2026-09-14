@@ -615,17 +615,17 @@ check(
 )
 check('  and the room is told why', said_since(before_headless, 'no display name is set') ~= nil, true)
 
--- `:SelvageName` sets the configured name before a session, says so, and reports the name in
+-- `:SelvageDisplayName` sets the configured name before a session, says so, and reports the name in
 -- force when given none.
 selvage.leave()
-vim.cmd('SelvageName Grace')
-check(':SelvageName sets the configured name', vim.g.selvage_display_name, 'Grace')
+vim.cmd('SelvageDisplayName Grace')
+check(':SelvageDisplayName sets the configured name', vim.g.selvage_display_name, 'Grace')
 local before_set = #notices
-vim.cmd('SelvageName Pat')
+vim.cmd('SelvageDisplayName Pat')
 check('  it says what it did', said_since(before_set, 'display name set to "Pat"') ~= nil, true)
 check('  and before a session says when it applies', said_since(before_set, 'the next session will use it') ~= nil, true)
 local before_report = #notices
-vim.cmd('SelvageName')
+vim.cmd('SelvageDisplayName')
 check('  and with no name reports the one in force', said_since(before_report, 'the name others see is "Pat"') ~= nil, true)
 
 -- A change during a live session is for the next one: the name rode in the handshake, and
@@ -640,8 +640,8 @@ check('the session starts under the chosen name', last_of('host') and last_of('h
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-name' })
 local hosts_before = count_type('host')
 local before_live = #notices
-vim.cmd('SelvageName Second')
-check('  :SelvageName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
+vim.cmd('SelvageDisplayName Second')
+check('  :SelvageDisplayName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
 check('  and sends nothing to the live session', count_type('host'), hosts_before)
 check(
   '  and says the change is for the next session',
