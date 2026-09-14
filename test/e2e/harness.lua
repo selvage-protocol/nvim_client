@@ -126,8 +126,9 @@ function M.fail(message)
     M.write_file(M.result_file, vim.json.encode(M.outcome))
   end
   M.log('FAILED: ' .. message)
-  vim.cmd('qall!')
-  os.exit(1)
+  -- Vim's own non-zero exit: it tears the jobs down on the way out, where `os.exit` would leave a
+  -- companion process with nowhere to report to — and with no one left to stop it.
+  vim.cmd('cq')
 end
 
 --- The text the plugin holds for the shared document, as the room counts it.
@@ -158,7 +159,6 @@ end
 function M.done()
   M.log('OK')
   vim.cmd('qall!')
-  os.exit(0)
 end
 
 return M

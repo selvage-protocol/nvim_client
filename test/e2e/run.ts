@@ -175,21 +175,38 @@ function runInstance(
   });
 }
 
+/** What this run started, held where the failure handler can reach it too: a run that dies on
+ * the way has still started a server and a relay that belong to it. */
+let server: RealServer | undefined;
+let relay: DropProxy | undefined;
+
+/** Stops both, bounded rather than waited on: a socket some process on the other end is still
+ * holding must not keep a verdict from being reported. */
+async function stopAll(): Promise<void> {
+  await Promise.race([
+    (async () => {
+      await relay?.stop();
+      await server?.stop();
+    })(),
+    delay(5000),
+  ]);
+}
+
 async function main(): Promise<void> {
   rmSync(RUN_DIR, { recursive: true, force: true });
   mkdirSync(RUN_DIR, { recursive: true });
 
   log('starting the real selvaged');
-  const server = await RealServer.start();
+  server = await RealServer.start();
   log('selvaged listening at', server.wsBase);
 
   const [, hostPort] = /:(\d+)$/.exec(server.address) ?? [];
   if (hostPort === undefined) {
     throw new Error(`could not parse a port out of ${server.address}`);
   }
-  const proxy = RECONNECT ? await DropProxy.start('127.0.0.1', Number(hostPort)) : undefined;
-  if (proxy !== undefined) {
-    log(`reconnect relay listening on 127.0.0.1:${proxy.port} -> forwards to ${server.address}`);
+  relay = RECONNECT ? await DropProxy.start('127.0.0.1', Number(hostPort)) : undefined;
+  if (relay !== undefined) {
+    log(`reconnect relay listening on 127.0.0.1:${relay.port} -> forwards to ${server.address}`);
   }
 
   const hostWorkspace = mkdtempSync(join(RUN_DIR, 'host-'));
@@ -237,12 +254,12 @@ async function main(): Promise<void> {
       ...sharedEnv,
       SELVAGE_E2E_RESULT_FILE: guestResultFile,
       SELVAGE_DISPLAY_NAME: 'Bob',
-      ...(proxy === undefined ? {} : { SELVAGE_E2E_PROXY_ADDR: `127.0.0.1:${proxy.port}` }),
+      ...(relay === undefined ? {} : { SELVAGE_E2E_PROXY_ADDR: `127.0.0.1:${relay.port}` }),
     },
     resolve(RUN_DIR, 'guest.log'),
   );
 
-  if (proxy !== undefined && controlFile !== undefined) {
+  if (relay !== undefined && controlFile !== undefined) {
     // The blip only means anything once phase 1 has actually landed in both editors.
     await pollFor(
       'both instances to report phase 1 converged',
@@ -253,19 +270,19 @@ async function main(): Promise<void> {
       },
       DEADLINE_MS + 20_000,
     ).catch(async (error: unknown) => {
-      await Promise.all([hostRun, guestRun]);
+      // The instances keep their own logs, which is where a run that never got to the blip
+      // says what it saw.
+      await Promise.race([Promise.all([hostRun, guestRun]), delay(5000)]);
       throw error;
     });
     log('phase 1 converged in both editors; cutting the guest relay (a real TCP close)');
-    proxy.dropAll();
+    relay.dropAll();
     await delay(2000);
     writeFileSync(controlFile, 'go');
     log('blip signalled; waiting for the guest to reconnect and both sides to re-converge');
   }
 
   const [hostCode, guestCode] = await Promise.all([hostRun, guestRun]);
-  await proxy?.stop();
-  await server.stop();
 
   const hostOutcome = readOutcome(hostResultFile);
   const guestOutcome = readOutcome(guestResultFile);
@@ -301,6 +318,10 @@ async function main(): Promise<void> {
   writeFileSync(resolve(RUN_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
   log('summary:', JSON.stringify(summary, null, 2));
 
+  // What this file started is stopped before the verdict is passed, so that the summary above is
+  // on disk either way.
+  await stopAll();
+
   if (!summary.phase1.converged) {
     throw new Error('the two real Neovim instances did not converge on the shared document');
   }
@@ -316,7 +337,10 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((error: unknown) => {
+main().catch(async (error: unknown) => {
   console.error('[e2e] FAILED:', error);
-  process.exitCode = 1;
+  // A run that never reached its verdict has still started a server and a relay. Stop them here
+  // too, then leave: a run that hangs instead of reporting a failure is worse than a red run.
+  await stopAll();
+  process.exit(1);
 });
