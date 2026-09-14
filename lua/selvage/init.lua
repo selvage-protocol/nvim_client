@@ -645,7 +645,7 @@ local function resolve_display_name(callback)
   local fallback = vim.env.USER or 'neovim'
   if not can_prompt() then
     notify(
-      ('no display name is set and there is no one to ask; the room will see "%s" (set vim.g.selvage_display_name, SELVAGE_DISPLAY_NAME, or run :SelvageName)'):format(
+      ('no display name is set and there is no one to ask; the room will see "%s" (set vim.g.selvage_display_name, SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName)'):format(
         fallback
       ),
       vim.log.levels.WARN
@@ -657,7 +657,7 @@ local function resolve_display_name(callback)
     local name = vim.trim(input or '')
     if name == '' then
       notify(
-        ('no display name chosen; the room will see "%s" (set vim.g.selvage_display_name or run :SelvageName)'):format(
+        ('no display name chosen; the room will see "%s" (set vim.g.selvage_display_name or run :SelvageDisplayName)'):format(
           fallback
         ),
         vim.log.levels.WARN
@@ -737,7 +737,7 @@ end
 function M.set_display_name(name)
   local wanted = vim.trim(name or '')
   if wanted == '' then
-    notify(('the name others see is "%s"; :SelvageName <name> to change it'):format(M.display_name()))
+    notify(('the name others see is "%s"; :SelvageDisplayName <name> to change it'):format(M.display_name()))
     return
   end
   vim.g.selvage_display_name = wanted
