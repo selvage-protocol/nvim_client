@@ -139,5 +139,39 @@ check('  and detaching twice is not an error', pcall(function()
   left:detach()
 end), true)
 
+-- -- what detaching leaves on the buffer --------------------------------------
+
+-- The detach ends this document's own `nvim_buf_attach` and nothing else. A second callback,
+-- the way a formatter or a diagnostics plugin would have one, has to keep seeing the buffer.
+local kept, kept_buf = document({ 'one' })
+local other_seen = 0
+vim.api.nvim_buf_attach(kept_buf, false, {
+  on_bytes = function()
+    other_seen = other_seen + 1
+  end,
+})
+kept:detach()
+vim.api.nvim_buf_set_text(kept_buf, 0, 0, 0, 0, { 'X' })
+vim.api.nvim_buf_set_text(kept_buf, 0, 0, 0, 0, { 'Y' })
+check('a detached document leaves another callback on the buffer alone', other_seen, 2)
+
+-- A reload is the other way this document's own attach can call back. `on_bytes` ends the
+-- attachment, but only on the change that returns `true`, so `on_reload` is still there in
+-- between: without the flag it publishes the buffer's whole text into a session that has
+-- already ended.
+vim.fn.mkdir('.tmp', 'p')
+local reload_path = '.tmp/lua-document-reload.txt'
+vim.fn.writefile({ 'one' }, reload_path)
+vim.cmd('edit ' .. vim.fn.fnameescape(reload_path))
+local reload_sent = {}
+local reloaded = Document.new(vim.api.nvim_get_current_buf(), 'reload.txt', function(message)
+  reload_sent[#reload_sent + 1] = message
+end)
+reloaded:attach()
+reloaded:detach()
+vim.bo.autoread = true
+vim.fn.writefile({ 'one', 'two' }, reload_path)
+vim.cmd('silent checktime')
+check('a detached document publishes nothing when its buffer is reloaded', #reload_sent, 0)
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
