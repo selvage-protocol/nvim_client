@@ -36,6 +36,10 @@ const MARKER_HOST = '[[HOST-EDIT]]';
 const MARKER_GUEST = '[[GUEST-EDIT]]';
 const MARKER_HOST_2 = '[[HOST-EDIT-2]]';
 const MARKER_GUEST_2 = '[[GUEST-EDIT-2]]';
+// The names the two instances join under. The host's is handed to the guest too, so the guest
+// knows which peer's caret it is waiting for.
+const HOST_DISPLAY_NAME = 'Ada';
+const GUEST_DISPLAY_NAME = 'Bob';
 const SEED_PATH = 'notes.txt';
 // Deliberately not ASCII: every offset on the wire is a UTF-16 code unit and every offset in
 // Neovim is a byte, and a document made only of ASCII would not tell the two apart.
@@ -264,6 +268,7 @@ async function main(): Promise<void> {
     SELVAGE_E2E_MARKER_GUEST_2: MARKER_GUEST_2,
     SELVAGE_E2E_DEADLINE_MS: String(DEADLINE_MS),
     SELVAGE_E2E_RECONNECT_DEADLINE_MS: String(RECONNECT_DEADLINE_MS),
+    SELVAGE_E2E_HOST_DISPLAY_NAME: HOST_DISPLAY_NAME,
     ...(controlFile === undefined ? {} : { SELVAGE_E2E_CONTROL_FILE: controlFile }),
   };
 
@@ -275,7 +280,7 @@ async function main(): Promise<void> {
       ...sharedEnv,
       SELVAGE_E2E_RESULT_FILE: hostResultFile,
       SELVAGE_E2E_SERVER_URL: server.wsBase,
-      SELVAGE_DISPLAY_NAME: 'Ada',
+      SELVAGE_DISPLAY_NAME: HOST_DISPLAY_NAME,
     },
     resolve(RUN_DIR, 'host.log'),
   );
@@ -285,7 +290,7 @@ async function main(): Promise<void> {
     {
       ...sharedEnv,
       SELVAGE_E2E_RESULT_FILE: guestResultFile,
-      SELVAGE_DISPLAY_NAME: 'Bob',
+      SELVAGE_DISPLAY_NAME: GUEST_DISPLAY_NAME,
       SELVAGE_E2E_PROXY_ADDR: `127.0.0.1:${guestRelay.port}`,
     },
     resolve(RUN_DIR, 'guest.log'),

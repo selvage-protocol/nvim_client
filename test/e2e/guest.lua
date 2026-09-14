@@ -75,8 +75,8 @@ end, harness.observe)
 -- The host's caret and selection, as the plugin drew them: a block at the host's own column,
 -- and a range mark behind it when the host has selected something. The marks can only be the
 -- host's — the bridge withholds a cursor for the local peer — and the caret carries the gutter
--- sign of the name this process would use for itself. The document is shared on both sides, so
--- the path the marks are addressed to exists here.
+-- sign of the host's own display name, handed to this process by the orchestrator. The document
+-- is shared on both sides, so the path the marks are addressed to exists here.
 local function presence_marks()
   local namespace = vim.api.nvim_get_namespaces()['selvage.presence']
   local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
@@ -105,7 +105,7 @@ end
 -- shared, before the host moved, would carry the same sign but sit at the column the insert left
 -- behind, which is why the wait is for the marker's column and not for any caret at all.
 local function host_caret()
-  local label = vim.env.USER or 'neovim'
+  local label = vim.env.SELVAGE_E2E_HOST_DISPLAY_NAME or vim.env.USER or 'neovim'
   for _, mark in ipairs(presence_marks()) do
     if mark[2] == 0 and mark[3] == #harness.markers.host then
       local text = mark[4].virt_text
