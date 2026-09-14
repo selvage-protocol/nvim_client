@@ -59,8 +59,12 @@ is computed against the companion's mirror of the buffer and applied to the buff
 those are two processes: a keystroke made in between is a message still in the pipe, and the
 range would land on text it was not computed from. So both sides count changes — a local edit
 and an applied remote edit are one each — the `applyEdit` carries the count it was computed
-against, and the plugin refuses one that does not match. The bridge then works the edit out
-again from the mirror the local change has by that point reached.
+against, and the plugin refuses one that does not match. A refusal is not the end of the edit:
+the companion knows the mirror has taken a change the front-end counted after the range was
+computed, so it offers the same edit again moved through that change, and the peer's text lands
+where the buffer now has the text it was computed from. A keystroke that was in the pipe stays
+where the user put it and reaches the room with the peer's; only a range whose local changes
+overlap it cannot be moved, and for that one the room's text is what the buffer ends on.
 
 Setting `SELVAGE_COMPANION_LOG` to a path makes the companion append every message it sends and
 receives, with the time and the process id. The two sides of this IPC are two processes, so the
@@ -146,11 +150,11 @@ cuts the guest's connection. It is not part of `npm test` or CI — it needs a `
 
 - Remote cursors. The companion resolves them; nothing draws them as extmarks.
 - Packaging and distribution beyond "clone it and `npm ci`".
-- A keystroke made inside the one IPC round trip a remote edit is in flight for is superseded
-  by the room rather than merged with it. The refusal above keeps the buffer from being
-  mangled, which is the outcome worth preventing; merging the two would need the local edit to
-  reach the replica before the remote one lands, and the bridge deliberately withholds a change
-  while an apply is in flight.
+- An edit that lands on the same characters a peer's edit is landing on is superseded by the
+  room rather than merged with it. A keystroke elsewhere in the document is moved rather than
+  lost ("The local IPC" above); when the two are about the same text there is no position to
+  move it to, and the room's text is what the buffer ends on. What it cannot do is mangle the
+  buffer.
 - A room document whose text does not end in a newline gains one here. Neovim's line-array
   buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
   has to add.

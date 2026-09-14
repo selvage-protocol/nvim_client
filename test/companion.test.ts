@@ -45,6 +45,20 @@ function harness(role: 'host' | 'guest' = 'host', documents: string[] = []): Har
   };
 }
 
+/** An `applyEdit` as a front-end sees it: the range, the text, and the version it is offered
+ * against. */
+function change(
+  apply: Extract<Notification, { type: 'applyEdit' }> | undefined,
+): { start: number; end: number; text: string; version: number } {
+  assert.notEqual(apply, undefined, 'no such applyEdit');
+  return {
+    start: apply?.start ?? -1,
+    end: apply?.end ?? -1,
+    text: apply?.text ?? '',
+    version: apply?.version ?? -1,
+  };
+}
+
 /** Lets every already-resolved promise the bridge chained settle. */
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 8; turn += 1) {
@@ -125,7 +139,7 @@ test('a remote change is asked for as a range, not a whole document', async () =
   assert.equal(it.applies.length, 1);
 });
 
-test('an edit the front-end refuses is worked out again from the mirror', async () => {
+test('an edit the front-end refused is offered again where its buffer has it', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
@@ -133,26 +147,56 @@ test('an edit the front-end refuses is worked out again from the mirror', async 
   // A peer's edit: the companion asks for it against version 0 ...
   it.engine.remote('notes.txt', 'hello, world\n');
   await settle();
-  assert.equal(it.applies[0]?.version, 0);
+  assert.deepEqual(change(it.applies[0]), { start: 5, end: 5, text: ', world', version: 0 });
 
   // ... while the user's own edit was already in the pipe, so the front-end's count has
-  // moved on and it refuses the range it was handed.
+  // moved on and it refuses the range it was handed: that range is in the coordinates of a
+  // text its buffer no longer holds.
   await it.companion.handle({ type: 'change', path: 'notes.txt', start: 0, end: 0, text: '> ' });
   await it.companion.handle({ type: 'applied', id: 1, ok: false });
   await settle();
 
-  const second = it.applies[1];
-  assert.equal(second?.version, 1, 'the second attempt is against the moved mirror');
+  // The refusal is not the editor saying it cannot hold the edit; it is the editor saying the
+  // range no longer fits, and the companion knows by how much: the mirror has taken a change
+  // the front-end counted after the apply was computed. The same edit is offered again, moved
+  // through that change, so that it lands where the buffer now has the text it was computed
+  // from.
   assert.deepEqual(
-    { start: second?.start, end: second?.end, text: second?.text },
-    { start: 0, end: 7, text: 'hello, world' },
-    'and its range is computed from the buffer as it now reads, not replayed',
+    change(it.applies[1]),
+    { start: 7, end: 7, text: ', world', version: 1 },
+    'the peer\'s edit, moved by the two characters the user typed before it',
   );
-  // What the refusal buys is that no range lands on text it was not computed from: the
-  // buffer is never mangled. What it costs is that the keystroke inside that window is
-  // superseded by the room rather than merged with it — the local edit was never published,
-  // because the bridge withholds a change while an apply is in flight, and the room's text
-  // is what both sides end on. README records it; the window is one IPC round trip.
+
+  await it.companion.handle({ type: 'applied', id: 2, ok: true });
+  await settle();
+
+  // Two things now hold that did not before: the room has the user's edit, and the buffer
+  // still has it. The keystroke made inside the IPC round trip is merged with the room's
+  // rather than annihilated by it.
+  assert.equal(it.engine.text('notes.txt'), '> hello, world\n');
+});
+
+test('a refusal the buffer has no room for is worked out again from the mirror', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+
+  it.engine.remote('notes.txt', 'hello, world\n');
+  await settle();
+  assert.deepEqual(change(it.applies[0]), { start: 5, end: 5, text: ', world', version: 0 });
+
+  // The user's edit replaced the text the peer's range lands in, so there is no position to
+  // move it to: what the peer wrote and what the user wrote are about the same characters,
+  // and nothing short of a merge can keep both. The room's text is what the buffer ends on,
+  // and the local edit is superseded rather than mangled into the room — the honest outcome
+  // for a genuine conflict, and the one the backstop would reach anyway.
+  await it.companion.handle({ type: 'change', path: 'notes.txt', start: 3, end: 6, text: 'p' });
+  await it.companion.handle({ type: 'applied', id: 1, ok: false });
+  await settle();
+
+  assert.deepEqual(change(it.applies[1]), { start: 3, end: 4, text: 'lo, world\n', version: 1 });
+  await it.companion.handle({ type: 'applied', id: 2, ok: true });
+  await settle();
   assert.equal(it.engine.text('notes.txt'), 'hello, world\n');
 });
 
