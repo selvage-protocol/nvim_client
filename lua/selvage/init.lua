@@ -604,16 +604,84 @@ local function ensure()
   return process
 end
 
+--- The name the room is told this client is, when one has been configured: the plugin's own
+--- global first, then `SELVAGE_DISPLAY_NAME`, the variable the launcher and the runbook set.
+--- Nil when there is neither, because that is the case that asks.
+local function configured_display_name()
+  local name = vim.g.selvage_display_name
+  if name == nil or vim.trim(tostring(name)) == '' then
+    name = vim.env.SELVAGE_DISPLAY_NAME
+  end
+  if name == nil or vim.trim(tostring(name)) == '' then
+    return nil
+  end
+  return vim.trim(tostring(name))
+end
+
+--- The `vim.ui.input` the plugin was loaded with. A replaced one — a GUI prompt, another
+--- plugin — is a prompt mechanism of its own, so it counts as somewhere to ask even where no
+--- UI is attached; the built-in reads the terminal, which a headless process does not have.
+local builtin_input = vim.ui.input
+
+--- Whether there is anyone to answer a prompt.
+local function can_prompt()
+  return #api.nvim_list_uis() > 0 or vim.ui.input ~= builtin_input
+end
+
+--- Runs `callback(name)` with the name a session starting now should use, asking for one when
+--- none is configured.
+---
+--- The configured value wins. With neither the global nor the environment set, the user is asked
+--- with `vim.ui.input`, pre-filled with the login name, and the answer becomes the global so the
+--- next session is not asked again. A prompt is only shown where there is someone to answer it;
+--- a process with no UI falls back to the login name and says so, rather than showing a room a
+--- name nobody chose in silence.
+local function resolve_display_name(callback)
+  local configured = configured_display_name()
+  if configured ~= nil then
+    callback(configured)
+    return
+  end
+  local fallback = vim.env.USER or 'neovim'
+  if not can_prompt() then
+    notify(
+      ('no display name is set and there is no one to ask; the room will see "%s" (set vim.g.selvage_display_name, SELVAGE_DISPLAY_NAME, or run :SelvageName)'):format(
+        fallback
+      ),
+      vim.log.levels.WARN
+    )
+    callback(fallback)
+    return
+  end
+  vim.ui.input({ prompt = 'The name other participants see', default = fallback }, function(input)
+    local name = vim.trim(input or '')
+    if name == '' then
+      notify(
+        ('no display name chosen; the room will see "%s" (set vim.g.selvage_display_name or run :SelvageName)'):format(
+          fallback
+        ),
+        vim.log.levels.WARN
+      )
+      callback(fallback)
+      return
+    end
+    vim.g.selvage_display_name = name
+    callback(name)
+  end)
+end
+
 --- Mints a room on `url` and shares the current buffer.
 function M.host(url)
   if url == nil or url == '' then
     notify('a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080', vim.log.levels.ERROR)
     return
   end
-  local process = ensure()
-  if process ~= nil then
-    process:send({ type = 'host', serverUrl = url, displayName = M.display_name() })
-  end
+  resolve_display_name(function(display_name)
+    local process = ensure()
+    if process ~= nil then
+      process:send({ type = 'host', serverUrl = url, displayName = display_name })
+    end
+  end)
 end
 
 --- Joins the room an invite link names.
@@ -622,10 +690,12 @@ function M.join(invite)
     notify('an invite link is needed', vim.log.levels.ERROR)
     return
   end
-  local process = ensure()
-  if process ~= nil then
-    process:send({ type = 'join', invite = invite, displayName = M.display_name() })
-  end
+  resolve_display_name(function(display_name)
+    local process = ensure()
+    if process ~= nil then
+      process:send({ type = 'join', invite = invite, displayName = display_name })
+    end
+  end)
 end
 
 --- Puts the invite on the clipboard and the unnamed register.
@@ -652,9 +722,34 @@ function M.leave()
   notify('left the session')
 end
 
---- The name other participants see.
+--- The name other participants see, resolved without asking: the configured global, the
+--- environment's name, or the login name. A script that reads this is never prompted — a name
+--- that has not been chosen yet is `M.resolve_display_name`'s business, not this one's.
 function M.display_name()
-  return vim.g.selvage_display_name or (vim.env.USER or 'neovim')
+  return configured_display_name() or (vim.env.USER or 'neovim')
+end
+
+--- Sets the name other participants see, and says when it takes effect.
+---
+--- The name travels in the `host`/`join` handshake and nothing carries it afterwards, so a
+--- session that is already live keeps the name it started with; the change is for the next one.
+--- With no name, it reports the one now in force instead of setting an empty one.
+function M.set_display_name(name)
+  local wanted = vim.trim(name or '')
+  if wanted == '' then
+    notify(('the name others see is "%s"; :SelvageName <name> to change it'):format(M.display_name()))
+    return
+  end
+  vim.g.selvage_display_name = wanted
+  if state.process ~= nil then
+    notify(
+      ('display name set to "%s"; this session keeps the name it started with, the change applies to the next host or join'):format(
+        wanted
+      )
+    )
+  else
+    notify(('display name set to "%s"; the next session will use it'):format(wanted))
+  end
 end
 
 return M
