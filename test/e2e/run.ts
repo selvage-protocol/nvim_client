@@ -7,10 +7,14 @@
  * two Neovims a scratch directory and a file to pass the invite through, and compare what they
  * each ended up holding.
  *
+ * A `DropProxy` sits in front of the server and the guest is routed through it, holding the
+ * guest's own bytes back by `SELVAGE_E2E_LAG_MS`. On loopback the window between a guest being
+ * told which documents the room has and the text of those documents arriving is about a
+ * millisecond, and a driver can only make a keystroke in it if it is wider than that.
+ *
  * The reconnect phase (skipped with `SELVAGE_E2E_RECONNECT=0`) proves the engine's bounded
- * backoff for real: a `DropProxy` sits in front of the server, the guest is routed through it,
- * and cutting the proxy's sockets is a real TCP close the guest has to recover from on its own
- * — unlike killing the server, which would take the room with it.
+ * backoff for real: cutting the same proxy's sockets is a real TCP close the guest has to
+ * recover from on its own — unlike killing the server, which would take the room with it.
  *
  * Run it with `scripts/e2e/run-two-instance.sh`. It is not part of `npm test` or CI: it needs
  * a `nvim`, a built `selvaged` and a network path between them.
@@ -41,6 +45,8 @@ const RECONNECT = process.env['SELVAGE_E2E_RECONNECT'] !== '0';
 const DEADLINE_MS = Number(process.env['SELVAGE_E2E_DEADLINE_MS'] ?? '20000');
 const RECONNECT_DEADLINE_MS = Number(process.env['SELVAGE_E2E_RECONNECT_DEADLINE_MS'] ?? '60000');
 const NVIM = process.env['SELVAGE_NVIM'] ?? 'nvim';
+/** How long the relay holds the guest's own bytes back, widening the pre-arrival window. */
+const LAG_MS = Number(process.env['SELVAGE_E2E_LAG_MS'] ?? '300');
 
 function log(...parts: unknown[]): void {
   console.log('[e2e]', ...parts);
@@ -49,7 +55,13 @@ function log(...parts: unknown[]): void {
 /** A TCP relay a test can cut without touching the process on either end of it — the same idea
  * as `reference_server/crates/harness`'s `DropProxy`. The guest reaches the server only through
  * its invite URL, so rewriting that URL to point here is all it takes to put the relay in the
- * guest's path and leave the host's alone. */
+ * guest's path and leave the host's alone.
+ *
+ * It can also hold the guest's own bytes back for a beat. A client names the room's documents
+ * from the handshake and receives their text a message later, and on loopback that window is
+ * about a millisecond; delaying what the guest sends widens it, so a driver can make a
+ * keystroke in it every run rather than once in a while.
+ */
 class DropProxy {
   private readonly server: net.Server;
   private readonly sockets: Set<net.Socket>;
@@ -61,15 +73,28 @@ class DropProxy {
     this.sockets = sockets;
   }
 
-  static async start(targetHost: string, targetPort: number): Promise<DropProxy> {
+  static async start(targetHost: string, targetPort: number, lagMs = 0): Promise<DropProxy> {
     return new Promise((resolvePromise, reject) => {
       const sockets = new Set<net.Socket>();
       const server = net.createServer((client) => {
         const upstream = net.connect(targetPort, targetHost);
         sockets.add(client);
         sockets.add(upstream);
-        client.pipe(upstream);
         upstream.pipe(client);
+        if (lagMs === 0) {
+          client.pipe(upstream);
+        } else {
+          // One timer per chunk, all with the same delay: they fire in the order they were made,
+          // so the bytes reach the server in the order the guest wrote them.
+          client.on('data', (chunk: Buffer) => {
+            setTimeout(() => {
+              upstream.write(chunk);
+            }, lagMs);
+          });
+          client.on('end', () => {
+            upstream.end();
+          });
+        }
         const forget = (): void => {
           sockets.delete(client);
           sockets.delete(upstream);
@@ -204,10 +229,12 @@ async function main(): Promise<void> {
   if (hostPort === undefined) {
     throw new Error(`could not parse a port out of ${server.address}`);
   }
-  relay = RECONNECT ? await DropProxy.start('127.0.0.1', Number(hostPort)) : undefined;
-  if (relay !== undefined) {
-    log(`reconnect relay listening on 127.0.0.1:${relay.port} -> forwards to ${server.address}`);
-  }
+  const guestRelay = await DropProxy.start('127.0.0.1', Number(hostPort), LAG_MS);
+  relay = guestRelay;
+  log(
+    `relay listening on 127.0.0.1:${guestRelay.port} -> ${server.address}, holding the guest's own ` +
+      `bytes back by ${LAG_MS}ms`,
+  );
 
   const hostWorkspace = mkdtempSync(join(RUN_DIR, 'host-'));
   const guestWorkspace = mkdtempSync(join(RUN_DIR, 'guest-'));
@@ -254,12 +281,12 @@ async function main(): Promise<void> {
       ...sharedEnv,
       SELVAGE_E2E_RESULT_FILE: guestResultFile,
       SELVAGE_DISPLAY_NAME: 'Bob',
-      ...(relay === undefined ? {} : { SELVAGE_E2E_PROXY_ADDR: `127.0.0.1:${relay.port}` }),
+      SELVAGE_E2E_PROXY_ADDR: `127.0.0.1:${guestRelay.port}`,
     },
     resolve(RUN_DIR, 'guest.log'),
   );
 
-  if (relay !== undefined && controlFile !== undefined) {
+  if (RECONNECT && controlFile !== undefined) {
     // The blip only means anything once phase 1 has actually landed in both editors.
     await pollFor(
       'both instances to report phase 1 converged',
@@ -276,7 +303,7 @@ async function main(): Promise<void> {
       throw error;
     });
     log('phase 1 converged in both editors; cutting the guest relay (a real TCP close)');
-    relay.dropAll();
+    guestRelay.dropAll();
     await delay(2000);
     writeFileSync(controlFile, 'go');
     log('blip signalled; waiting for the guest to reconnect and both sides to re-converge');
