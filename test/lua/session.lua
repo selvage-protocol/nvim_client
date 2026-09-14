@@ -210,6 +210,163 @@ check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated
 check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
 vim.g.selvage_open_on_join = nil
 
+-- -- presence: the caret out, the peers' carets in ------------------------------
+--
+-- The two directions of the IPC's `selection`/`presence`. This user's caret reaches the room
+-- from the events that move it, throttled to one message per interval; a peer's caret arrives
+-- as a report and is drawn as a name row above the line they are on.
+
+local function count_type(kind)
+  local count = 0
+  for _, message in ipairs(sent) do
+    if message.type == kind then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+local function last_of(kind)
+  for index = #sent, 1, -1 do
+    if sent[index].type == kind then
+      return sent[index]
+    end
+  end
+  return nil
+end
+
+selvage.leave()
+-- Flush any timer a session that has just ended had armed; its generation no longer matches.
+vim.wait(200, function()
+  return false
+end)
+
+-- A character outside the BMP, so a published offset can only be right if the byte to UTF-16
+-- conversion ran. `a😀b` is six bytes and four UTF-16 code units.
+local presence_path = '.tmp/lua-presence.txt'
+vim.fn.writefile({ 'a😀b', 'wörld' }, presence_path)
+vim.cmd('edit! ' .. vim.fn.fnameescape(presence_path))
+local presence_buf = vim.api.nvim_get_current_buf()
+local presence_room = vim.fn.fnamemodify(presence_path, ':.')
+
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-presence' })
+check('the presence file is opened in the room', last_of('open') and last_of('open').path, presence_room)
+
+vim.wait(500, function()
+  return last_of('selection') ~= nil
+end)
+check('sharing a buffer publishes the caret', last_of('selection') and last_of('selection').path, presence_room)
+
+-- Throttling: three events in one interval publish once, and the caret read is the one at
+-- flush time, not the one the first event saw. The caret sits on `b` in `a😀b`: three UTF-16
+-- units in (one for `a`, two for the emoji), where a byte count would say five.
+local published_before = count_type('selection')
+vim.api.nvim_win_set_cursor(0, { 1, 5 })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = presence_buf })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = presence_buf })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = presence_buf })
+check('a caret move waits for the throttle', count_type('selection'), published_before)
+vim.wait(500, function()
+  return count_type('selection') > published_before
+end)
+check('  and a burst of moves publishes one selection', count_type('selection'), published_before + 1)
+local published = last_of('selection')
+check('  carrying the room path', published and published.path, presence_room)
+check(
+  '  and the caret as UTF-16 offsets',
+  published and ('%d:%d'):format(published.anchor, published.head),
+  '3:3'
+)
+
+-- A buffer the room does not hold is not where anyone can see the caret, so it is cleared —
+-- once, however much the caret moves there.
+local other = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_set_current_buf(other)
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = other })
+vim.wait(500, function()
+  return last_of('selectionCleared') ~= nil
+end)
+check('a caret outside the shared documents is cleared', last_of('selectionCleared') ~= nil, true)
+local cleared = count_type('selectionCleared')
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = other })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = other })
+vim.wait(300, function()
+  return false
+end)
+check('  and clearing again sends nothing', count_type('selectionCleared'), cleared)
+
+-- A peer's caret is a name row above their line, in the colour the bridge gave them.
+vim.api.nvim_set_current_buf(presence_buf)
+local ns = vim.api.nvim_get_namespaces()['selvage.presence']
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-bob',
+      label = 'Bob',
+      role = 'guest',
+      path = presence_room,
+      anchor = 4,
+      head = 4,
+      colour = '#61afef',
+      fill = '#61afef40',
+    },
+  },
+})
+local marks = vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, { details = true })
+check('a presence report draws a mark', #marks, 1)
+check('  above the line the peer is on', marks[1] and marks[1][2], 0)
+check("  with the peer's name in it", marks[1] and marks[1][4].virt_lines[1][1][1], ' Bob ')
+check('  and above the line, not below', marks[1] and marks[1][4].virt_lines_above, true)
+check(
+  '  in the colour the bridge chose',
+  marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].sign_hl_group }).bg,
+  tonumber('61afef', 16)
+)
+
+-- A presence report is the whole set: a peer it no longer names is withdrawn, and a peer in
+-- a document this client does not hold is not drawn at all.
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-ann',
+      label = 'Ann',
+      role = 'guest',
+      path = 'a-document-nobody-holds.txt',
+      anchor = 0,
+      head = 0,
+      colour = '#e06c75',
+    },
+  },
+})
+check(
+  'a report without a peer withdraws their mark, and does not draw one for a document nobody holds',
+  #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}),
+  0
+)
+
+-- End of the session: every mark goes with it, whatever buffer it was on.
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-bob',
+      label = 'Bob',
+      role = 'guest',
+      path = presence_room,
+      anchor = 4,
+      head = 4,
+      colour = '#61afef',
+      fill = '#61afef40',
+    },
+  },
+})
+check('a mark is up before the session ends', #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}), 1)
+selvage.leave()
+check('leaving the session clears every mark', #vim.api.nvim_buf_get_extmarks(presence_buf, ns, 0, -1, {}), 0)
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))

@@ -74,6 +74,12 @@ function Document:position(offset)
   return last - 1, #self.lines[last]
 end
 
+--- The UTF-16 offset of a (0-based row, byte column). The inverse of `position`, and where the
+--- caret is turned into what the room's offsets count.
+function Document:offset(row, col)
+  return self:prefix(row) + utf16.of_byte(self:line(row), col)
+end
+
 --- Replaces the shadow's rows `[first, last]` (0-based, inclusive) with `replacement`.
 function Document:reshadow(first, last, replacement)
   local removed = last - first + 1

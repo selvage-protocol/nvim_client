@@ -20,6 +20,17 @@ local state = {
   --- @type table<string, table> room path to document
   documents = {},
   group = nil,
+  -- Presence: the augroup the caret watchers live in, the marks drawn for peers, and the one
+  -- scheduled flush that publishes this user's caret.
+  presence_group = nil,
+  presence_ns = nil,
+  presence_marks = {},
+  peer_groups = {},
+  peer_count = 0,
+  cursors = {},
+  selection_armed = false,
+  selection_path = nil,
+  generation = 0,
   -- Whether the next document the room names is still the one to put in front of the user.
   -- Set when a guest joins; cleared by the first document shown.
   auto_open = false,
@@ -53,6 +64,166 @@ local function notify(message, level)
   vim.notify('selvage: ' .. message, level or vim.log.levels.INFO)
 end
 
+--- How long after the first caret event a selection reaches the companion.
+---
+--- A caret moves on every keystroke — the buffer's own text moves it again when a line is
+--- inserted — so one send per event would put a message on the IPC, and a presence update on
+--- the wire, for every character typed. Events are coalesced into one flush per interval, which
+--- is under the threshold at which a caret reads as lagging, and the flush reads the caret when
+--- it runs, so what a burst publishes is where the caret ended.
+local SELECTION_INTERVAL_MS = 100
+
+--- The namespace every peer mark lives in. A test finds it by name:
+--- `nvim_get_namespaces()['selvage.presence']`.
+local function presence_namespace()
+  if state.presence_ns == nil then
+    state.presence_ns = api.nvim_create_namespace('selvage.presence')
+  end
+  return state.presence_ns
+end
+
+--- The highlight group a peer's name row and sign are drawn in, made once per peer from the
+--- colour the bridge derived, so a peer is the same colour in every client.
+local function peer_highlight(cursor)
+  local name = state.peer_groups[cursor.peerId]
+  if name == nil then
+    state.peer_count = state.peer_count + 1
+    name = 'SelvagePeer' .. state.peer_count
+    state.peer_groups[cursor.peerId] = name
+  end
+  api.nvim_set_hl(0, name, { fg = '#000000', bg = cursor.colour or '#888888', bold = true })
+  return name
+end
+
+--- Withdraws every mark drawn for a peer, so a presence report that no longer names one leaves
+--- nothing of theirs behind.
+local function clear_presence()
+  local ns = state.presence_ns
+  if ns == nil then
+    return
+  end
+  for _, mark in ipairs(state.presence_marks) do
+    pcall(api.nvim_buf_del_extmark, mark.bufnr, ns, mark.id)
+  end
+  state.presence_marks = {}
+end
+
+--- The first character of a peer's name, for the sign column. `sign_text` takes one or two
+--- cells; a name is not required to be ASCII, so take a character rather than a byte.
+local function peer_sign(label)
+  local first = vim.fn.strcharpart(label or '', 0, 1)
+  return first ~= '' and first or '•'
+end
+
+--- Draws the carets a presence report resolved. Every mark is recreated rather than moved: a
+--- mark travels with the buffer's edits, but where a peer *is* changes, and a mark for a peer
+--- the report no longer names would otherwise stay behind.
+local function draw_presence(cursors)
+  state.cursors = cursors or {}
+  clear_presence()
+  local ns = presence_namespace()
+  for _, cursor in ipairs(state.cursors) do
+    local document = state.documents[cursor.path]
+    if document ~= nil and api.nvim_buf_is_valid(document.bufnr) then
+      local row, col = document:position(cursor.head)
+      local label = cursor.label or cursor.peerId or 'peer'
+      local name = peer_highlight(cursor)
+      local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, col, {
+        virt_lines = { { { ' ' .. label .. ' ', name } } },
+        virt_lines_above = true,
+        sign_text = peer_sign(label),
+        sign_hl_group = name,
+        priority = 100,
+      })
+      if ok then
+        state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
+      end
+    end
+  end
+end
+
+--- The shared document whose buffer is in the current window, or nil when the user is not in one.
+local function current_document()
+  local bufnr = api.nvim_get_current_buf()
+  for _, document in pairs(state.documents) do
+    if document.bufnr == bufnr then
+      return document
+    end
+  end
+  return nil
+end
+
+--- The caret as the two UTF-16 offsets the room counts. In Visual mode the selection's other
+--- end is the anchor; a caret is both ends alike.
+local function caret(document)
+  local cursor = api.nvim_win_get_cursor(0)
+  local head = document:offset(cursor[1] - 1, cursor[2])
+  local anchor = head
+  local mode = vim.fn.mode(1)
+  if mode == 'v' or mode == 'V' or mode == '\22' then
+    local start = vim.fn.getpos('v')
+    if start[2] > 0 and start[3] > 0 then
+      anchor = document:offset(start[2] - 1, start[3] - 1)
+    end
+  end
+  return anchor, head
+end
+
+--- Publishes where the caret is now, or clears it when the user is not in a shared document.
+--- The state is read at flush time, so a burst of movement costs one look and one message.
+local function publish_selection()
+  state.selection_armed = false
+  if state.process == nil then
+    return
+  end
+  local document = current_document()
+  if document == nil then
+    if state.selection_path ~= false then
+      state.process:send({ type = 'selectionCleared' })
+      state.selection_path = false
+    end
+    return
+  end
+  local anchor, head = caret(document)
+  state.process:send({ type = 'selection', path = document.path, anchor = anchor, head = head })
+  state.selection_path = document.path
+end
+
+--- Arms the one flush the interval allows. Called from every event that can have moved the
+--- caret; only the first arms, so the rest cost nothing.
+local function schedule_selection()
+  if state.process == nil or state.selection_armed then
+    return
+  end
+  state.selection_armed = true
+  local generation = state.generation
+  vim.defer_fn(function()
+    if generation ~= state.generation then
+      -- The session this was armed under has ended; a fresh one publishes its own caret.
+      return
+    end
+    publish_selection()
+  end, SELECTION_INTERVAL_MS)
+end
+
+--- Watches the events that move the caret within the shared documents. A guest needs them as
+--- much as a host: both ends publish a caret and both draw the other's.
+local function watch_presence()
+  state.presence_group = api.nvim_create_augroup('SelvagePresence', { clear = true })
+  api.nvim_create_autocmd({
+    'CursorMoved',
+    'CursorMovedI',
+    'ModeChanged',
+    'BufEnter',
+    'WinEnter',
+    'TextChanged',
+    'TextChangedI',
+  }, {
+    group = state.presence_group,
+    callback = schedule_selection,
+  })
+end
+
 --- The room path a buffer is shared under, or nil when it is not one to share.
 local function room_path(bufnr)
   if vim.bo[bufnr].buftype ~= '' then
@@ -82,6 +253,10 @@ local function share(bufnr, path)
   state.documents[path] = document
   document:attach()
   state.process:send({ type = 'open', path = path, text = document:text() })
+  -- The document may already have a peer's caret resolved against it, and this buffer's own
+  -- caret is worth publishing the moment the room holds it.
+  draw_presence(state.cursors)
+  schedule_selection()
 end
 
 --- The buffer a guest holds the room's document in. It has nowhere on disk to go.
@@ -196,9 +371,11 @@ local function on_status(message)
     notify('hosting ' .. tostring(message.roomId) .. '; :SelvageCopyInvite to share it')
     share_current()
     watch_buffers()
+    watch_presence()
   elseif message.state == 'joined' then
     notify('joined ' .. tostring(message.roomId))
     state.auto_open = true
+    watch_presence()
   elseif message.state == 'error' then
     notify(tostring(message.message), vim.log.levels.ERROR)
   end
@@ -253,6 +430,8 @@ local function on_message(message)
     on_status(message)
   elseif message.type == 'report' then
     on_report(message.report)
+  elseif message.type == 'presence' then
+    draw_presence(message.cursors)
   end
 end
 
@@ -263,6 +442,16 @@ local function reset()
     document:detach()
   end
   state.documents = {}
+  clear_presence()
+  state.cursors = {}
+  for _, name in pairs(state.peer_groups) do
+    pcall(api.nvim_set_hl, 0, name, {})
+  end
+  state.peer_groups = {}
+  state.peer_count = 0
+  state.generation = state.generation + 1
+  state.selection_armed = false
+  state.selection_path = nil
   state.status = 'idle'
   state.role = nil
   state.room = nil
@@ -271,6 +460,10 @@ local function reset()
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil
+  end
+  if state.presence_group ~= nil then
+    api.nvim_del_augroup_by_id(state.presence_group)
+    state.presence_group = nil
   end
 end
 

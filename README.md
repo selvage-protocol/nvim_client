@@ -71,6 +71,18 @@ receives, with the time and the process id. The two sides of this IPC are two pr
 order the messages actually crossed in is the one thing a log of either end alone cannot show —
 which is what a convergence question turns on.
 
+### Remote cursors
+
+A peer's caret is drawn as a **name row above the line they are on**: a `virt_lines_above`
+extmark per peer, in the colour the bridge derived for them, with their initial in the sign
+column. The name row is a real screen row for each peer on that line, and it sits above the
+line rather than at the caret's column — a virtual line starts at the text column. Every mark
+is cleared and recreated when presence changes, and every one goes when the session ends.
+
+This user's own caret is published from the events that move it — `CursorMoved`, `ModeChanged`,
+entering a buffer — coalesced into one `selection` per 100 ms, and `selectionCleared` goes out
+when there is no shared document in front of the user.
+
 ### The vendored engine
 
 `vendor/` is a copy, never edited here. Refresh it from a sibling `vscode_client` checkout:
@@ -147,8 +159,9 @@ translation, the wiring around one session, and one rule of the editor's own: th
 between Neovim's byte positions and the protocol's UTF-16 code units. The first two get
 `test/lua/document.lua` and `test/lua/session.lua`, which run in a real headless Neovim — the
 first against a real buffer and a real `on_bytes`, because a framework mocking those would be
-testing the mock; the second against a stubbed companion, because what it checks is that a
-buffer a session shared is let go of when the session ends. `test/lua/leave.lua` starts a real
+testing the mock; the second against a stubbed companion, because what it checks is the wiring
+around a session — which buffers it shares, that it lets them go when the session ends, and
+that a caret is published and a peer's caret drawn. `test/lua/leave.lua` starts a real
 job, one that ignores its stdin, to check what `:SelvageLeave` does to a companion that does not
 go on its own.
 
@@ -168,7 +181,6 @@ keystroke in that window every run — which it can only do if the relay is what
 
 ## What is not here yet
 
-- Remote cursors. The companion resolves them; nothing draws them as extmarks.
 - Packaging and distribution beyond "clone it and `npm ci`".
 - An edit that lands on the same characters a peer's edit is landing on is superseded by the
   room rather than merged with it. A keystroke elsewhere in the document is moved rather than
