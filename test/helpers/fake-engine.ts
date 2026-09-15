@@ -31,7 +31,7 @@ export class FakeEngine implements CompanionEngine {
   private readonly listeners = new Set<EngineEventListener>();
   private readonly info: SessionInfo;
 
-  constructor(role: Role = 'host', documents: string[] = []) {
+  constructor(role: Role = 'host', documents: string[] = [], peers: PeerInfo[] = []) {
     const peer: PeerInfo = {
       peer_id: 'p-local',
       display_name: 'neovim',
@@ -41,7 +41,7 @@ export class FakeEngine implements CompanionEngine {
       roomId: 'r-test',
       role,
       peer,
-      peers: [],
+      peers: [...peers],
       documents,
       capabilities: [],
       keepalive: {

@@ -11,6 +11,7 @@ import { LineReader } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { Companion } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
+import type { PeerInfo } from '../vendor/engine/envelope.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
 
@@ -27,13 +28,17 @@ interface Harness {
   applies: Array<Extract<Notification, { type: 'applyEdit' }>>;
 }
 
-function harness(role: 'host' | 'guest' = 'host', documents: string[] = []): Harness {
+function harness(
+  role: 'host' | 'guest' = 'host',
+  documents: string[] = [],
+  peers: PeerInfo[] = [],
+): Harness {
   const sent: Notification[] = [];
   const hosts: string[] = [];
   const joins: string[] = [];
   const engines: FakeEngine[] = [];
   const open = (): FakeEngine => {
-    const engine = new FakeEngine(role, documents);
+    const engine = new FakeEngine(role, documents, peers);
     engines.push(engine);
     return engine;
   };
@@ -212,6 +217,24 @@ test('a join while a session is live is refused the same way', async () => {
   assert.deepEqual(it.sent.slice(before), [
     { type: 'refused', what: 'join', roomId: 'r-test' },
   ]);
+});
+
+test("a joining client is told the room's peers the handshake carried", async () => {
+  const peers: PeerInfo[] = [
+    { peer_id: 'p-bob', display_name: 'Bob', role: 'guest' },
+    { peer_id: 'p-ann', display_name: '', role: 'guest' },
+  ];
+  const it = harness('guest', ['notes.txt'], peers);
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  const reports = it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report);
+  assert.deepEqual(reports[0], { kind: 'documents', documents: ['notes.txt'] });
+  assert.deepEqual(
+    reports[1],
+    { kind: 'peers', peers },
+    'who is in the room arrives with the rest of the handshake, not only when someone moves',
+  );
 });
 
 test('a joining client is told the room documents the handshake carried', async () => {

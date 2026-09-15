@@ -352,10 +352,12 @@ export class Companion {
     });
     // The room's open-document set at the moment of joining arrives in the handshake rather
     // than as an event, so a guest would otherwise hear about the room's documents only if
-    // one changed after it arrived.
+    // one changed after it arrived. The peers are the same fact about the same handshake: the
+    // `peersChanged` event the seat emitted went out before the bridge was listening.
     this.send({
       type: 'report',
       report: { kind: 'documents', documents: session.documents },
     });
+    this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
   }
 }
