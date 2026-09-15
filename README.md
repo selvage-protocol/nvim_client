@@ -198,11 +198,17 @@ environment files left out. It reads the folder again while it hosts: the compan
 folder the session shares, and a file created, deleted or renamed under it reaches the room as the
 new listing. A burst of changes — a `git checkout`, a build — is gathered into a quarter of a
 second: one reading per window, not one per event, and a folder that still names what it named last
-time is not sent at all. The watcher belongs to the session and is closed with it. A guest keeps
-the listing beside the documents it holds, so `:SelvageOpen` completes over a path nobody has
-opened yet and opens it through the same hold as any other document. Opening it is what makes the
-**host** read that one file out of its working copy, and the host refuses anything that is not a
-readable text file inside its root rather than sharing an empty document; a refusal is reported.
+time is not sent at all. Every event is worth that reading, and not only the ones that look like a
+listing change: the enumerator leaves out a file larger than the 1 MiB a listing will carry
+(`MAX_GRANT_FILE_BYTES`), so a write that crosses that bound adds or removes a path, and an event
+says nothing about which it was. The comparison saves the frame and not the reading, which is 11 ms
+over 640 files, 77 ms over 5 000 and 388 ms at the 20 000 entries the enumerator stops at: cheap,
+but not free, and the price of a listing that cannot be wrong about a file's size. The watcher
+belongs to the session and is closed with it. A guest keeps the listing beside the documents it
+holds, so `:SelvageOpen` completes over a path nobody has opened yet and opens it through the same
+hold as any other document. Opening it is what makes the **host** read that one file out of its
+working copy, and the host refuses anything that is not a readable text file inside its root rather
+than sharing an empty document; a refusal is reported.
 
 ## The mirror
 
