@@ -1046,6 +1046,31 @@ handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomI
 check('a new session refuses it again', opens_of(latin_room), 0)
 check('  and says so again', said_since(before_again, latin_room) ~= nil, true)
 
+-- -- a wiped shared buffer -------------------------------------------------------
+--
+-- `:bwipeout` on a shared buffer ends the buffer, so the room has to hear that this client no
+-- longer holds the path. Nothing said so: the room kept the document for the life of the
+-- session, offering edits to a `Document` that answered every one of them `ok = false` until
+-- the companion gave up and reported a refusal about a buffer the user had closed.
+--
+-- The send is on `BufWipeout` and not on the document's own detach, which also fires when the
+-- session ends: sending there would put a `close` on the wire for every document
+-- `:SelvageLeave` is letting go of.
+
+selvage.leave()
+vim.cmd('edit! ' .. path)
+local wiped_buf = vim.api.nvim_get_current_buf()
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-wipe' })
+check('the buffer is shared before it is wiped', #selvage.documents(), 1)
+
+-- What the window shows next is another `BufEnter`, and this session shares what it is shown:
+-- an unnamed buffer is not one it would, so what is asserted below is the wipe.
+vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, false))
+vim.api.nvim_buf_delete(wiped_buf, { force = true })
+check('wiping a shared buffer tells the room', last_of('close') and last_of('close').path, path)
+check('  and the session no longer holds it', #selvage.documents(), 0)
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))

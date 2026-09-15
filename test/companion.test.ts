@@ -171,6 +171,11 @@ test('a host seeds the buffer it opens, and only once', async () => {
 
   await it.companion.handle({ type: 'close', path: 'notes.txt' });
   await settle();
+  assert.deepEqual(
+    it.engine.closed,
+    ['notes.txt'],
+    'the path is released in the room, not just dropped here',
+  );
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'something else\n' });
   assert.equal(it.engine.text('notes.txt'), 'hello\n');
 });
