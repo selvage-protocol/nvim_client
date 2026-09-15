@@ -190,5 +190,63 @@ vim.bo.autoread = true
 vim.fn.writefile({ 'one', 'two' }, reload_path)
 vim.cmd('silent checktime')
 check('a detached document publishes nothing when its buffer is reloaded', #reload_sent, 0)
+
+-- -- a whole-buffer change on a large buffer -------------------------------------
+--
+-- Replacing every line at once is ordinary — a formatter, a paste over the whole file, or the
+-- companion's whole-document backstop — and it is the shape that shows how the shadow is kept.
+local big = {}
+for index = 1, 8000 do
+  big[index] = 'line ' .. index
+end
+local big_shared, big_buf, big_sent = document(big)
+local rewritten = {}
+for index = 1, 8000 do
+  rewritten[index] = 'other ' .. index
+end
+vim.api.nvim_buf_set_lines(big_buf, 0, -1, true, rewritten)
+check('the shadow tracks after a whole-buffer change', big_shared:text(), buffer_text(big_buf))
+check('  and the whole change is published once', #big_sent, 1)
+
+-- The cost of keeping the shadow is a scale guard, not a wall-clock ceiling: a whole-buffer
+-- change at `n` and at `2n` should cost about twice as much (linear) rather than four times as
+-- much (the quadratic that shifting a list at a fixed index gives). Both are compared as a
+-- ratio so the assertion does not depend on the machine, and each is the cheapest of a few
+-- runs because one sample is at the mercy of the scheduler. Observed here: about 2.3 with the
+-- one-pass rebuild, about 3.9 with the shifting one.
+local function whole_change_time(n, tag)
+  local lines = {}
+  for index = 1, n do
+    lines[index] = tag .. index
+  end
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, true, lines)
+  local shared = Document.new(bufnr, 'big.txt', function() end)
+  shared:attach()
+  local started = os.clock()
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, true, lines)
+  local elapsed = os.clock() - started
+  shared:detach()
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+  return elapsed
+end
+local function cheapest(n)
+  local best
+  for round = 1, 3 do
+    local elapsed = whole_change_time(n, 'round ' .. round .. ' line ')
+    if best == nil or elapsed < best then
+      best = elapsed
+    end
+  end
+  return best
+end
+local at_n = cheapest(8000)
+local at_2n = cheapest(16000)
+local ratio = at_2n / at_n
+if ratio >= 3 then
+  print(('     n=%.4fs 2n=%.4fs ratio=%.2f'):format(at_n, at_2n, ratio))
+end
+check('a whole-buffer change scales about linearly', ratio < 3, true)
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
