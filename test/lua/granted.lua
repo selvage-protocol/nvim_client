@@ -90,7 +90,9 @@ local function completions(lead)
 end
 
 --- Joins a room: the status, then the reports a real companion sends as a session starts. The
---- room's documents come before the grant, which is the order the companion emits them in.
+--- room's grant comes before its documents, which is the order the companion emits them in and the
+--- order a guest's mirror needs: a document's buffer is named after the file the listing was
+--- materialised at.
 local function join(documents, paths)
   selvage.leave()
   selvage.join('ws://127.0.0.1:1/session?room=r-granted&token=t')
@@ -100,9 +102,13 @@ local function join(documents, paths)
     role = 'guest',
     roomId = 'r-granted',
   })
+  handlers().on_message({ type = 'report', report = { kind = 'grant', paths = paths } })
   handlers().on_message({ type = 'report', report = { kind = 'documents', documents = documents } })
   handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
-  handlers().on_message({ type = 'report', report = { kind = 'grant', paths = paths } })
+end
+
+local function mirrored(path)
+  return selvage.session().mirror .. '/' .. path
 end
 
 local GRANT = { 'README.md', 'notes/deep.txt', 'src/main.rs', 'workspace/README.md' }
@@ -145,7 +151,7 @@ check('  with a lead nothing matches, nothing', completions('nothing-here'), '')
 -- when a host above `workspace/` publishes `workspace/README.md`.
 local before = #sent
 selvage.open('deep.txt')
-check('a granted path is opened as a buffer of the room', vim.fn.bufname('%'), 'selvage://notes/deep.txt')
+check('a granted path is opened as a buffer of the room', vim.fn.bufname('%'), mirrored('notes/deep.txt'))
 check('  and the room is asked for it', opens_of('notes/deep.txt', before), 1)
 check('  and it is now one this session holds', listed(selvage.documents()), 'README.md,notes/deep.txt')
 check(
@@ -162,7 +168,7 @@ check('a suffix that names several granted paths is refused', said_since(before,
 
 -- An exact room path is that path, however many others end the same way.
 selvage.open('a/x.txt')
-check('  and an exact path is opened all the same', vim.fn.bufname('%'), 'selvage://a/x.txt')
+check('  and an exact path is opened all the same', vim.fn.bufname('%'), mirrored('a/x.txt'))
 
 -- -- the chooser, and the one-document form -------------------------------------------
 
@@ -183,12 +189,12 @@ check(
   listed(chosen),
   'README.md,notes/deep.txt,src/main.rs,workspace/README.md'
 )
-check('  and the choice is opened', vim.fn.bufname('%'), 'selvage://notes/deep.txt')
+check('  and the choice is opened', vim.fn.bufname('%'), mirrored('notes/deep.txt'))
 
 -- One path offered is not a question: the command opens it.
 join({}, { 'only.txt' })
 selvage.open()
-check('the only path the room offers is opened without asking', vim.fn.bufname('%'), 'selvage://only.txt')
+check('the only path the room offers is opened without asking', vim.fn.bufname('%'), mirrored('only.txt'))
 check('  and it is held now', listed(selvage.documents()), 'only.txt')
 vim.ui.select = builtin_select
 

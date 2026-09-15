@@ -6,6 +6,7 @@
 
 local companion = require('selvage.companion')
 local Document = require('selvage.document')
+local mirror = require('selvage.mirror')
 local utf16 = require('selvage.utf16')
 
 local api = vim.api
@@ -27,6 +28,11 @@ local state = {
   --- The room paths this session refused to share, so the refusal is said once: a buffer that
   --- is not UTF-8 is entered and left many times over a session.
   unshareable = {},
+  --- The room paths the mirror refused to write, so the refusal is said once per path: a person
+  --- saves a file more than once over a session.
+  unwritable = {},
+  --- The paths inside the mirror that are not the room's, which a read of one has already named.
+  unlisted = {},
   --- The folder this session's grant is rooted at, as it stood when the session started. The
   --- working directory can move under it at any moment (`:cd`, `:lcd`, `:tcd`) and the grant
   --- does not: it is the folder the invite was offered from (`DESIGN.md` §4.2), not wherever
@@ -36,6 +42,9 @@ local state = {
   --- refusal is said once per path, as it is for a buffer that is not UTF-8.
   outside = {},
   group = nil,
+  --- The augroup the guest's mirror is watched with: reading one of its files shares it with the
+  --- room, and saving one is the session's to route rather than the editor's to write.
+  mirror_group = nil,
   -- Presence: the augroup the caret watchers live in, the marks drawn for peers, and the one
   -- scheduled flush that publishes this user's caret.
   presence_group = nil,
@@ -106,6 +115,10 @@ function M.offered()
 end
 
 --- Where the session stands, for a statusline or a script.
+---
+--- `mirror` is the directory this session materialises the room into, for a guest whose room
+--- listed something, and nil otherwise: it is where a plugin that reads the filesystem has to
+--- look, because nothing else tells a person where the room is.
 function M.session()
   return {
     status = state.status,
@@ -113,6 +126,7 @@ function M.session()
     room = state.room,
     invite = state.invite,
     documents = M.documents(),
+    mirror = mirror.root(),
   }
 end
 
@@ -604,17 +618,68 @@ local function share(bufnr, path)
   schedule_selection()
 end
 
---- The buffer a guest holds the room's document in. It has nowhere on disk to go.
+--- The buffer a guest holds the room's document in.
+---
+--- For a path the room's grant names, that is the mirror's file: a real path on disk, so that a
+--- language server, ripgrep, ctags and every plugin that reads one sees the file the person is
+--- editing. The file is read into the buffer the way `:edit` reads it, so the buffer really is a
+--- file buffer — its `:w` is the session's to route, and a plugin that looks at the buffer finds
+--- the file behind it. A document the grant does not name has nowhere to go and stays a
+--- `selvage://` buffer, which is what it was before the mirror existed.
+---
+--- @param path string the room path
+--- @return integer bufnr
 local function guest_buffer(path)
-  local name = 'selvage://' .. path
+  local name = mirror.buffer_name(path)
   local existing = vim.fn.bufnr(name)
   if existing ~= -1 then
     return existing
   end
-  local bufnr = api.nvim_create_buf(true, true)
+  if name == 'selvage://' .. path then
+    local bufnr = api.nvim_create_buf(true, true)
+    api.nvim_buf_set_name(bufnr, name)
+    vim.bo[bufnr].modifiable = true
+    return bufnr
+  end
+  local bufnr = api.nvim_create_buf(true, false)
   api.nvim_buf_set_name(bufnr, name)
+  api.nvim_buf_call(bufnr, function()
+    vim.cmd('silent noautocmd edit!')
+  end)
   vim.bo[bufnr].modifiable = true
   return bufnr
+end
+
+--- Says, once per path, that a file inside the mirror is not one the room knows: a tool that
+--- created it there made a file on this disk and nothing else, and a person who edits it should
+--- hear that before they think the room has it.
+---
+--- @param path string the room path as the mirror's file names it
+local function refuse_unlisted(path)
+  if state.unlisted[path] ~= nil then
+    return
+  end
+  state.unlisted[path] = true
+  notify(
+    ('%s is not in the room, so it is not shared; the mirror holds the room\'s files and is removed when the session ends'):format(path),
+    vim.log.levels.WARN
+  )
+end
+
+--- Says, once per path, that the mirror would not write a file: the room has no document for it,
+--- so a save would put a file into a cache the session deletes and the room would never hold.
+--- The buffer keeps the text, so the person can still save it somewhere of their own choosing.
+---
+--- @param path string the room path as the mirror's file names it
+local function refuse_mirror_write(path)
+  if state.unwritable[path] ~= nil then
+    return
+  end
+  state.unwritable[path] = true
+  notify(
+    ('%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it'):format(path),
+    vim.log.levels.WARN
+  )
 end
 
 --- Shares the buffer in the window, or says why it is not the room's to share.
@@ -636,14 +701,21 @@ local function show(bufnr)
   return pcall(api.nvim_win_set_buf, 0, bufnr)
 end
 
---- The room path a user's words name: the room path, its `selvage://` buffer name, or a
---- suffix of the path at a directory boundary. A host above a folder called `workspace`
---- publishes `workspace/README.md`; a guest who types `README.md` means that one.
+--- The room path a user's words name: the room path, its `selvage://` buffer name, its file in
+--- the mirror, or a suffix of the path at a directory boundary. A host above a folder called
+--- `workspace` publishes `workspace/README.md`; a guest who types `README.md` means that one.
 ---
 --- The search is over what the room offers, so a path the grant named and nobody has opened is
 --- as nameable as one with a buffer behind it.
+---
+--- @param wanted string
+--- @return string|nil resolved, string[] matches
 local function resolve(wanted)
   wanted = wanted:gsub('^selvage://', '')
+  local root = mirror.root()
+  if root ~= nil and wanted:sub(1, #root + 1) == root .. '/' then
+    wanted = wanted:sub(#root + 2)
+  end
   local offered = M.offered()
   for _, candidate in ipairs(offered) do
     if candidate == wanted then
@@ -665,10 +737,11 @@ end
 --- Puts a room path in the window: the buffer this session already holds for it, or the buffer
 --- a guest's room path is shown in when the room offers it and nobody has opened it yet.
 ---
---- A granted path goes through exactly what a room document goes through — a `selvage://`
---- buffer and an `open` the companion turns into a hold — because the room is what has the
---- content: the host reads its working copy when it is asked, and a path with no `Document`
---- behind it is not one this session holds.
+--- A granted path goes through exactly what a room document goes through — a buffer and an `open`
+--- the companion turns into a hold — because the room is what has the content: the host reads its
+--- working copy when it is asked, and a path with no `Document` behind it is not one this session
+--- holds. The buffer is the mirror's file when the grant names the path, and a `selvage://` one
+--- when it does not.
 local function reveal(path)
   local document = state.documents[path]
   if document ~= nil then
@@ -737,6 +810,135 @@ function M.open(path)
   reveal(resolved)
 end
 
+--- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
+--- here. Without this the room keeps the document for the life of the session, offering
+--- edits to a `Document` that answers every one of them `ok = false`, and the companion
+--- retries until it reports a refusal about a buffer the user closed.
+---
+--- The send belongs here rather than in `Document:on_detach`, which also fires when the
+--- session ends: every `:SelvageLeave` would put a `close` on the wire for each document it
+--- is letting go of, and the companion would hear about a room it is already leaving.
+---
+--- @param event table
+local function document_wiped(event)
+  local document = document_for_buf(event.buf)
+  if document == nil then
+    return
+  end
+  document:detach()
+  if state.process ~= nil then
+    state.process:send({ type = 'close', path = document.path })
+  end
+  state.documents[document.path] = nil
+end
+
+--- Re-opens the documents this session holds whose room path the mirror now has a file for.
+---
+--- The room's grant and its open-document set are two messages, and which of them arrives first is
+--- the server's to decide: the grant is restated in a `doc.granted` straight after `room.joined`,
+--- so a guest usually hears which documents the room holds before it hears what the room grants,
+--- and a `selvage://` buffer made in that window becomes the file the listing names for it. A
+--- republished listing that names a path the guest already holds goes the same way.
+---
+--- What the buffer holds is carried into the file it is opened as, and the room's text this client
+--- holds is saved into it, because re-pointing a document is not a document that starts over: a
+--- buffer that began empty would tell the companion the document is empty for as long as the room
+--- takes to answer, and a peer's caret resolved against it would be drawn in the wrong column.
+local function remirror_documents()
+  for path, document in pairs(state.documents) do
+    if
+      document ~= nil
+      and mirror.granted(path)
+      and api.nvim_buf_get_name(document.bufnr) ~= mirror.buffer_name(path)
+    then
+      local old = document.bufnr
+      local lines = api.nvim_buf_get_lines(old, 0, -1, true)
+      local held_text = #lines > 1 or lines[1] ~= ''
+      local bufnr = guest_buffer(path)
+      if bufnr ~= old then
+        document:detach()
+        state.documents[path] = nil
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        if api.nvim_buf_is_valid(old) then
+          -- A window showing the buffer that is going away is pointed at the one replacing it,
+          -- so that closing the room's copy does not move the person somewhere else.
+          for _, win in ipairs(api.nvim_list_wins()) do
+            if api.nvim_win_get_buf(win) == old then
+              pcall(api.nvim_win_set_buf, win, bufnr)
+            end
+          end
+          pcall(api.nvim_buf_delete, old, { force = true })
+        end
+        share(bufnr, path)
+        local replaced = state.documents[path]
+        if replaced ~= nil and held_text then
+          -- The file the buffer is now opened as holds what this client holds for the room. An
+          -- empty placeholder is left alone: there is nothing to write that the file does not
+          -- already hold.
+          replaced:save()
+        end
+      end
+    end
+  end
+end
+
+--- Watches the mirror's files, for a guest.
+---
+--- Reading one is how a person or a plugin opens the room's file, and it goes through the same
+--- share `:SelvageOpen` uses: the room is what has the content, and the host reads its working
+--- copy when this client asks for it. A name under the mirror that the room's listing does not
+--- name is a file on this disk and nothing else, and is said so once.
+---
+--- Saving one is the session's to route, not the editor's. `BufWriteCmd` suppresses the write the
+--- editor would have made, and the document's own save gives the file the text this client holds
+--- for the room — so a buffer that has drifted from the room cannot put its own text into the
+--- cache that ripgrep, ctags and a language server read. A path the room knows nothing about is
+--- refused rather than written into a directory the session deletes.
+local function watch_mirror()
+  local root = mirror.root()
+  if root == nil then
+    return
+  end
+  state.mirror_group = api.nvim_create_augroup('SelvageMirror', { clear = true })
+  api.nvim_create_autocmd({ 'BufReadPost', 'BufEnter' }, {
+    group = state.mirror_group,
+    pattern = root .. '/*',
+    callback = function(event)
+      local path = mirror.room_path(api.nvim_buf_get_name(event.buf))
+      if path == nil then
+        return
+      end
+      if mirror.granted(path) then
+        share(event.buf, path)
+      else
+        refuse_unlisted(path)
+      end
+    end,
+  })
+  api.nvim_create_autocmd('BufWriteCmd', {
+    group = state.mirror_group,
+    pattern = root .. '/*',
+    callback = function(event)
+      local path = mirror.room_path(api.nvim_buf_get_name(event.buf))
+      if path == nil then
+        return
+      end
+      local document = state.documents[path]
+      if document == nil then
+        refuse_mirror_write(path)
+        return
+      end
+      if not document:save() then
+        notify(('%s could not be written into the mirror'):format(path), vim.log.levels.ERROR)
+      end
+    end,
+  })
+  api.nvim_create_autocmd('BufWipeout', {
+    group = state.mirror_group,
+    callback = document_wiped,
+  })
+end
+
 --- A host shares what it opens for as long as the session lasts.
 local function watch_buffers()
   state.group = api.nvim_create_augroup('SelvageHost', { clear = true })
@@ -752,26 +954,10 @@ local function watch_buffers()
     end,
   })
   -- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
-  -- here. Without this the room keeps the document for the life of the session, offering
-  -- edits to a `Document` that answers every one of them `ok = false`, and the companion
-  -- retries until it reports a refusal about a buffer the user closed.
-  --
-  -- The send belongs here rather than in `Document:on_detach`, which also fires when the
-  -- session ends: every `:SelvageLeave` would put a `close` on the wire for each document it
-  -- is letting go of, and the companion would hear about a room it is already leaving.
+  -- here. See `document_wiped`.
   api.nvim_create_autocmd('BufWipeout', {
     group = state.group,
-    callback = function(event)
-      local document = document_for_buf(event.buf)
-      if document == nil then
-        return
-      end
-      document:detach()
-      if state.process ~= nil then
-        state.process:send({ type = 'close', path = document.path })
-      end
-      state.documents[document.path] = nil
-    end,
+    callback = document_wiped,
   })
 end
 
@@ -822,12 +1008,20 @@ local function reset()
   state.auto_open = false
   state.join_said = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
-  -- was rooted at, and the listing the room carried.
+  -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
+  -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
   state.root = nil
   state.grant = {}
+  state.unlisted = {}
+  state.unwritable = {}
+  mirror.teardown()
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil
+  end
+  if state.mirror_group ~= nil then
+    api.nvim_del_augroup_by_id(state.mirror_group)
+    state.mirror_group = nil
   end
   if state.presence_group ~= nil then
     api.nvim_del_augroup_by_id(state.presence_group)
@@ -923,9 +1117,35 @@ local function on_report(report)
   elseif report.kind == 'grant' then
     -- The room's whole grant, replacing whatever this front-end held — the same rule the server
     -- applies to `doc.grant`, and the reason a shorter listing is a smaller grant rather than an
-    -- error. Nothing is told to the user here: the listing is what `:SelvageOpen` completes over,
-    -- and a room that lists five hundred files has nothing worth interrupting a person for.
+    -- error. The listing is what `:SelvageOpen` completes over, and a room that lists five
+    -- hundred files has nothing worth interrupting a person for; what a *guest* does with it is
+    -- materialise it, and the one sentence that says where is said over the session's first
+    -- listing rather than over every republish.
     state.grant = report.paths or {}
+    if state.role == 'guest' then
+      local root, blocked, created = mirror.setup(state.room, state.grant)
+      if root ~= nil then
+        if created then
+          watch_mirror()
+          notify(
+            ('the room\'s %d files are mirrored at %s; :SelvageFetch fetches their content'):format(
+              #state.grant - #blocked,
+              root
+            )
+          )
+        end
+        if #blocked > 0 then
+          notify(
+            ('%d of the room\'s files could not be mirrored, starting with %s'):format(
+              #blocked,
+              blocked[1]
+            ),
+            vim.log.levels.WARN
+          )
+        end
+        remirror_documents()
+      end
+    end
   elseif report.kind == 'peers' then
     -- The room's own list of who is in it: everyone, not only the peers this client holds a
     -- document for and can draw a caret for.
