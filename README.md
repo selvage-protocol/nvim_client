@@ -51,8 +51,12 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
 | `status {state, role?, roomId?, invite?, message?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. |
-| `report {report}` | The bridge's own report — the room's documents, peers, a divergence, a refusal. |
+| `report {report}` | The bridge's own report — the room's documents, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
+
+A `disconnected` report is the end of the session: the engine reconnected on its own until it
+ran out of attempts, so the plugin says so and lets the documents go. The companion process is
+left running, and the next `:SelvageHost` or `:SelvageJoin` reuses it.
 
 `version` is the one thing this IPC has that an in-process adapter does not need. A remote edit
 is computed against the companion's mirror of the buffer and applied to the buffer itself, and
