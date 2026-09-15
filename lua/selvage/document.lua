@@ -8,6 +8,7 @@
 -- recovered from a buffer that no longer has it.
 
 local utf16 = require('selvage.utf16')
+local mirror = require('selvage.mirror')
 
 local api = vim.api
 
@@ -158,13 +159,16 @@ function Document:apply(edit)
 end
 
 --- Writes the buffer, if it is one that has somewhere to be written.
+---
+--- A guest's document has a file when the room's grant named its path — the mirror — and the save
+--- is what puts the room's text there, which is also what makes the file fetched for anything
+--- that reads the filesystem rather than this editor. A `selvage://` document has nowhere to be
+--- written; the call is still made, because that is what the companion's save policy asks for.
 function Document:save()
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
     return false
   end
   if vim.bo[self.bufnr].buftype ~= '' then
-    -- A guest's document is the room's, not a file here. The call is still made, because that
-    -- is what the companion's save policy asks for; there is simply nothing to write.
     return true
   end
   local ok = pcall(function()
@@ -172,6 +176,9 @@ function Document:save()
       vim.cmd('silent noautocmd write')
     end)
   end)
+  if ok then
+    mirror.wrote(self.path)
+  end
   return ok
 end
 

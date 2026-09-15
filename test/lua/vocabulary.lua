@@ -84,6 +84,7 @@ end
 
 --- The canonical English phrase for each command, as `nvim_create_user_command`'s `desc`. The
 --- command names are this editor's idiom; the phrase is the one both clients name the intent by.
+---
 local TITLES = {
   SelvageHost = 'Host a session',
   SelvageJoin = 'Join a session from an invite link',
@@ -147,6 +148,12 @@ local MESSAGES = {
   { 'WARN', 'already %s room %s; leave that session first' },
   { 'ERROR', 'a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080' },
   { 'ERROR', 'an invite link is needed' },
+  -- The mirror: the room's listing as a real directory, and the content fetched into it.
+  { 'INFO', "the room's %d files are mirrored at %s; :SelvageFetch fetches their content" },
+  { 'WARN', "%d of the room's files could not be mirrored, starting with %s" },
+  { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends" },
+  { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it' },
+  { 'ERROR', '%s could not be written into the mirror' },
 }
 
 --- The calls whose first argument is a sentence a user reads: the front-end's own `notify`, and

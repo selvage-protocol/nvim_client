@@ -4,9 +4,10 @@
 # buffer and a real `on_bytes` (`test/lua/document.lua`), the plugin's own wiring against a
 # stubbed companion (`test/lua/session.lua`), the folder a session shares and what moves it
 # (`test/lua/grant.lua`), the room's grant listing and `:SelvageOpen` over it
-# (`test/lua/granted.lua`), what the commands themselves decide (`test/lua/commands.lua`), the
-# words the two clients share (`test/lua/vocabulary.lua`), and what stopping the process does to
-# it (`test/lua/leave.lua`, against a real job).
+# (`test/lua/granted.lua`), the guest's mirror of that listing (`test/lua/mirror.lua`), what the
+# commands themselves decide (`test/lua/commands.lua`), the words the two clients share
+# (`test/lua/vocabulary.lua`), and what stopping the process does to it (`test/lua/leave.lua`,
+# against a real job).
 #
 #   scripts/test-lua.sh
 #
@@ -21,6 +22,7 @@ nvim --headless -l test/lua/document.lua
 nvim --headless -l test/lua/session.lua
 nvim --headless -l test/lua/grant.lua
 nvim --headless -l test/lua/granted.lua
+nvim --headless -l test/lua/mirror.lua
 nvim --headless -l test/lua/commands.lua
 nvim --headless -l test/lua/vocabulary.lua
 nvim --headless -l test/lua/leave.lua
