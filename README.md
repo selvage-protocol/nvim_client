@@ -36,7 +36,7 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 
 | Plugin → companion | |
 |---|---|
-| `host {serverUrl, displayName?, autoSave?}` | Mint a room and become its host. Refused while a session is live: see `refused`. |
+| `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the host publishes its listing to the room, and serves a path from it when a peer asks. |
 | `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
 | `leave {}` | End the session; the process stays up. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
@@ -53,7 +53,7 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 | `save {id, path}` | Write the document. |
 | `status {state, role?, roomId?, invite?, message?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. |
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about — the room named is the one still standing. |
-| `report {report}` | The bridge's own report — the room's documents, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
+| `report {report}` | The bridge's own report — the room's documents, its grant, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
 
 A `disconnected` report is the end of the session: the engine reconnected on its own until it
@@ -140,10 +140,10 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Every file buffer opened under the folder the session was started in — the grant — joins the room too. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
-| `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A host is refused: its own files are already in its buffer list. |
+| `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
@@ -182,12 +182,22 @@ a guest's buffers have nowhere to write either way. Both are read when a session
 change to either applies to the next host or join. `vim.g.selvage_server_url` is the address
 `:SelvageHost` does not have to ask for.
 
-The folder a session was started in is its grant: a host shares the file buffers under it, and
-nothing outside it. The grant is fixed for the session — a `:cd`, `:lcd` or `:tcd` afterwards
-moves where Neovim looks, not what the room can see — and a file outside it is named in a warning
-when it is opened, since Neovim has no workspace in the window to show the grant the way the other
-client does. A guest's buffers are the room's, not files here — they have nowhere on disk to be
-written.
+The folder a session was started in is its root: a host publishes the listing of the files under
+it to the room, and nothing outside it is ever served. The root is fixed for the session — a
+`:cd`, `:lcd` or `:tcd` afterwards moves where Neovim looks, not what the room can see — and a
+file outside it is named in a warning when it is opened, since Neovim has no workspace in the
+window to show the root the way the other client does.
+
+That listing is the room's **grant** (`DESIGN.md` §4.2, `PROTOCOL.md` §5). It is a list of files
+and never content, a candidate rather than a promise, and the room replaces it wholesale: a host
+reads its own working copy once, when the session starts, and writes the files it holds — no
+directories, ascending by UTF-16 code unit, with the dependency and build trees and the
+environment files left out. A guest keeps the listing beside the documents it holds, so
+`:SelvageOpen` completes over a path nobody has opened yet and opens it through the same hold as
+any other document. Opening it is what makes the **host** read that one file out of its working
+copy, and the host refuses anything that is not a readable text file inside its root rather than
+sharing an empty document; a refusal is reported. A guest's buffers are the room's, not files
+here — they have nowhere on disk to be written.
 
 ## Requirements
 
@@ -254,7 +264,10 @@ the replica, which change an editor is asked to apply, when a document is writte
 companion, and is tested there against a fake editor. `test/bridge.test.ts` takes the vendored
 bridge directly — this adapter's `NvimEditorHost` in front of it, a fake replica behind — because
 a guest document the room has not sent the text for is a case the companion's own deferral never
-lets the bridge see, and the copy's rule for it is still worth pinning. What is left on the Lua
+lets the bridge see, and the copy's rule for it is still worth pinning. `test/grant.test.ts` is
+the host's side of the room's listing on a real directory tree: which files a listing carries and
+in what order, and how far a path a peer named may reach — including the symbolic links that make
+a guess about a path interesting. What is left on the Lua
 side is translation, the wiring around one session, and one rule of the editor's own: the
 conversion between Neovim's byte positions and the protocol's UTF-16 code units. The first two get
 `test/lua/document.lua` and `test/lua/session.lua`, which run in a real headless Neovim — the
@@ -264,7 +277,10 @@ around a session — which buffers it shares, that it lets them go when the sess
 that a caret is published and a peer's caret and selection are drawn at the peer's position.
 `test/lua/commands.lua` is the commands' own policy, through the real command definitions rather
 than the Lua functions behind them: what `:SelvageHost`, `:SelvageJoin` and `:SelvageOpen` ask
-for, refuse and never do. `test/lua/vocabulary.lua` pins the words rather than the behaviour, as
+for, refuse and never do. `test/lua/granted.lua` is the room's grant on the front-end's side:
+what the room offers, the completion and the chooser over it, and opening a path nobody has
+opened without counting it as held. `test/lua/vocabulary.lua` pins the words rather than the
+behaviour, as
 the other client's `test/vocabulary.test.ts` does: the phrase each command is described by, and
 every sentence the front-end notifies, with the level it notifies it at. Both clients say the
 same sentence at a moment and keep only the presentation around it to themselves, so a reworded
@@ -275,12 +291,16 @@ does to a companion that does not go on its own.
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
 each loading the real plugin and starting its own real companion, one hosting and one joining
 over a real `selvaged`, converging on the same document and again after a real TCP-level blip
-cuts the guest's connection. It is not part of `npm test` or CI — it needs a `nvim` and a built
-`selvaged` — and `SELVAGE_E2E_RECONNECT=0` runs the convergence half alone. The guest reaches
-the server through a relay the orchestrator can cut, and that holds the guest's own bytes back
-by `SELVAGE_E2E_LAG_MS` (300 by default). On loopback the window between the handshake naming the
-room's documents and their text arriving is about a millisecond, and the guest's driver makes a
-keystroke in that window every run — which it can only do if the relay is what widens it.
+cuts the guest's connection. Between the two it proves the grant as well: the host writes down a
+file it never opens, the guest opens that granted path and waits for the host's own text to
+arrive — which only the host's working copy can have supplied — and the host then opens the file
+and finds the guest's marker in it, having asserted it was not holding it before. It is not part
+of `npm test` or CI — it needs a `nvim` and a built `selvaged` — and `SELVAGE_E2E_RECONNECT=0`
+runs the convergence half alone. The guest reaches the server through a relay the orchestrator
+can cut, and that holds the guest's own bytes back by `SELVAGE_E2E_LAG_MS` (300 by default). On
+loopback the window between the handshake naming the room's documents and their text arriving is
+about a millisecond, and the guest's driver makes a keystroke in that window every run — which it
+can only do if the relay is what widens it.
 
 ## Licence
 
@@ -308,6 +328,11 @@ keystroke in that window every run — which it can only do if the relay is what
 - A peer's selection is the colour blended with the editor's background rather than a real
   translucent fill: a buffer highlight has no alpha, and a float would cost per-window
   bookkeeping on every scroll and edit for less than the block cursor gives at the same place.
+- A guest's `selvage://` buffers are all a granted path is here. Nothing materialises the room's
+  shape into a real directory on disk, so a language server, `rg`, ctags or a tree plugin sees
+  only the files this machine already has; `DESIGN.md` §4.2 wants that directory and it is its
+  own change, because a real directory is a cache of the room to keep in step and a save in it
+  has to be routed back to the room.
 - A host wiping a shared buffer releases the path in the room; a guest's `selvage://` buffers
   are not released that way, and neither is a path the room stops naming, because this
   client's document set only grows within a session.
