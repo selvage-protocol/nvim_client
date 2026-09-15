@@ -231,14 +231,28 @@ crashed session left behind is pruned by the next one: only a directory whose pr
 removed, so a second Neovim mirroring the same room keeps its own.
 
 A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not run
-Neovim's write path, and the file is given what this client holds for the room — which is the room's
-text, because a guest's changes travel to the room as they are typed. The room's own change to a
-document is written into the mirror the same way, once the room settles. A buffer that has drifted
-from the room therefore cannot put its own text into the cache that a language server or ripgrep
-reads.
+Neovim's write path, and the file is written by this client from the buffer, as the save the room
+is told about. `:[range]w {file}` and `:w >> {file}` naming a file inside the mirror are refused for
+the same reason — Neovim runs `FileWriteCmd` and `FileAppendCmd` for those, and both name the file
+being written — while a file outside the mirror is the person's own and stays the editor's to
+write. The room's own change to a document is written into the mirror the same way, once the room
+settles.
 
-Two things the mirror does not do, both deliberately:
+Three things the mirror does not do, all deliberately:
 
+- **A write that runs no autocommands.** Neovim does not run autocommands nested, so a `:w` issued
+  from inside another autocommand — the shape an autosave plugin has — reaches no write hook at
+  all: the editor writes the file itself and the session is not told. `:noautocmd write` by hand is
+  the same. The text is in the room all the same, because a guest's changes travel as they are
+  typed; what is skipped is the save this client would have sent, and the write is the editor's
+  rather than this client's. Nothing closes it without costing more than it is worth: the two
+  buffer options that make Neovim refuse a write (`'buftype'` set to `acwrite`, `'readonly'`) also
+  stop a language server from attaching to the buffer and stop Neovim noticing that a tool changed
+  the file underneath it.
+- **A buffer that has drifted from the room.** A routed save writes the buffer, which is what a
+  person pressing `:w` expects, so a buffer holding text the room has not accepted — an edit the
+  editor refused to apply, a session that ended — can put that text into the file. The room's copy
+  is what the companion puts back into a buffer it has drifted from, and the next save writes that.
 - **A tool that writes to a mirror file behind the client's back.** The room's copy replaces it the
   next time the path is fetched or opened, and a fetch of a path this session already holds writes
   the file from what the client holds. There is no second source of truth to reconcile: the mirror

@@ -161,9 +161,11 @@ end
 --- Writes the buffer, if it is one that has somewhere to be written.
 ---
 --- A guest's document has a file when the room's grant named its path — the mirror — and the save
---- is what puts the room's text there, which is also what makes the file fetched for anything
---- that reads the filesystem rather than this editor. A `selvage://` document has nowhere to be
---- written; the call is still made, because that is what the companion's save policy asks for.
+--- is what writes the buffer into it, which is also what makes the file fetched for anything that
+--- reads the filesystem rather than this editor. What it writes is the buffer's text, which is
+--- the room's text once the room's edits have been applied to it. A `selvage://` document has
+--- nowhere to be written; the call is still made, because that is what the companion's save
+--- policy asks for.
 function Document:save()
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
     return false
