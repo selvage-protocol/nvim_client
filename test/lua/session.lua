@@ -201,7 +201,9 @@ for index = before + 1, #notices do
 end
 check('  and the rest are pointed at', pointed, true)
 
--- A room with no documents yet shows the first one that arrives.
+-- A room with no documents yet shows the room's first document when it arrives: that is what a
+-- person who just joined asked to see, and a room that was empty at the join fills. Nothing says
+-- so, either — the buffer appearing is the signal.
 selvage.leave()
 vim.cmd('edit! ' .. path)
 local unrelated = vim.fn.bufname('%')
@@ -209,8 +211,10 @@ selvage.join('ws://127.0.0.1:1/room#tok')
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-empty' })
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = {} } })
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
+local before_late = #notices
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { 'late.md' } } })
 check('  and the first document to arrive is shown', vim.fn.bufname('%'), 'selvage://late.md')
+check('  without a sentence about it', #notices, before_late)
 
 -- The escape hatch: `vim.g.selvage_open_on_join = false` keeps the buffer but not the window.
 selvage.leave()
@@ -1016,11 +1020,12 @@ vim.g.selvage_display_name = 'Test User'
 
 -- -- a session that ends without leaving ------------------------------------------
 --
--- The companion starts every session clean: `connect()` leaves the one before it, which is a
--- `status idle` before `connecting`/`hosting`/`joined`. The front-end has to start clean with
--- it, or the paths the session that ended shared still count as its own: `share` returns
--- early for every one of them, no `open` puts them in the new room, and the plugin keeps
--- listing them while the room has never heard of them.
+-- A session can end without `:SelvageLeave`: a room that goes, a connection the engine gives up
+-- on, and a command that gives the live session up before it starts the next one. The companion
+-- says so with `status idle`, and the front-end has to start clean from it, or the paths the
+-- session that ended shared still count as its own: `share` returns early for every one of them,
+-- no `open` puts them in the new room, and the plugin keeps listing them while the room has never
+-- heard of them.
 
 selvage.leave()
 vim.cmd('edit! ' .. path)
