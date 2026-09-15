@@ -252,6 +252,10 @@ writes the file back, and makes the file's directory again when the removal took
 the room already has the text — a guest's edits travel as they are typed — and the file is only this
 session's cache of it, so a `:w` is a save and not `E212` over a buffer left modified. The file that
 comes back is not in the room's listing, because the room does not name the path any more.
+Entering the name again is not the mirror saying the file is not the room's: while the session still
+holds the document, a name for it routes to the buffer that already holds it and nothing is said.
+Once it does not — the buffer was wiped, or the session is over — a fresh buffer for the path is
+refused like any other file in the mirror the room does not list, once per path.
 
 The directory is a **cache of the room and never a source of truth**. It lives under
 `stdpath('cache')/selvage/<room>/` — never a temporary directory (`/tmp` is RAM-backed on some
