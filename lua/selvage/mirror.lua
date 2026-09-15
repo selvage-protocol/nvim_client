@@ -24,6 +24,17 @@ local M = {}
 --- The name this client's mirrors live under, inside `stdpath('cache')`.
 local BASE = 'selvage'
 
+--- How long a path in a listing may be, and how many of them one may carry: the server's bound
+--- and the host enumerator's, which the grant's rules own (`vendor/bridge/grant.ts`,
+--- `MAX_GRANT_PATH_BYTES` and `MAX_GRANT_PATHS`).
+---
+--- A host never publishes more than these, so a conforming room is never shortened by them. A
+--- listing past either is one no client enumerated, and this process makes one file per path in
+--- the foreground as the listing arrives — so what is past them is refused, and reported the way
+--- a path that cannot be written is.
+local MAX_PATH_BYTES = 4096
+local MAX_LISTED = 5000
+
 local state = {
   --- The directory this session materialises the room into, or nil when there is none.
   root = nil,
@@ -59,12 +70,17 @@ end
 ---
 --- The listing comes from a peer, and it is not trusted: a path that leaves the root would put a
 --- file outside the mirror, where the person keeps their own work, so an absolute path, a `..`
---- segment or a backslash is refused rather than materialised.
+--- segment or a backslash is refused rather than materialised. A path longer than a listing may
+--- carry is refused for the same reason — nothing a host enumerated can be that long, and this
+--- process is the one that would hold it.
 ---
 --- @param path any
 --- @return boolean
 local function writable(path)
   if type(path) ~= 'string' or path == '' or path:sub(1, 1) == '/' or path:sub(-1) == '/' then
+    return false
+  end
+  if #path > MAX_PATH_BYTES then
     return false
   end
   if path:find('\\', 1, true) ~= nil or path:find('\0', 1, true) ~= nil then
@@ -163,6 +179,11 @@ end
 --- blindly. A path that exists as something other than a file cannot be materialised; it is
 --- reported rather than replaced.
 ---
+--- The placeholder is made with the `uv` layer rather than with `vim.fn.writefile`: a listing is
+--- as long as the room is, one call per path is a call across the Lua/Vimscript boundary (5ms
+--- against 0.01ms for the same empty file on this host), and this loop runs in the editor's
+--- foreground as the listing arrives.
+---
 --- @param root string
 --- @param paths string[]
 --- @param blocked string[]
@@ -177,7 +198,8 @@ local function materialise(root, paths, blocked)
     if made[dir] then
       local info = uv.fs_stat(file)
       if info == nil then
-        if not pcall(vim.fn.writefile, {}, file) then
+        local fd = uv.fs_open(file, 'w', 420)
+        if fd == nil or uv.fs_close(fd) == nil then
           blocked[#blocked + 1] = path
         end
       elseif info.type ~= 'file' then
@@ -273,7 +295,9 @@ function M.setup(room, paths)
   local blocked = {}
   local wanted = {}
   for _, path in ipairs(paths or {}) do
-    if writable(path) then
+    if #wanted >= MAX_LISTED then
+      blocked[#blocked + 1] = tostring(path)
+    elseif writable(path) then
       wanted[#wanted + 1] = path
     else
       blocked[#blocked + 1] = tostring(path)
