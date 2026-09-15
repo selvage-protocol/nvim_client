@@ -346,11 +346,20 @@ export class Companion {
     // reconciled against it. A document opened that way has no buffer yet — `arrive` is what
     // makes one — so the bridge's own listener, registered first, finds nothing for the path and
     // the reconcile here is the first one the document gets.
+    //
+    // The two events that end a session, `roomGone` and `disconnected`, are the engine's own
+    // last word and are handled the same way `leave` is: the room is over, this process has
+    // nothing left to hold it with, and the front-end is told with `status idle` rather than
+    // left with an engine it cannot use. The bridge's own report of them reaches the front-end
+    // first — `leave` here does not know the reason, so the reason is the bridge's to say.
     const stop = engine.on((event) => {
-      if (event.type !== 'documentChanged') {
+      if (event.type === 'documentChanged') {
+        this.arrive(event.path);
         return;
       }
-      this.arrive(event.path);
+      if (event.type === 'roomGone' || event.type === 'disconnected') {
+        void this.leave();
+      }
     });
     this.stopListening = stop;
     const session = engine.session();
