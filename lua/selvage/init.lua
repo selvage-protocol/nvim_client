@@ -538,6 +538,22 @@ local function watch_buffers()
   })
 end
 
+--- Lets every document this session shares go. A session ends while the companion stays up —
+--- `:SelvageLeave` is one way, and a new host or join another, since the companion's own
+--- `connect()` leaves the session before it (`status idle`) — so the paths of the session that
+--- just ended have to stop counting as shared. They would otherwise make `share` return early
+--- and never send the `open` that puts them in the new room, while the companion, which does
+--- start clean, holds nothing.
+---
+--- Detaching is what makes this the end of the document rather than a leak: a `Document` left
+--- attached would keep reporting the buffer beside the one the new session makes for it.
+local function forget_documents()
+  for _, document in pairs(state.documents) do
+    document:detach()
+  end
+  state.documents = {}
+end
+
 local function on_status(message)
   state.status = message.state
   state.role = message.role
@@ -545,7 +561,9 @@ local function on_status(message)
   if message.invite ~= nil then
     state.invite = message.invite
   end
-  if message.state == 'hosting' then
+  if message.state == 'idle' then
+    forget_documents()
+  elseif message.state == 'hosting' then
     notify('hosting ' .. tostring(message.roomId) .. '; :SelvageCopyInvite to share it')
     share_current()
     watch_buffers()
@@ -616,10 +634,7 @@ end
 local function reset()
   -- The session is over, so every buffer it shared stops reporting: a callback left attached
   -- would keep sending into a companion that is gone.
-  for _, document in pairs(state.documents) do
-    document:detach()
-  end
-  state.documents = {}
+  forget_documents()
   clear_presence()
   state.peers = {}
   state.cursors = {}
