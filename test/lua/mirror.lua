@@ -426,6 +426,144 @@ check('  and the person is told why', said_since(before, 'save it outside the mi
 check('  and the buffer is left with the edit, unsaved', vim.bo.modified, true)
 check('  and the room was never told about it', selvage.text('stray.txt'), nil)
 
+-- -- :SelvageFetch ------------------------------------------------------------------------
+--
+-- The one answer to a partial project-wide search: fetch a file, a directory of them, or the
+-- whole listing. What arrives is the room's, and the file is what says so — a fetch waits for
+-- the file and not for a message.
+
+root = join({}, GRANT)
+responder = room_holding({
+  ['notes/deep.txt'] = 'deep\n',
+  ['src/main.rs'] = 'fn main() {}\n',
+  ['src/util.rs'] = 'fn util() {}\n',
+  ['README.md'] = 'readme\n',
+})
+
+before = #notices
+selvage.fetch('deep.txt')
+check('a fetch of one path writes its file', read(root .. '/notes/deep.txt'), 'deep\n')
+check('  and says what it did', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+
+before = #notices
+selvage.fetch('src')
+check('a fetch of a directory writes every file of it', read(root .. '/src/main.rs'), 'fn main() {}\n')
+check('  and the other one too', read(root .. '/src/util.rs'), 'fn util() {}\n')
+check('  and says how many', said_since(before, 'fetched 2 of 2 files') ~= nil, true)
+
+before = #notices
+selvage.fetch()
+check('a fetch of nothing fetches the whole listing', read(root .. '/README.md'), 'readme\n')
+check('  and says how many', said_since(before, 'fetched 4 of 4 files') ~= nil, true)
+check('  and every file it names is held in the room', #selvage.documents(), 4)
+
+-- A file already fetched is answered at once rather than fetched again.
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 200
+selvage.fetch('README.md')
+check('a path fetched already answers without waiting', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+vim.g.selvage_fetch_timeout_ms = nil
+
+-- The room answers a beat later, the way a real one does: the open is a round trip, and the text
+-- is followed by the save that writes it. A fetch that read the file once instead of waiting for
+-- it would call this path fetched before anything arrived.
+root = join({}, { 'late.txt' })
+responder = function(message)
+  if message.type == 'open' and message.path == 'late.txt' then
+    vim.schedule(function()
+      room_text('late.txt', 'answered late\n', 0)
+    end)
+  end
+end
+before = #notices
+selvage.fetch('late.txt')
+check('a fetch waits for the room to answer', read(root .. '/late.txt'), 'answered late\n')
+check('  and says what arrived', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+
+responder = nil
+root = join({}, { 'quiet.txt' })
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 200
+selvage.fetch('quiet.txt')
+check('a fetch the room never answers reports what arrived', said_since(before, 'fetched 0 of 1 files; 1 had not arrived within 0s: quiet.txt') ~= nil, true)
+check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
+
+-- The room answering late is not a lost fetch: the document is still held, so the text arriving
+-- is followed by the same save, and the next fetch finds the file.
+room_text('quiet.txt', 'at last\n', 0)
+check('  and content that arrives after the deadline is written all the same', read(root .. '/quiet.txt'), 'at last\n')
+before = #notices
+selvage.fetch('quiet.txt')
+check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+vim.g.selvage_fetch_timeout_ms = nil
+
+-- A word that names nothing is refused rather than fetched as nothing.
+before = #notices
+selvage.fetch('nothing-here')
+check('a fetch of a path nothing matches is refused', said_since(before, 'no file the room lists matches "nothing-here"') ~= nil, true)
+
+responder = nil
+selvage.leave()
+before = #notices
+selvage.fetch()
+check('a fetch with no session says so', said_since(before, 'join a session first') ~= nil, true)
+
+selvage.host('ws://127.0.0.1:1')
+handle({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-mirror' })
+before = #notices
+selvage.fetch()
+check('a fetch while hosting says why there is nothing to fetch', said_since(before, 'already on your disk') ~= nil, true)
+selvage.leave()
+
+join({}, {})
+before = #notices
+selvage.fetch()
+check('a fetch in a room that lists nothing says so', said_since(before, 'the room lists no files to fetch') ~= nil, true)
+
+-- -- a file closed while it is being fetched ----------------------------------------------
+--
+-- The hold is what asks the host for the file, and a buffer that goes away while the answer is
+-- on its way is a file this client no longer has a document for. The fetch reports what did not
+-- reach the mirror rather than claiming a file it did not fetch.
+
+root = join({}, { 'slow.txt' })
+responder = function(message)
+  if message.type == 'open' and message.path == 'slow.txt' then
+    local bufnr = buffer_of(root .. '/slow.txt')
+    vim.schedule(function()
+      vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+  end
+end
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 300
+selvage.fetch('slow.txt')
+check(
+  'a file closed mid-fetch is reported as not arrived',
+  said_since(before, 'had not arrived within') ~= nil,
+  true
+)
+check('  and the close reached the room', sent_of('close') ~= nil, true)
+vim.g.selvage_fetch_timeout_ms = nil
+responder = nil
+
+-- -- a session that ends while a fetch is in flight ---------------------------------------
+--
+-- The mirror is the session's and goes with it, so a fetch still waiting when the room ends has
+-- nothing left to fetch into. It says so rather than waiting out its deadline in a session that
+-- is over.
+
+join({}, { 'a.txt', 'b.txt' })
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 5000
+vim.schedule(function()
+  handle({ type = 'status', state = 'idle' })
+end)
+selvage.fetch()
+check('a session that ends mid-fetch ends the wait', said_since(before, 'the session ended before the files were fetched') ~= nil, true)
+check('  and the mirror went with it', selvage.session().mirror, nil)
+vim.g.selvage_fetch_timeout_ms = nil
+
 -- -- what a host does with all of this ----------------------------------------------------
 --
 -- A host's files are its own working copy; it has no mirror and no fetch, and the commands say
@@ -435,6 +573,7 @@ selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 handle({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-mirror' })
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
+check('a host still has the listing it published', #selvage.fetchable(), 4)
 check('  and no mirror to put it in', selvage.session().mirror, nil)
 selvage.leave()
 

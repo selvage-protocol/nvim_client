@@ -287,4 +287,47 @@ function M.wrote(path)
   end
 end
 
+--- Whether this session has written the path's file. It is per session rather than per call: the
+--- mirror directory is this session's own, so a file written at any point in it is one the room's
+--- content reached.
+---
+--- @param path string
+--- @return boolean
+function M.written(path)
+  return state.written[path] == true
+end
+
+--- Whether the path's file already holds `text`, read the way this client writes it: the lines of
+--- a text whose final newline ends the last one.
+---
+--- This is what says a file is current without having to have watched it being written, so a fetch
+--- of a path this session already has does not write it again. It cannot tell an empty file from
+--- an empty document, which is why nothing decides a fetch's completion by it — see `unfetched`
+--- in `init.lua`.
+---
+--- @param path string
+--- @param text string
+--- @return boolean
+function M.holds(path, text)
+  local file = M.file(path)
+  if file == nil then
+    return false
+  end
+  local ok, lines = pcall(vim.fn.readfile, file)
+  if not ok then
+    return false
+  end
+  local body = text:gsub('\n$', '')
+  local wanted = body == '' and {} or vim.split(body, '\n', { plain = true })
+  if #lines ~= #wanted then
+    return false
+  end
+  for index = 1, #lines do
+    if lines[index] ~= wanted[index] then
+      return false
+    end
+  end
+  return true
+end
+
 return M
