@@ -56,6 +56,11 @@ interface Unarrived {
 
 export interface CompanionOptions {
   send: (notification: Notification) => void;
+  /**
+   * The editor side of the seam. The default is this process's own, over the same `send`; a test
+   * supplies one that records what the bridge asks of it.
+   */
+  editor?: NvimEditorHost;
   engines?: EngineFactory;
   displayName?: string;
   /**
@@ -80,10 +85,10 @@ export class Companion {
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
+    this.editor = options.editor ?? new NvimEditorHost({ send: this.send });
     this.engines = options.engines ?? realEngines;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
-    this.editor = new NvimEditorHost({ send: this.send });
   }
 
   /**
