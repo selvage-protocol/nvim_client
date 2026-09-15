@@ -197,8 +197,9 @@ directories, ascending by UTF-16 code unit, with the dependency and build trees 
 environment files left out. It reads the folder again while it hosts: the companion watches the
 folder the session shares, and a file created, deleted or renamed under it reaches the room as the
 new listing. A burst of changes — a `git checkout`, a build — is gathered into a quarter of a
-second: one reading per window, not one per event, and a folder that still names what it named last
-time is not sent at all. Every event is worth that reading, and not only the ones that look like a
+second: one reading per window, not one per event, and a folder that still names what the last
+accepted listing named is not sent again. A listing the server refused is not remembered, so
+the folder's next change offers the listing again. Every event is worth that reading, and not only the ones that look like a
 listing change: the enumerator leaves out a file larger than the 1 MiB a listing will carry
 (`MAX_GRANT_FILE_BYTES`), so a write that crosses that bound adds or removes a path, and an event
 says nothing about which it was. The comparison saves the frame and not the reading, which is 11 ms
