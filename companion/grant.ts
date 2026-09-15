@@ -13,8 +13,8 @@
  * shared folder rather than a symbolic link out of it.
  */
 
-import type { Dirent } from 'node:fs';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { existsSync, type Dirent } from 'node:fs';
+import { constants, lstat, open, readdir, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -101,6 +101,30 @@ async function isShareableFile(absolute: string): Promise<boolean> {
 }
 
 /**
+ * `O_NOFOLLOW` where the platform has it, so a name that is a link is refused by the open itself
+ * rather than by an `lstat` of the same name that a rename can get behind. Windows has none, and
+ * there `isShareableFile`'s `lstat` is the only thing that refuses a link.
+ */
+const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+
+/** The folder a session shares: a link at the root *is* the folder the front-end named. */
+const FOLDER = constants.O_RDONLY | constants.O_DIRECTORY;
+
+/** A step inside it: a directory, and never a link to one. */
+const STEP = FOLDER | NO_FOLLOW;
+
+/** A leaf: the file itself, and never a link to one. */
+const LEAF = constants.O_RDONLY | NO_FOLLOW;
+
+/**
+ * Whether a step can be taken relative to the directory the step before it found. Linux publishes
+ * a process's open descriptors under `/proc/self/fd`, and a name under one of those is looked up
+ * in the directory that descriptor holds rather than through the name again. Node offers no other
+ * way to name the child of a directory that is already open.
+ */
+const PINNED_STEPS = existsSync('/proc/self/fd');
+
+/**
  * A file's text, or `undefined` when the path is not one this host can serve.
  *
  * `undefined` is the answer for anything that is not a readable text file inside the shared
@@ -109,35 +133,130 @@ async function isShareableFile(absolute: string): Promise<boolean> {
  * not text, and anything that cannot be read at all. The caller reports the refusal rather than
  * putting an empty document into the room.
  *
- * The path is walked one segment at a time because `join` resolves nothing: a path that travels
+ * The path is resolved one segment at a time because `join` resolves nothing: a path that travels
  * *through* a symbolic link lands on a real file somewhere else entirely, while the leaf's own
  * `lstat` reports an ordinary file. No such path was listed — the walk leaves links out — so what
  * it would read is outside the grant. The leaf is checked as well: a link is never served, which
  * is stricter than following one to a plain file, because a link is not something the listing
  * ever named.
  *
- * What this cannot see, because the file system does not report it: a segment that is a mount
- * point rather than a link, and a link put in place between this walk and the read that follows.
+ * Checking a name and then reading it are two resolutions of that name, and a segment that is a
+ * plain directory when it is checked can be a link somewhere else by the time the next segment
+ * is: the file system reports neither reading to the other. So where the platform allows it each
+ * step is taken *inside the descriptor of the directory the step before it found*
+ * (`/proc/self/fd/<fd>/<name>`), which is the directory itself and not a name anything can be
+ * swapped under — a segment replaced by a link between two steps is refused, and the leaf is read
+ * through the descriptor its type and size were read from. Node cannot name the child of an open
+ * directory on a platform without `/proc/self/fd`; there the steps are named by path and checked
+ * with `lstat`, and a name replaced by a link between two of them is followed. That window is
+ * what is left, and it takes a concurrent local writer to enter it: a peer asking for a path
+ * cannot, and a writer that can already has this host's own file access, so what it exposes is
+ * the peer rather than the host.
+ *
+ * What is not closed on any platform: a segment that is a *mount point* rather than a link. The
+ * file system reports it as a directory, `realpath` answers with a path inside the folder for it,
+ * and only a comparison of the file systems' identities (`st_dev`) at each step would see it. It
+ * takes `CAP_SYS_ADMIN` to plant, and the VS Code client serves it too.
  */
 export async function readGrantedFile(root: string, path: string): Promise<string | undefined> {
   if (!isGrantedPath(path)) {
     return undefined;
   }
   const segments = path.split('/');
+  const leaf = segments.pop();
+  if (leaf === undefined) {
+    return undefined;
+  }
+  if (!PINNED_STEPS) {
+    const directory = await walkToDirectory(root, segments);
+    return directory === undefined ? undefined : await readLeaf(join(directory, leaf));
+  }
+  const directory = await openToDirectory(root, segments);
+  if (directory === undefined) {
+    return undefined;
+  }
+  try {
+    return await readLeaf(inside(directory, leaf));
+  } finally {
+    await directory.close().catch(() => undefined);
+  }
+}
+
+/** A name inside a directory that is already open: `/proc/self/fd/<fd>` is that directory. */
+function inside(directory: FileHandle, name: string): string {
+  return join('/proc/self/fd', String(directory.fd), name);
+}
+
+/**
+ * The directory the path's segments name, opened one step at a time — `undefined` when a step is
+ * not a plain directory of the folder. Every step after the folder is resolved inside the
+ * descriptor of the one before it, so the names walked through are not resolved a second time.
+ */
+async function openToDirectory(
+  root: string,
+  segments: readonly string[],
+): Promise<FileHandle | undefined> {
+  const folder = await open(root, FOLDER).catch(() => undefined);
+  if (folder === undefined) {
+    return undefined;
+  }
+  let directory = folder;
+  for (const segment of segments) {
+    const next = await open(inside(directory, segment), STEP).catch(() => undefined);
+    await directory.close().catch(() => undefined);
+    if (next === undefined) {
+      return undefined;
+    }
+    directory = next;
+  }
+  return directory;
+}
+
+/**
+ * The same walk by name, for a platform that cannot address a directory that is already open:
+ * every step has to be a plain directory of the folder, but the check and the resolution of the
+ * step after it are two readings of one name — see `readGrantedFile`.
+ */
+async function walkToDirectory(
+  root: string,
+  segments: readonly string[],
+): Promise<string | undefined> {
   let head = root;
-  for (const segment of segments.slice(0, -1)) {
+  for (const segment of segments) {
     head = join(head, segment);
     const info = await lstat(head).catch(() => undefined);
     if (info === undefined || !info.isDirectory()) {
       return undefined;
     }
   }
-  const leaf = join(head, segments[segments.length - 1] as string);
-  if (!(await isShareableFile(leaf))) {
+  return head;
+}
+
+/**
+ * A leaf's text, or `undefined` when it is not a plain file of the size a session carries.
+ *
+ * The bytes come from the descriptor the type and the size were read from, so the name it was
+ * opened under cannot be moved to something else in between. `isShareableFile` is the same rule
+ * one step earlier, and on a platform without `O_NOFOLLOW` it is what refuses a link here.
+ */
+async function readLeaf(name: string): Promise<string | undefined> {
+  if (!(await isShareableFile(name))) {
     return undefined;
   }
-  const bytes = await readFile(leaf).catch(() => undefined);
-  return bytes === undefined ? undefined : decodableText(bytes);
+  const handle = await open(name, LEAF).catch(() => undefined);
+  if (handle === undefined) {
+    return undefined;
+  }
+  try {
+    const info = await handle.stat().catch(() => undefined);
+    if (info === undefined || !info.isFile() || info.size > MAX_GRANT_FILE_BYTES) {
+      return undefined;
+    }
+    const bytes = await handle.readFile().catch(() => undefined);
+    return bytes === undefined ? undefined : decodableText(bytes);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 /**
