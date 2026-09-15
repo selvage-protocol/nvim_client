@@ -423,9 +423,10 @@ export class Companion {
       report: { kind: 'documents', documents: session.documents },
     });
     this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
-    // The room's shape is the host's to publish, and it is read off the working copy once, when
-    // the session starts: the folder the session was started in is the grant, and a later change
-    // to which buffers are open is not a statement about the folder.
+    // The room's shape is the host's to publish: the folder the session was started in is the
+    // grant, read off the working copy as the session starts and read again whenever the folder
+    // changes under it — a later change to which buffers are open is not a statement about the
+    // folder, and neither is anything outside it.
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
       this.publishGrant(root);
