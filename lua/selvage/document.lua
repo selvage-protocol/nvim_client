@@ -278,6 +278,15 @@ function Document:on_bytes(
     text = table.concat(parts, '\n')
   end
 
+  -- The row past the last line and the end of the document are one place to a buffer, which
+  -- always ends in a newline and cannot lose it. A change that reaches that row removed the
+  -- newline, so the text it deleted ends before it — unless the change brings a newline of its
+  -- own, or the text before it already ends at a line boundary.
+  local keeps_final_newline = text:find('\n$') ~= nil or (start_col == 0 and start_row > 0)
+  if old_end_row >= #self.lines and not keeps_final_newline then
+    to = math.min(to, self:prefix(#self.lines) - 1)
+  end
+
   self:reshadow(start_row, old_end_row, rows)
   self.version = self.version + 1
   self.send({ type = 'change', path = self.path, start = from, ['end'] = to, text = text })
