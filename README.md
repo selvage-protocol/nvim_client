@@ -254,10 +254,12 @@ Three things the mirror does not do, all deliberately:
   all: the editor writes the file itself and the session is not told. `:noautocmd write` by hand is
   the same. The text is in the room all the same, because a guest's changes travel as they are
   typed; what is skipped is the save this client would have sent, and the write is the editor's
-  rather than this client's. Nothing closes it without costing more than it is worth: the two
-  buffer options that make Neovim refuse a write (`'buftype'` set to `acwrite`, `'readonly'`) also
-  stop a language server from attaching to the buffer and stop Neovim noticing that a tool changed
-  the file underneath it.
+  rather than this client's. Nothing closes it without costing more than it is worth: `'buftype'`
+  set to `acwrite`, which is what makes the editor refuse the write, also means the buffer is "not
+  related to a file", so Neovim's own configuration does not attach a language server to it and
+  Neovim stops noticing that a tool changed the file underneath it; and `'readonly'` refuses the
+  plain `:w` this client routes, before any autocommand is chosen, so a person would have to type
+  `:w!`.
 - **A buffer that has drifted from the room.** A routed save writes the buffer, which is what a
   person pressing `:w` expects, so a buffer holding text the room has not accepted — an edit the
   editor refused to apply, a session that ended — can put that text into the file. The room's copy
