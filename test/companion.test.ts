@@ -61,7 +61,12 @@ function harness(
   role: 'host' | 'guest' = 'host',
   documents: string[] = [],
   peers: PeerInfo[] = [],
-  options: { defaultAutoSave?: boolean; granted?: string[]; grantError?: Error } = {},
+  options: {
+    defaultAutoSave?: boolean;
+    granted?: string[];
+    grantError?: Error;
+    enumerate?: (root: string) => Promise<string[]>;
+  } = {},
 ): Harness {
   const sent: Notification[] = [];
   const send = (notification: Notification): void => {
@@ -82,6 +87,7 @@ function harness(
     send,
     editor,
     autoSave: options.defaultAutoSave ?? false,
+    enumerate: options.enumerate,
     engines: {
       host: (serverUrl) => {
         hosts.push(serverUrl);
@@ -1167,6 +1173,47 @@ test('a folder a session has left is not published by the next one', async (t) =
   tree(shared, 'later.txt');
   await delay(QUIET_MS);
   assert.deepEqual(session.grants, [['b.txt']], 'a folder a session has left was published');
+});
+
+test('a reading that finishes after a later one does not publish', async (t) => {
+  const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
+
+  // A real walk of a folder this size takes a few milliseconds and never overlaps itself, which is
+  // exactly why the guard needs a walk the test holds open: the two readings have to be in flight
+  // at once for the one that started first to be able to finish last.
+  const readings: Array<(paths: string[]) => void> = [];
+  const it = harness('host', [], [], {
+    enumerate: () =>
+      new Promise((resolve) => {
+        readings.push(resolve);
+      }),
+  });
+
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until('the first reading of the folder to start', () => readings.length === 1, () => readings.length);
+
+  // A change while that reading is in flight: the window passes, the timer fires, and the reading
+  // it starts is the one that finishes first — the folder as it is now.
+  tree(root, 'created.txt', 'made while hosting\n');
+  await until('a second reading to start', () => readings.length === 2, () => readings.length);
+  readings[1]?.(['created.txt', 'notes.txt']);
+  await until(
+    'the later reading to reach the room',
+    () => it.engine.grants.length === 1,
+    () => it.engine.grants,
+  );
+
+  // The reading that started first now finishes, with the folder as it was before the change. It
+  // is older than the one the room was given, and nothing would put the room right until the
+  // folder changed again.
+  readings[0]?.(['notes.txt']);
+  await delay(QUIET_MS);
+  assert.deepEqual(
+    it.engine.grants,
+    [['created.txt', 'notes.txt']],
+    'the reading that started first published the folder as it was',
+  );
 });
 
 test('a guest watches nothing and publishes no listing', async () => {

@@ -71,6 +71,12 @@ export interface CompanionOptions {
    */
   editor?: NvimEditorHost;
   engines?: EngineFactory;
+  /**
+   * How the shared folder is read. `enumerateGrant` in a real session; a test supplies one whose
+   * completion it decides, because a walk that outlasts the window a burst is gathered in is the
+   * only way to see two of them in flight at once.
+   */
+  enumerate?: (root: string) => Promise<string[]>;
   displayName?: string;
   /**
    * Whether a document the room changed is written, for a `host`/`join` that does not say.
@@ -83,6 +89,7 @@ export interface CompanionOptions {
 export class Companion {
   private readonly send: (notification: Notification) => void;
   private readonly engines: EngineFactory;
+  private readonly enumerate: (root: string) => Promise<string[]>;
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
   private readonly autoSave: boolean;
@@ -97,11 +104,17 @@ export class Companion {
   private grantRepublish?: NodeJS.Timeout;
   /** The listing last handed to the room, so a folder that has not changed publishes nothing. */
   private grantedListing?: string[];
+  /**
+   * How many readings of the shared folder have been started. A reading that is not the last one
+   * started has nothing to say: it read the folder before a later one did.
+   */
+  private grantReadings = 0;
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
     this.editor = options.editor ?? new NvimEditorHost({ send: this.send });
     this.engines = options.engines ?? realEngines;
+    this.enumerate = options.enumerate ?? enumerateGrant;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
   }
@@ -512,10 +525,15 @@ export class Companion {
     if (engine === undefined) {
       return;
     }
+    // Which reading this is. A walk of a large tree outlasts the window a burst is gathered in —
+    // the 20 000-node bound measured ~390 ms against a 250 ms window — so an event during a walk
+    // starts a second one, and the two can finish in the order opposite to the one they started
+    // in. The last reading started is the only one whose answer is the folder's current shape.
+    const reading = ++this.grantReadings;
     void (async () => {
       let paths: string[];
       try {
-        paths = await enumerateGrant(root);
+        paths = await this.enumerate(root);
       } catch (error: unknown) {
         if (this.engine === engine) {
           this.send({
@@ -527,6 +545,13 @@ export class Companion {
             },
           });
         }
+        return;
+      }
+      // A reading that started before a later one has nothing to say, however it finished first:
+      // the folder it read was replaced while the two were in flight, and publishing it would put
+      // the room back on a listing the reading after it had already replaced. The next change to
+      // the folder is what would put it right, and a room that is not changing is left wrong.
+      if (reading !== this.grantReadings) {
         return;
       }
       // A session that ended while the folder was being read has no room left to be told
