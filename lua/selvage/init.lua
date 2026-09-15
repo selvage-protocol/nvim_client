@@ -946,10 +946,8 @@ function M.set_display_name(name)
   vim.g.selvage_display_name = wanted
   if state.process ~= nil then
     state.process:send({ type = 'rename', displayName = wanted })
-    notify(('display name set to "%s"; the room is told, and this session goes on under it'):format(wanted))
-  else
-    notify(('display name set to "%s"; the next session will use it'):format(wanted))
   end
+  notify(('display name set to "%s"'):format(wanted))
 end
 
 return M

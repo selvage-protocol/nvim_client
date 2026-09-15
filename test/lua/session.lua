@@ -785,7 +785,7 @@ check(':SelvageDisplayName sets the configured name', vim.g.selvage_display_name
 local before_set = #notices
 vim.cmd('SelvageDisplayName Pat')
 check('  it says what it did', said_since(before_set, 'display name set to "Pat"') ~= nil, true)
-check('  and before a session says when it applies', said_since(before_set, 'the next session will use it') ~= nil, true)
+check('  and without protocol mechanics', said_since(before_set, 'room') == nil, true)
 local before_report = #notices
 vim.cmd('SelvageDisplayName')
 check('  and with no name reports the one in force', said_since(before_report, 'the name others see is "Pat"') ~= nil, true)
@@ -808,7 +808,7 @@ vim.cmd('SelvageDisplayName Second')
 check('  :SelvageDisplayName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
 check('  and sends the live rename', count_type('rename'), renames_before + 1)
 check('  naming the new name', last_of('rename') and last_of('rename').displayName, 'Second')
-check('  and says the room is told', said_since(before_live, 'the room is told') ~= nil, true)
+check('  and confirms the new name', said_since(before_live, 'display name set to "Second"') ~= nil, true)
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('the next session uses the changed name', last_of('host') and last_of('host').displayName, 'Second')
