@@ -140,7 +140,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Every file buffer opened under the folder the session was started in — the grant — joins the room too. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A host is refused: its own files are already in its buffer list. |
@@ -182,8 +182,12 @@ a guest's buffers have nowhere to write either way. Both are read when a session
 change to either applies to the next host or join. `vim.g.selvage_server_url` is the address
 `:SelvageHost` does not have to ask for.
 
-The working directory is the grant: a host shares the file buffers under it, and nothing above
-it. A guest's buffers are the room's, not files here — they have nowhere on disk to be written.
+The folder a session was started in is its grant: a host shares the file buffers under it, and
+nothing outside it. The grant is fixed for the session — a `:cd`, `:lcd` or `:tcd` afterwards
+moves where Neovim looks, not what the room can see — and a file outside it is named in a warning
+when it is opened, since Neovim has no workspace in the window to show the grant the way the other
+client does. A guest's buffers are the room's, not files here — they have nowhere on disk to be
+written.
 
 ## Requirements
 
