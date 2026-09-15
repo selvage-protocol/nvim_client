@@ -1041,6 +1041,47 @@ check('a connection the engine gave up on is reported', errors(), before_drop + 
 check('  and the session lets its documents go', #selvage.documents(), 0)
 check('  and it is no longer hosting', selvage.session().status, 'idle')
 
+-- -- the room's own comings and goings --------------------------------------------
+--
+-- Two more things the room says about itself: the host is back after a blip, and the room is
+-- gone. The second is the end of the session here as much as it is in the companion — the
+-- companion has let the engine go by the time this is read — so the documents, the marks and the
+-- status go with it, and the process stays for the next host or join.
+
+selvage.leave()
+vim.cmd('edit! ' .. path)
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-gone' })
+check('the session is live before the room goes', #selvage.documents(), 1)
+
+local before_attached = #notices
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+check('the host coming back is announced', said_since(before_attached, 'Ada is hosting again') ~= nil, true)
+check('  at information level', notices[#notices].level, vim.log.levels.INFO)
+
+local before_detached = #notices
+handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 30000 } })
+check(
+  'the host going is announced in seconds',
+  said_since(before_detached, 'it closes in 30s unless they come back') ~= nil,
+  true
+)
+check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+
+local before_gone = #notices
+handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+check(
+  'the room going is reported with its reason',
+  said_since(before_gone, 'the room is gone: host did not return') ~= nil,
+  true
+)
+check('  and the session ends with it', selvage.session().status, 'idle')
+check('  and its documents are let go', #selvage.documents(), 0)
+check('  and its peers with them', #selvage.peers(), 0)
+
 -- -- a buffer that is not valid UTF-8 -------------------------------------------
 --
 -- A Neovim buffer is bytes, and a file opened as Latin-1 holds bytes that no UTF-8 sequence
