@@ -16,27 +16,51 @@ import { FakeEngine } from './helpers/fake-engine.ts';
 
 interface Harness {
   companion: Companion;
-  engine: FakeEngine;
+  /** The replica in use: the last one a `host` or `join` opened. */
+  readonly engine: FakeEngine;
   sent: Notification[];
+  /** Every server a `host` was asked for, in order: a second entry is a second room. */
+  hosts: string[];
+  /** Every invite a `join` was asked for, in the same order. */
+  joins: string[];
   /** The `applyEdit`s asked for so far. */
   applies: Array<Extract<Notification, { type: 'applyEdit' }>>;
 }
 
 function harness(role: 'host' | 'guest' = 'host', documents: string[] = []): Harness {
-  const engine = new FakeEngine(role, documents);
   const sent: Notification[] = [];
+  const hosts: string[] = [];
+  const joins: string[] = [];
+  const engines: FakeEngine[] = [];
+  const open = (): FakeEngine => {
+    const engine = new FakeEngine(role, documents);
+    engines.push(engine);
+    return engine;
+  };
   const companion = new Companion({
     send: (notification) => sent.push(notification),
     autoSave: false,
     engines: {
-      host: () => Promise.resolve(engine),
-      join: () => Promise.resolve(engine),
+      host: (serverUrl) => {
+        hosts.push(serverUrl);
+        return Promise.resolve(open());
+      },
+      join: (invite) => {
+        joins.push(invite);
+        return Promise.resolve(open());
+      },
     },
   });
   return {
     companion,
-    engine,
     sent,
+    hosts,
+    joins,
+    get engine(): FakeEngine {
+      const engine = engines.at(-1);
+      assert.ok(engine !== undefined, 'no session was opened');
+      return engine;
+    },
     get applies() {
       return sent.filter(
         (notification): notification is Extract<Notification, { type: 'applyEdit' }> =>
@@ -148,12 +172,46 @@ test('hosting reports the invite and the room', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   const status = it.sent.filter((notification) => notification.type === 'status');
+  // A `host` opens a session; it does not end one first. Which session is given up is the
+  // front-end's to ask about — see "a second host is refused".
   assert.deepEqual(
     status.map((entry) => entry.state),
-    ['idle', 'connecting', 'hosting'],
+    ['connecting', 'hosting'],
   );
-  assert.equal(status[2]?.roomId, 'r-test');
-  assert.match(status[2]?.invite ?? '', /room=r-test&token=t-test/);
+  assert.equal(status[1]?.roomId, 'r-test');
+  assert.match(status[1]?.invite ?? '', /room=r-test&token=t-test/);
+});
+
+test('a second host is refused rather than minting a second room', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+  const before = it.sent.length;
+
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:elsewhere' });
+
+  assert.deepEqual(it.hosts, ['ws://127.0.0.1:0'], 'the room in hand is the only one opened');
+  assert.equal(it.engine.disconnected, false, 'and it is still open');
+  assert.equal(it.engine.text('notes.txt'), 'hello\n', 'with its documents where they were');
+  assert.deepEqual(
+    it.sent.slice(before),
+    [{ type: 'refused', what: 'host', roomId: 'r-test' }],
+    'the refusal names the room that stands, and says nothing else',
+  );
+});
+
+test('a join while a session is live is refused the same way', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  const before = it.sent.length;
+
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  assert.deepEqual(it.joins, []);
+  assert.equal(it.engine.disconnected, false);
+  assert.deepEqual(it.sent.slice(before), [
+    { type: 'refused', what: 'join', roomId: 'r-test' },
+  ]);
 });
 
 test('a joining client is told the room documents the handshake carried', async () => {

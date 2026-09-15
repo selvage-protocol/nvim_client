@@ -75,6 +75,12 @@ export type Notification =
       invite?: string;
       message?: string;
     }
+  /**
+   * A `host` or `join` this process did not carry out, because a session is live and ending
+   * it is the front-end's to ask about. The room named is the one still standing; nothing
+   * about it changed.
+   */
+  | { type: 'refused'; what: 'host' | 'join'; roomId: string }
   /** The bridge's own report, passed through unchanged; `kind` says which. */
   | { type: 'report'; report: unknown }
   /** The remote carets this replica can resolve, in buffer offsets. */
