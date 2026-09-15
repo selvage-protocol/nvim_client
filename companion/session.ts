@@ -9,9 +9,10 @@
 
 import { SessionBridge } from '../vendor/bridge/index.ts';
 import type { Engine, TextChange } from '../vendor/bridge/index.ts';
-import { SelvageEngine, isProtocolError } from '../vendor/engine/index.ts';
+import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
+import { enumerateGrant } from './grant.ts';
 import type { Notification, Request } from './ipc.ts';
 
 /** The engine, plus the members the lifecycle needs and the bridge does not. */
@@ -23,6 +24,8 @@ export interface CompanionEngine extends Engine {
    * — a name is not a document — so it is here, on the adapter's own extension of the seam.
    */
   rename(displayName: string): Promise<void>;
+  /** Publishes the room's grant: the host's listing of its working tree (§5). */
+  grant(paths: readonly string[]): Promise<void>;
   /**
    * The room's grant as this replica holds it. The listing is not a member of the join reply —
    * the server restates it in a `doc.granted` straight after `room.joined` — so a session read
@@ -394,11 +397,60 @@ export class Companion {
     // listing the replica already holds is read here — the way the other client reads it as its
     // session is built. A later change is the bridge's `grant` report.
     this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
-    // The folder this session shares is what the room's paths are read off, and it is the
-    // front-end that knows it: only a host has one, and a later change to where its user is
-    // looking is not a statement about the folder the session started in.
+    // The room's shape is the host's to publish, and it is read off the working copy once, when
+    // the session starts: the folder the session was started in is the grant, and a later change
+    // to which buffers are open is not a statement about the folder.
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
+      this.publishGrant(root);
     }
   }
+
+  /**
+   * Publishes the listing of the folder this session shares.
+   *
+   * A server that does not know `doc.grant` answers `unknown_method`, which means it has no
+   * grant rather than that anything failed: the session goes on and the room falls back to its
+   * open-document set. Any other refusal is reported and also changes nothing.
+   */
+  private publishGrant(root: string): void {
+    const engine = this.engine;
+    if (engine === undefined) {
+      return;
+    }
+    void (async () => {
+      let paths: string[];
+      try {
+        paths = await enumerateGrant(root);
+      } catch (error: unknown) {
+        this.send({
+          type: 'report',
+          report: {
+            kind: 'sessionError',
+            code: 'error',
+            message: `could not read the folder this session shares: ${describe(error)}`,
+          },
+        });
+        return;
+      }
+      await engine.grant(paths).catch((error: unknown) => {
+        if (isProtocolError(error, errCode.unknownMethod)) {
+          return;
+        }
+        this.send({
+          type: 'report',
+          report: {
+            kind: 'sessionError',
+            code: isProtocolError(error) ? error.code : 'error',
+            message: `the server refused the listing of the folder this session shares: ${describe(error)}`,
+          },
+        });
+      });
+    })();
+  }
+}
+
+/** A failure as a sentence: the message of an Error, or whatever was thrown instead. */
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

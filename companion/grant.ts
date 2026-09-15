@@ -3,9 +3,9 @@
  *
  * Everything decidable about a listing — which paths it may name, in what order it is written —
  * is in `vendor/bridge/grant.ts`, because both clients have to agree on it. What is left here is
- * this adapter's half: resolving a room path back to the file it names, over Node's own file
- * system. It is the counterpart of `vscode_client`'s `src/adapter/grant.ts`, which does the same
- * over `vscode.workspace.fs`.
+ * this adapter's half: walking a real directory tree with Node's own file system, and resolving a
+ * room path back to the file it names. It is the counterpart of `vscode_client`'s
+ * `src/adapter/grant.ts`, which does the same over `vscode.workspace.fs`.
  *
  * Resolving a path a *peer* named is the only place a host reads its disk because someone else
  * asked rather than because the user acted, so nothing the path says is trusted: it is held to
@@ -13,10 +13,86 @@
  * shared folder rather than a symbolic link out of it.
  */
 
-import { lstat, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { MAX_GRANT_FILE_BYTES, isGrantedPath } from '../vendor/bridge/index.ts';
+import {
+  MAX_GRANT_FILE_BYTES,
+  MAX_GRANT_PATHS,
+  isGrantedPath,
+  sortGrant,
+} from '../vendor/bridge/index.ts';
+
+/**
+ * How many entries a walk will look at before it stops. The path count is the listing's own
+ * bound; this is the one that keeps a directory tree with a hundred thousand entries in it from
+ * costing a hundred thousand stats before the first path is ever published.
+ */
+export const MAX_GRANT_NODES = 20_000;
+
+/**
+ * The listing of a folder as the file system held it when the walk ran: files only, ascending by
+ * UTF-16 code unit.
+ *
+ * The count is a bound and not an error: a tree larger than it produces a truncated listing,
+ * which is a project view missing some names rather than a wedged session. Each directory's
+ * entries are visited in name order — the same code-unit order the listing is written in — so
+ * which paths survive the truncation does not depend on the file system's own order.
+ */
+export async function enumerateGrant(root: string): Promise<string[]> {
+  const paths: string[] = [];
+  const budget = { nodes: MAX_GRANT_NODES };
+  await walk(root, '', paths, budget);
+  return sortGrant(paths);
+}
+
+async function walk(
+  dir: string,
+  relative: string,
+  out: string[],
+  budget: { nodes: number },
+): Promise<void> {
+  if (out.length >= MAX_GRANT_PATHS || budget.nodes <= 0) {
+    return;
+  }
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    // A directory that cannot be listed is one this host cannot share; it is not a fault the
+    // session should hear about, because the grant is a listing and not a promise.
+    return;
+  }
+  entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+  for (const entry of entries) {
+    if (out.length >= MAX_GRANT_PATHS || budget.nodes <= 0) {
+      return;
+    }
+    budget.nodes -= 1;
+    const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
+    if (!isGrantedPath(child)) {
+      continue;
+    }
+    // A symbolic link is neither a file this host can vouch for nor one it should follow,
+    // because it can point anywhere, including out of the folder being shared. Nothing behind a
+    // link is listed, and nothing behind it is descended into.
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      await walk(join(dir, entry.name), child, out, budget);
+      continue;
+    }
+    // A listing carries files and never directories.
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (await isShareableFile(join(dir, entry.name))) {
+      out.push(child);
+    }
+  }
+}
 
 /** A regular file small enough for one `Y.Text`, which is all a document can be. */
 async function isShareableFile(absolute: string): Promise<boolean> {

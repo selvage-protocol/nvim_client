@@ -19,8 +19,12 @@ export class FakeEngine implements CompanionEngine {
   readonly opened: string[] = [];
   readonly closed: string[] = [];
   readonly renamed: string[] = [];
+  /** Every listing this connection published, in order: `grant` is a snapshot and not a delta. */
+  readonly grants: string[][] = [];
   /** What this replica holds of the room's grant, as a `doc.granted` would have left it. */
   granted: string[] = [];
+  /** When set, the next `grant` rejects with it — the way a refused listing reaches a caller. */
+  grantError: Error | undefined;
   /** When set, the next `rename` rejects with it — the way a refused name reaches a caller. */
   renameError: Error | undefined;
   readonly selections: Array<{ path: string; selection: OffsetSelection }> = [];
@@ -115,6 +119,13 @@ export class FakeEngine implements CompanionEngine {
     this.renamed.push(displayName);
     const error = this.renameError;
     this.renameError = undefined;
+    return error === undefined ? Promise.resolve() : Promise.reject(error);
+  }
+
+  grant(paths: readonly string[]): Promise<void> {
+    this.grants.push([...paths]);
+    const error = this.grantError;
+    this.grantError = undefined;
     return error === undefined ? Promise.resolve() : Promise.reject(error);
   }
 
