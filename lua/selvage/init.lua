@@ -949,6 +949,19 @@ function M.fetch(path)
     return
   end
   local pending = {}
+  local opening = 0
+  for _, target in ipairs(targets) do
+    if state.documents[target] == nil then
+      opening = opening + 1
+    end
+  end
+  if opening > 0 then
+    -- A fetch is a hold: every path it takes joins the room's open-document set, so every peer
+    -- receives it and, with a mirror, materialises it. Said before it happens, because a fetch of
+    -- a whole listing is a whole project published and the sentence after it is too late to be a
+    -- choice (`DESIGN.md` §4.2).
+    notify(('fetching %d files opens them in the room, so every peer receives them'):format(opening))
+  end
   for _, target in ipairs(targets) do
     pending[target] = true
     local document = state.documents[target]

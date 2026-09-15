@@ -89,6 +89,21 @@ local function said_since(from, needle)
   return nil
 end
 
+--- Where in `notices` the first notice since `from` holding `needle` is, which is what says one
+--- notice came before another rather than only that both were said.
+---
+--- @param from integer
+--- @param needle string
+--- @return integer|nil
+local function notice_at(from, needle)
+  for index = from + 1, #notices do
+    if notices[index].message:find(needle, 1, true) ~= nil then
+      return index
+    end
+  end
+  return nil
+end
+
 --- The content a file holds, which is the only thing a tool that reads the mirror sees.
 local function read(path)
   local ok, lines = pcall(vim.fn.readfile, path)
@@ -581,6 +596,13 @@ selvage.fetch()
 check('a fetch of nothing fetches the whole listing', read(root .. '/README.md'), 'readme\n')
 check('  and says how many', said_since(before, 'fetched 4 of 4 files') ~= nil, true)
 check('  and every file it names is held in the room', #selvage.documents(), 4)
+local opened_at = notice_at(before, 'opens them in the room, so every peer receives them')
+local fetched_at = notice_at(before, 'fetched 4 of 4 files')
+check(
+  '  and said it would open them in the room before it did',
+  opened_at ~= nil and fetched_at ~= nil and opened_at < fetched_at,
+  true
+)
 
 -- A path the mirror already holds is answered at once rather than fetched again: the fast path
 -- is the file itself, so nothing is written and the timestamp the fetch before it left stands.
@@ -593,6 +615,11 @@ vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('README.md')
 check('a path fetched already answers without waiting', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
 check('  and is not written again', uv.fs_stat(already).mtime.sec, 1000)
+check(
+  '  and says nothing about opening what the room already holds',
+  notice_at(before, 'opens them in the room'),
+  nil
+)
 vim.g.selvage_fetch_timeout_ms = nil
 
 -- The room answers a beat later, the way a real one does: the open is a round trip, and the text
