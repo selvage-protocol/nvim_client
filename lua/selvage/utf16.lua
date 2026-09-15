@@ -49,4 +49,53 @@ function M.to_byte(s, units)
   return vim.str_byteindex(s, units, true)
 end
 
+--- Whether `s` is well-formed UTF-8.
+---
+--- A Neovim buffer is a byte array — the encoding of the file it was read from is not this
+--- process's to assume — so a buffer opened as Latin-1 holds bytes that are not UTF-8. The
+--- companion decodes its stdin as UTF-8, so such a byte reaches the room as U+FFFD: the
+--- document quietly loses it. What cannot be carried is refused instead, and this is what says
+--- which texts those are.
+---
+--- The walk is RFC 3629: a lead byte names the sequence's length, its continuation bytes follow
+--- in 0x80-0xBF, and the forms that are not characters — an overlong encoding, a surrogate,
+--- anything past U+10FFFF — do not pass.
+function M.valid(s)
+  local index = 1
+  local length = #s
+  while index <= length do
+    local lead = s:byte(index)
+    local size, minimum, code
+    if lead < 0x80 then
+      size, minimum, code = 1, 0, lead
+    elseif lead >= 0xc2 and lead <= 0xdf then
+      -- 0xc0 and 0xc1 are left out: a two-byte sequence for a code point under 0x80 is an
+      -- overlong, and they can make nothing else.
+      size, minimum, code = 2, 0x80, lead - 0xc0
+    elseif lead >= 0xe0 and lead <= 0xef then
+      size, minimum, code = 3, 0x800, lead - 0xe0
+    elseif lead >= 0xf0 and lead <= 0xf4 then
+      size, minimum, code = 4, 0x10000, lead - 0xf0
+    else
+      -- A continuation byte where a lead belongs, or the five- and six-byte forms.
+      return false
+    end
+    if index + size - 1 > length then
+      return false
+    end
+    for offset = 1, size - 1 do
+      local byte = s:byte(index + offset)
+      if byte < 0x80 or byte > 0xbf then
+        return false
+      end
+      code = code * 0x40 + byte - 0x80
+    end
+    if code < minimum or code > 0x10ffff or (code >= 0xd800 and code <= 0xdfff) then
+      return false
+    end
+    index = index + size
+  end
+  return true
+end
+
 return M

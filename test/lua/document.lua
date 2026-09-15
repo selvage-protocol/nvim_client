@@ -10,6 +10,7 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 
 local Document = require('selvage.document')
+local utf16 = require('selvage.utf16')
 
 local failures = 0
 
@@ -263,5 +264,27 @@ if ratio >= 3 then
 end
 check('a whole-buffer change scales about linearly', ratio < 3, true)
 
+-- -- UTF-8 validity --------------------------------------------------------------
+--
+-- The companion decodes its stdin as UTF-8, so the front-end has to know which texts it can
+-- carry: a byte a UTF-8 sequence cannot hold would arrive as U+FFFD and the document would
+-- quietly lose it. `share` refuses such a buffer rather than sending it, and this is what it
+-- asks.
+
+check('ASCII is valid UTF-8', utf16.valid('hello\n'), true)
+check('a two-byte character is', utf16.valid('café'), true)
+check('an astral character is', utf16.valid('😀'), true)
+check('  as the buffer holds it, in four bytes', utf16.valid('\xf0\x9f\x98\x80'), true)
+check('a lone Latin-1 byte is not', utf16.valid('caf\xe9'), false)
+check('a truncated sequence is not', utf16.valid('\xe9\x80'), false)
+check('  nor a lead byte with no continuation', utf16.valid('caf\xc3'), false)
+check('an overlong encoding is not', utf16.valid('\xc0\xaf'), false)
+check('  nor a three-byte one', utf16.valid('\xe0\x80\xaf'), false)
+check('a surrogate is not', utf16.valid('\xed\xa0\x80'), false)
+check('a code point past U+10FFFF is not', utf16.valid('\xf4\x90\x80\x80'), false)
+check('  and the last one is', utf16.valid('\xf4\x8f\xbf\xbf'), true)
+check('a continuation byte on its own is not', utf16.valid('\x80'), false)
+check('an empty string is', utf16.valid(''), true)
+check('  and so is the empty line a buffer always has', utf16.valid('\n'), true)
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
