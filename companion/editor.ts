@@ -65,9 +65,12 @@ interface Offered extends Pending {
 
 /**
  * How many times a refused range is moved and offered again before the refusal is passed on.
- * Each offer is one IPC round trip, and a user who keeps typing while a peer's edit is in
- * flight moves the range rather than reaching the bound: it is reached only by an editor that
- * refuses every range it is handed.
+ * Each offer is one IPC round trip. A front-end that refuses without moving the buffer is
+ * handed back after one offer, and so is one whose range a local change straddles; the bound is
+ * reached only by a buffer that keeps moving under the range, because each movement is what
+ * buys the next offer — which is what a user typing through the window supplies. When it is
+ * reached the refusal goes to the bridge with the local edit still in the mirror, and the
+ * bridge reports the difference before reconciling that text away.
  */
 const MAX_REBASED_OFFERS = 3;
 
@@ -170,8 +173,10 @@ export class NvimEditorHost implements EditorHost {
    * user's keystroke would be dropped rather than merged with the peer's.
    *
    * A refusal with no local change behind it — a range that no longer fits for a reason this
-   * side cannot see — is passed on unchanged, as is a range whose local changes overlap it: for
-   * those there is no position to move it to, and the bridge's own retry is the honest answer.
+   * side cannot see — is passed on unchanged, as the bridge's bounded retry and its
+   * `applyRefused` report are for. A range whose local changes overlap it is passed on too:
+   * there is no position to move it to, and the bridge reconciles the deferred text away and
+   * reports the difference rather than dropping the keystroke in silence.
    */
   settleApply(id: number, ok: boolean): void {
     const pending = this.applies.get(id);
