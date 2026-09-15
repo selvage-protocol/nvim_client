@@ -387,6 +387,17 @@ export class Companion {
       roomId: session.roomId,
       ...(invite === undefined ? {} : { invite }),
     });
+    // The room's grant is a fact of that handshake too, and it is not a member of the join reply:
+    // the server restates it in a `doc.granted` straight after `room.joined`, and only when the
+    // room grants something. The bridge was not listening when that arrived, so the listing the
+    // replica already holds is read here — the way the other client reads it as its session is
+    // built. A later change is the bridge's `grant` report.
+    //
+    // It is sent *before* the documents, and the order is the front-end's to rely on: a guest
+    // materialises the listing as a directory and names a document's buffer after the file it
+    // was materialised at, so the listing has to be in front of the front-end before the first
+    // document is opened. Both are sent in one turn, so nothing is waiting on the wire.
+    this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
     // The room's open-document set at the moment of joining arrives in the handshake rather
     // than as an event, so a guest would otherwise hear about the room's documents only if
     // one changed after it arrived. The peers are the same fact about the same handshake: the
@@ -396,12 +407,6 @@ export class Companion {
       report: { kind: 'documents', documents: session.documents },
     });
     this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
-    // The room's grant is the third fact of that handshake, and it is not a member of the join
-    // reply: the server restates it in a `doc.granted` straight after `room.joined`, and only
-    // when the room grants something. The bridge was not listening when that arrived, so the
-    // listing the replica already holds is read here — the way the other client reads it as its
-    // session is built. A later change is the bridge's `grant` report.
-    this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
     // The room's shape is the host's to publish, and it is read off the working copy once, when
     // the session starts: the folder the session was started in is the grant, and a later change
     // to which buffers are open is not a statement about the folder.

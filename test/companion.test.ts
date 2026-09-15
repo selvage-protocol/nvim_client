@@ -266,10 +266,9 @@ test("a joining client is told the room's peers the handshake carried", async ()
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
   const reports = it.sent
     .filter((notification) => notification.type === 'report')
-    .map((notification) => notification.report);
-  assert.deepEqual(reports[0], { kind: 'documents', documents: ['notes.txt'] });
+    .map((notification) => notification.report as { kind: string });
   assert.deepEqual(
-    reports[1],
+    reports.find((report) => report.kind === 'peers'),
     { kind: 'peers', peers },
     'who is in the room arrives with the rest of the handshake, not only when someone moves',
   );
@@ -365,8 +364,13 @@ async function until(
 test('a joining client is told the room documents the handshake carried', async () => {
   const it = harness('guest', ['notes.txt']);
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
-  const reports = it.sent.filter((notification) => notification.type === 'report');
-  assert.deepEqual(reports[0]?.report, { kind: 'documents', documents: ['notes.txt'] });
+  const reports = it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report as { kind: string });
+  assert.deepEqual(
+    reports.find((report) => report.kind === 'documents'),
+    { kind: 'documents', documents: ['notes.txt'] },
+  );
 });
 
 test("a joining client is told the room's grant the handshake carried", async () => {
@@ -375,11 +379,14 @@ test("a joining client is told the room's grant the handshake carried", async ()
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
 
   const reports = it.sent.filter((notification) => notification.type === 'report');
+  // The grant comes first, and the order is the front-end's to rely on: a guest materialises the
+  // listing as a directory and names a document's buffer after the file it was materialised at, so
+  // the listing has to be in front of the front-end before the first document is opened.
   assert.deepEqual(
     reports.map((notification) => (notification.report as { kind: string }).kind),
-    ['documents', 'peers', 'grant'],
+    ['grant', 'documents', 'peers'],
   );
-  assert.deepEqual(reports[2]?.report, {
+  assert.deepEqual(reports[0]?.report, {
     kind: 'grant',
     paths: ['src/main.rs', 'notes.txt'],
   });
