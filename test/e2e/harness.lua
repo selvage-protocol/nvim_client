@@ -57,6 +57,12 @@ function M.setup(role)
   M.granted_path = required('SELVAGE_E2E_GRANTED_PATH')
   M.granted_text = required('SELVAGE_E2E_GRANTED_TEXT')
   M.granted_done_file = required('SELVAGE_E2E_GRANTED_DONE_FILE')
+  -- The listing's own phase: the host creates one path and deletes another while the session is
+  -- hosted, and the guest writes this file once both have reached its listing and its mirror.
+  M.created_path = required('SELVAGE_E2E_CREATED_PATH')
+  M.created_text = required('SELVAGE_E2E_CREATED_TEXT')
+  M.removed_path = required('SELVAGE_E2E_REMOVED_PATH')
+  M.watch_done_file = required('SELVAGE_E2E_WATCH_DONE_FILE')
   M.control_file = M.env.optional('SELVAGE_E2E_CONTROL_FILE')
   M.deadline_ms = tonumber(M.env.optional('SELVAGE_E2E_DEADLINE_MS') or '20000')
   M.reconnect_deadline_ms = tonumber(M.env.optional('SELVAGE_E2E_RECONNECT_DEADLINE_MS') or '40000')

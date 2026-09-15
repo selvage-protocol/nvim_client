@@ -105,6 +105,33 @@ harness.record('mirror', harness.read_file(harness.granted_path))
 harness.ack('mirror')
 harness.log('this window\'s file holds', vim.inspect(harness.read_file(harness.granted_path)))
 
+-- -- the folder changes under the session -------------------------------------------------
+--
+-- A host shares a folder and not a snapshot of it: the companion watches the folder while the
+-- session is hosted and publishes the room's listing again when it changes. This window creates a
+-- file under that folder and deletes another, and the guest's half of the proof is that the room
+-- took both — the path that appeared is a file it can open, and the path that went is a file its
+-- mirror drops.
+--
+-- The directory the file is created in existed before the session started, so what the watcher
+-- has to see is a file arriving, and the file that is deleted was in the listing from the join:
+-- the guest has already mirrored it, which is what makes its removal the thing being proved.
+vim.fn.writefile({ (harness.created_text:gsub('\n$', '')) }, harness.created_path)
+vim.fn.delete(harness.removed_path)
+harness.log('created', harness.created_path, 'and deleted', harness.removed_path)
+
+harness.wait_for_file(
+  'the guest to report the room took the change',
+  harness.deadline_ms + 15000,
+  harness.watch_done_file
+)
+harness.record('watch', harness.file_text(harness.created_path), {
+  createdFileIs = harness.file_text(harness.created_path),
+  removedFileGone = harness.file_text(harness.removed_path) == nil,
+})
+harness.ack('watch')
+harness.log('the folder changed and the guest followed it')
+
 if harness.control_file ~= nil then
   harness.wait_for_file(
     'the orchestrator to signal the network blip is over',

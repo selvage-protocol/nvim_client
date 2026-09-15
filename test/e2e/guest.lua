@@ -226,6 +226,15 @@ if harness.file_text(mirrored_granted) ~= '' then
 end
 harness.log("the mirror holds the room's shape, and", harness.granted_path, 'is empty in it')
 
+-- The path the host will delete while the session is hosted is mirrored now, so that its removal
+-- below is about the listing losing a path rather than about a file that was never there.
+local mirrored_removed = mirror .. '/' .. harness.removed_path
+harness.wait('the path the host will delete to be materialised', harness.deadline_ms, function()
+  return vim.fn.filereadable(mirrored_removed) == 1
+end, function()
+  return 'the mirror holds ' .. vim.inspect(vim.fn.glob(mirror .. '/*', false, true))
+end)
+
 selvage.open(harness.granted_path)
 harness.wait('the granted path to open in the window', harness.deadline_ms, function()
   return vim.fn.bufname('%') == harness.buffer_name(harness.granted_path)
@@ -306,6 +315,62 @@ harness.record('mirror', harness.file_text(mirrored_granted), {
 })
 harness.write_file(harness.mirror_done_file, 'go')
 harness.wait_ack('mirror', harness.deadline_ms)
+
+-- -- the room's listing changes under the session ------------------------------------------
+--
+-- The host creates a file under the folder it shares and deletes another. Both are changes to
+-- the room's listing, and a guest follows it: the path that appeared is offered, is a file in the
+-- mirror, and opens in this window with the host's own text in it — text only the host's working
+-- copy can have supplied. The path that went leaves the listing and the mirror, and takes the
+-- directory that became empty with it.
+harness.wait('the room to list the path the host created', harness.deadline_ms, function()
+  return vim.tbl_contains(selvage.fetchable(), harness.created_path)
+end, function()
+  return 'listed ' .. vim.inspect(selvage.fetchable())
+end)
+
+local mirrored_created = mirror .. '/' .. harness.created_path
+harness.wait('the created path to be materialised in the mirror', harness.deadline_ms, function()
+  return vim.fn.filereadable(mirrored_created) == 1
+end, function()
+  return 'the mirror holds ' .. vim.inspect(vim.fn.glob(mirror .. '/*', false, true))
+end)
+selvage.open(harness.created_path)
+harness.wait('the created path to open in the window', harness.deadline_ms, function()
+  return vim.fn.bufname('%') == harness.buffer_name(harness.created_path)
+end, function()
+  return 'the window holds ' .. vim.inspect(vim.fn.bufname('%'))
+end)
+harness.wait("the host's text for the created path to arrive", harness.deadline_ms, function()
+  return harness.text_of(harness.created_path) == harness.created_text
+end, function()
+  return vim.inspect(harness.text_of(harness.created_path))
+end)
+harness.wait("the save that follows it to write the mirror's file", harness.deadline_ms, function()
+  return harness.file_text(mirrored_created) == harness.created_text
+end, function()
+  return vim.inspect(harness.file_text(mirrored_created))
+end)
+harness.wait('the deleted path to leave the listing', harness.deadline_ms, function()
+  return not vim.tbl_contains(selvage.fetchable(), harness.removed_path)
+end, function()
+  return 'listed ' .. vim.inspect(selvage.fetchable())
+end)
+harness.wait('the deleted path to go from the mirror', harness.deadline_ms, function()
+  return harness.file_text(mirrored_removed) == nil
+end, function()
+  return vim.inspect(harness.file_text(mirrored_removed))
+end)
+harness.log('the created path reads', vim.inspect(harness.text_of(harness.created_path)))
+
+harness.record('watch', harness.text_of(harness.created_path), {
+  mirrorHoldsCreated = harness.file_text(mirrored_created) == harness.created_text,
+  listingNamesCreated = vim.tbl_contains(selvage.fetchable(), harness.created_path),
+  mirrorHoldsRemoved = harness.file_text(mirrored_removed) ~= nil,
+  listingNamesRemoved = vim.tbl_contains(selvage.fetchable(), harness.removed_path),
+})
+harness.write_file(harness.watch_done_file, 'go')
+harness.wait_ack('watch', harness.deadline_ms)
 
 -- The host says the marker has landed in its own copy of the file. The guest cannot leave before
 -- it has: this window's edit is a message still on its way to the room, and a process that exits
