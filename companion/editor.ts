@@ -22,6 +22,7 @@ import type {
 } from '../vendor/bridge/index.ts';
 import { applyChange } from '../vendor/bridge/index.ts';
 
+import { readGrantedFile } from './grant.ts';
 import type { Notification } from './ipc.ts';
 
 interface Document {
@@ -109,9 +110,24 @@ export class NvimEditorHost implements EditorHost {
   private readonly saves = new Map<number, Pending>();
   private nextId = 0;
   private readonly emit: (notification: Notification) => void;
+  /**
+   * The folder this session shares, or `undefined` when there is none: the root the grant's
+   * paths are relative to, and the bound every path a peer names is held inside.
+   */
+  private folder: string | undefined;
 
   constructor(options: NvimEditorHostOptions) {
     this.emit = options.send;
+  }
+
+  /**
+   * Points the host at the folder a session was started in, or at nothing when it ends.
+   *
+   * It is the front-end's to say: only the editor knows where its user is, and this process's
+   * own working directory is the plugin checkout it was started from.
+   */
+  sharedFolder(root: string | undefined): void {
+    this.folder = root;
   }
 
   // -- from the front-end ----------------------------------------------------
@@ -201,6 +217,7 @@ export class NvimEditorHost implements EditorHost {
   /** Forgets every document and fails every outstanding request: the session is over. */
   reset(): void {
     this.documents.clear();
+    this.folder = undefined;
     this.abandon();
   }
 
@@ -267,6 +284,22 @@ export class NvimEditorHost implements EditorHost {
       this.saves.set(id, { resolve });
       this.emit({ type: 'save', id, path });
     });
+  }
+
+  /**
+   * Reads a file the room asked for, out of the folder this session shares.
+   *
+   * The path came from a peer and is not trusted, so `companion/grant.ts` holds it to the
+   * grant's own rules before a byte is read: it has to be inside the folder, a path the listing
+   * itself would publish, and a plain file at every step of the way. A session with no folder
+   * — a front-end that did not name one — serves nothing.
+   */
+  async readGrantedFile(path: string): Promise<string | undefined> {
+    const folder = this.folder;
+    if (folder === undefined) {
+      return undefined;
+    }
+    return readGrantedFile(folder, path);
   }
 
   renderCursors(cursors: Cursor[]): void {

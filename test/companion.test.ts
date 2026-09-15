@@ -5,6 +5,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -305,17 +307,22 @@ test('a connection the engine gave up on leaves the next session free', async ()
 });
 
 /**
- * Waits for `check` with a deadline, reporting the wait when it expires. A test that sampled an
- * asynchronous effect instead would pass or fail on how the scheduler ran that day.
+ * Waits for `check` with a deadline, reporting what `seen` observed when it expires. A test that
+ * sampled an asynchronous effect instead would pass or fail on how the scheduler ran that day.
  */
-async function until(label: string, check: () => boolean): Promise<void> {
+async function until(
+  label: string,
+  check: () => boolean,
+  seen?: () => unknown,
+): Promise<void> {
   const deadline = Date.now() + 2000;
   for (;;) {
     if (check()) {
       return;
     }
     if (Date.now() >= deadline) {
-      assert.fail(`timed out after 2000ms waiting for ${label}`);
+      const observed = seen === undefined ? '' : `; observed ${JSON.stringify(seen())}`;
+      assert.fail(`timed out after 2000ms waiting for ${label}${observed}`);
     }
     await delay(10);
   }
@@ -715,4 +722,130 @@ test('the line reader reassembles a message split across chunks', () => {
   assert.deepEqual(lines, ['{"type":"leave"}']);
   reader.push('se","path":"a"}\n\n');
   assert.deepEqual(lines, ['{"type":"leave"}', '{"type":"close","path":"a"}']);
+});
+
+// -- the grant, host-side ------------------------------------------------------------
+//
+// The folder the front-end names with `host` is the one a path a peer asks for is read out of.
+// Every tree here is built under this checkout's `.tmp/`, never the host's own, so that a
+// symbolic link can be put in the way of a guess.
+
+/** Writes a file, making its directories. */
+function tree(root: string, path: string, body = 'x\n'): void {
+  const absolute = join(root, path);
+  mkdirSync(join(absolute, '..'), { recursive: true });
+  writeFileSync(absolute, body);
+}
+
+const SCRATCH = resolve(import.meta.dirname, '..', '.tmp');
+
+/** A folder of its own for one test, cleaned up with it. */
+function folder(t: { after: (fn: () => void) => void }): string {
+  mkdirSync(SCRATCH, { recursive: true });
+  const root = mkdtempSync(join(SCRATCH, 'companion-grant-'));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  return root;
+}
+
+/** The session errors reported so far. */
+function refusals(it: Harness): string[] {
+  return it.sent
+    .filter(
+      (notification): notification is Extract<Notification, { type: 'report' }> =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'sessionError',
+    )
+    .map((notification) => (notification.report as { message: string }).message);
+}
+
+// The read is real file system work, which lands on a later turn of the event loop than a drain
+// of the microtask queue ever reaches: `until` is the wait for it, and `settle` is only enough
+// for work that is already resolved.
+
+test('a path the room asks for is read off the folder and put into the replica', async (t) => {
+  const root = folder(t);
+  tree(root, 'never-opened.txt', 'the host never opened this\n');
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+
+  // A peer opened it: the room's document set moves, and the host is what supplies content.
+  it.engine.emit({ type: 'documentsChanged', documents: ['never-opened.txt'] });
+  await until(
+    'the path to be seeded from the folder',
+    () => it.engine.has('never-opened.txt'),
+    () => it.engine.text('never-opened.txt'),
+  );
+
+  assert.equal(it.engine.text('never-opened.txt'), 'the host never opened this\n');
+  assert.deepEqual(refusals(it), []);
+});
+
+test('a path the room asks for is read once, however often the room asks', async (t) => {
+  const root = folder(t);
+  tree(root, 'never-opened.txt', 'the host never opened this\n');
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+
+  it.engine.emit({ type: 'documentsChanged', documents: ['never-opened.txt'] });
+  await until(
+    'the path to be seeded once',
+    () => it.engine.has('never-opened.txt'),
+    () => it.engine.text('never-opened.txt'),
+  );
+  // The file goes away, so a second read could only end in a refusal to report.
+  rmSync(join(root, 'never-opened.txt'));
+  it.engine.emit({ type: 'documentsChanged', documents: ['never-opened.txt'] });
+  await settle();
+
+  assert.equal(it.engine.text('never-opened.txt'), 'the host never opened this\n');
+  assert.deepEqual(refusals(it), [], 'the path was asked for once and not gone back to disk for');
+});
+
+test('a path outside the folder is refused and reported, not seeded empty', async (t) => {
+  const root = folder(t);
+  const outside = join(root, 'outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'not inside the folder\n');
+  const walled = join(root, 'walled');
+  mkdirSync(walled, { recursive: true });
+
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: walled });
+  it.engine.emit({ type: 'documentsChanged', documents: ['../outside/secret.txt'] });
+  await until(
+    'the refusal to be reported',
+    () => refusals(it).length > 0,
+    () => refusals(it),
+  );
+
+  assert.equal(it.engine.text('../outside/secret.txt'), '', 'nothing was shared for it');
+  assert.deepEqual(refusals(it), [
+    'the room asked for ../outside/secret.txt, which is not a readable file in the folder this window shares; nothing was shared for it',
+  ]);
+});
+
+test('a path through a directory link is refused and reported', async (t) => {
+  const root = folder(t);
+  const outside = join(root, 'outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'a readable plain file, outside the folder\n');
+  const shared = join(root, 'shared');
+  mkdirSync(shared, { recursive: true });
+  symlinkSync(outside, join(shared, 'escape'));
+
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: shared });
+  it.engine.emit({ type: 'documentsChanged', documents: ['escape/secret.txt'] });
+  await until(
+    'the refusal to be reported',
+    () => refusals(it).length > 0,
+    () => refusals(it),
+  );
+
+  assert.equal(it.engine.text('escape/secret.txt'), '', 'nothing was shared for it');
+  assert.deepEqual(refusals(it), [
+    'the room asked for escape/secret.txt, which is not a readable file in the folder this window shares; nothing was shared for it',
+  ]);
 });

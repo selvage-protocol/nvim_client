@@ -1228,6 +1228,7 @@ function M.host(url)
           serverUrl = address,
           displayName = display_name,
           autoSave = auto_save(),
+          root = state.root,
         })
       end
     end)
