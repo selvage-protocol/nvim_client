@@ -264,6 +264,46 @@ if ratio >= 3 then
 end
 check('a whole-buffer change scales about linearly', ratio < 3, true)
 
+-- -- where in the document the rebuilt range sits --------------------------------
+--
+-- A rebuild copies every row whichever shape the change takes, so it must not cost more to
+-- keep the shadow of a change at the top of a document than at the bottom. Both sides are
+-- ten rebuilds in a row and the cheapest of five runs, compared as a ratio so the assertion
+-- does not depend on the machine. `reshadow` is called directly because this is the rebuild's
+-- own cost; the buffer's is the same at either end, and the shadow it leaves behind then drifts
+-- from that buffer, which nothing here reads. Observed here: about 1.0 with an explicit
+-- destination index, about 4.9 writing each row with `#lines + 1`.
+local spread_lines = {}
+for index = 1, 20000 do
+  spread_lines[index] = 'line ' .. index
+end
+local spread_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(spread_buf, 0, -1, true, spread_lines)
+local spread_shared = Document.new(spread_buf, 'big.txt', function() end)
+
+local function rebuild_cost(row)
+  local best
+  for round = 1, 5 do
+    local started = os.clock()
+    for _ = 1, 10 do
+      spread_shared:reshadow(row, row, { 'replacement' })
+    end
+    local elapsed = (os.clock() - started) / 10
+    if best == nil or elapsed < best then
+      best = elapsed
+    end
+  end
+  return best
+end
+
+local at_start = rebuild_cost(0)
+local at_end = rebuild_cost(#spread_shared.lines - 1)
+local spread = at_start / at_end
+if spread >= 2.5 then
+  print(('     start=%.4fs end=%.4fs ratio=%.2f'):format(at_start, at_end, spread))
+end
+check('a rebuild costs no more at the top of the document than at the bottom', spread < 2.5, true)
+
 -- -- UTF-8 validity --------------------------------------------------------------
 --
 -- The companion decodes its stdin as UTF-8, so the front-end has to know which texts it can
