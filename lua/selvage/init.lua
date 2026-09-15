@@ -323,15 +323,19 @@ function M.list_peers()
   api.nvim_echo(chunks, true, {})
 end
 
---- The shared document whose buffer is in the current window, or nil when the user is not in one.
-local function current_document()
-  local bufnr = api.nvim_get_current_buf()
+--- The shared document whose buffer is `bufnr`, or nil when this session does not share it.
+local function document_for_buf(bufnr)
   for _, document in pairs(state.documents) do
     if document.bufnr == bufnr then
       return document
     end
   end
   return nil
+end
+
+--- The shared document whose buffer is in the current window, or nil when the user is not in one.
+local function current_document()
+  return document_for_buf(api.nvim_get_current_buf())
 end
 
 --- The caret as the two UTF-16 offsets the room counts. In Visual mode the selection's other
@@ -548,6 +552,28 @@ local function watch_buffers()
       if path ~= nil then
         share(event.buf, path)
       end
+    end,
+  })
+  -- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
+  -- here. Without this the room keeps the document for the life of the session, offering
+  -- edits to a `Document` that answers every one of them `ok = false`, and the companion
+  -- retries until it reports a refusal about a buffer the user closed.
+  --
+  -- The send belongs here rather than in `Document:on_detach`, which also fires when the
+  -- session ends: every `:SelvageLeave` would put a `close` on the wire for each document it
+  -- is letting go of, and the companion would hear about a room it is already leaving.
+  api.nvim_create_autocmd('BufWipeout', {
+    group = state.group,
+    callback = function(event)
+      local document = document_for_buf(event.buf)
+      if document == nil then
+        return
+      end
+      document:detach()
+      if state.process ~= nil then
+        state.process:send({ type = 'close', path = document.path })
+      end
+      state.documents[document.path] = nil
     end,
   })
 end

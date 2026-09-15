@@ -273,3 +273,6 @@ keystroke in that window every run — which it can only do if the relay is what
 - A peer's selection is the colour blended with the editor's background rather than a real
   translucent fill: a buffer highlight has no alpha, and a float would cost per-window
   bookkeeping on every scroll and edit for less than the block cursor gives at the same place.
+- A host wiping a shared buffer releases the path in the room; a guest's `selvage://` buffers
+  are not released that way, and neither is a path the room stops naming, because this
+  client's document set only grows within a session.
