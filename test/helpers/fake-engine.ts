@@ -18,6 +18,9 @@ export class FakeEngine implements CompanionEngine {
   readonly texts = new Map<string, string>();
   readonly opened: string[] = [];
   readonly closed: string[] = [];
+  readonly renamed: string[] = [];
+  /** When set, the next `rename` rejects with it — the way a refused name reaches a caller. */
+  renameError: Error | undefined;
   readonly selections: Array<{ path: string; selection: OffsetSelection }> = [];
   /** What `presence()` reports, and how `resolveSelection` answers: a test sets both to make
    * the bridge resolve a real cursor. */
@@ -104,6 +107,13 @@ export class FakeEngine implements CompanionEngine {
   close(path: string): Promise<void> {
     this.closed.push(path);
     return Promise.resolve();
+  }
+
+  rename(displayName: string): Promise<void> {
+    this.renamed.push(displayName);
+    const error = this.renameError;
+    this.renameError = undefined;
+    return error === undefined ? Promise.resolve() : Promise.reject(error);
   }
 
   insert(path: string, index: number, text: string): void {

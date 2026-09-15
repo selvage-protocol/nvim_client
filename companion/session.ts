@@ -14,10 +14,15 @@ import { SelvageEngine, isProtocolError } from '../vendor/engine/index.ts';
 import { NvimEditorHost } from './editor.ts';
 import type { Notification, Request } from './ipc.ts';
 
-/** The engine, plus the two members the lifecycle needs and the bridge does not. */
+/** The engine, plus the members the lifecycle needs and the bridge does not. */
 export interface CompanionEngine extends Engine {
   inviteUrl(): string | undefined;
   disconnect(): Promise<void>;
+  /**
+   * Changes this connection's display name (§5). The bridge's `Engine` slice has no use for it
+   * — a name is not a document — so it is here, on the adapter's own extension of the seam.
+   */
+  rename(displayName: string): Promise<void>;
 }
 
 /** How a session is opened. A test supplies its own; the default opens a real one. */
@@ -90,6 +95,10 @@ export class Companion {
         await this.leave();
         break;
       }
+      case 'rename': {
+        this.rename(request.displayName);
+        break;
+      }
       case 'open': {
         this.open(request.path, request.text);
         break;
@@ -142,6 +151,29 @@ export class Companion {
       await engine.disconnect();
     }
     this.send({ type: 'status', state: 'idle' });
+  }
+
+  /**
+   * A mid-session rename, from the front-end's `rename`. The engine sends `session.rename` and
+   * the room answers with `peer.renamed`, which the bridge turns into a re-labelled cursor; the
+   * name in force is the engine's, so nothing here holds it. A refusal is the server declining
+   * the name — the live one stands — and is reported rather than thrown, as a refused `open` is.
+   */
+  private rename(displayName: string): void {
+    const engine = this.engine;
+    if (engine === undefined) {
+      return;
+    }
+    void engine.rename(displayName).catch((error: unknown) => {
+      this.send({
+        type: 'report',
+        report: {
+          kind: 'sessionError',
+          code: isProtocolError(error) ? error.code : 'error',
+          message: `the server refused the display name "${displayName}": ${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    });
   }
 
   /**

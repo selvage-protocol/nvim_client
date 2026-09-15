@@ -10,6 +10,7 @@ import test from 'node:test';
 import { LineReader } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { Companion } from '../companion/session.ts';
+import { ProtocolError } from '../vendor/engine/index.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
 
@@ -470,6 +471,60 @@ test('a document opened after a peer moved draws the peer', async () => {
   assert.equal(presence?.cursors[0]?.label, 'Bob');
   assert.equal(presence?.cursors[0]?.path, 'notes.txt');
   assert.equal(presence?.cursors[0]?.head, 2);
+});
+
+test('a mid-session rename reaches the engine and moves no document', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+  const opened = [...it.engine.opened];
+
+  await it.companion.handle({ type: 'rename', displayName: 'Ada' });
+  assert.deepEqual(it.engine.renamed, ['Ada']);
+  assert.deepEqual(it.engine.opened, opened, 'a name is not a document: nothing is opened');
+  assert.deepEqual(it.engine.closed, [], 'and nothing is closed');
+  assert.deepEqual(
+    it.sent.filter(
+      (notification) =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'sessionError',
+    ),
+    [],
+    'an accepted rename is not an error',
+  );
+});
+
+test('a refused rename is reported and leaves the session running', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  const refused = 'x'.repeat(33);
+  it.engine.renameError = new ProtocolError(
+    'bad_params',
+    'display_name is longer than 32 UTF-16 code units',
+  );
+
+  await it.companion.handle({ type: 'rename', displayName: refused });
+  await settle();
+
+  assert.deepEqual(
+    it.sent.filter(
+      (notification) =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'sessionError',
+    ),
+    [
+      {
+        type: 'report',
+        report: {
+          kind: 'sessionError',
+          code: 'bad_params',
+          message: `the server refused the display name "${refused}": display_name is longer than 32 UTF-16 code units`,
+        },
+      },
+    ],
+    'the refusal is the server declining the name, said as a session error',
+  );
+  assert.equal(it.engine.disconnected, false, 'a refused name does not end the session');
 });
 
 test('leaving disconnects and forgets the documents', async () => {
