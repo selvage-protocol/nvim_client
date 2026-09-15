@@ -2,9 +2,9 @@
 #
 # The Lua side's own checks, in a real headless Neovim: the buffer arithmetic against a real
 # buffer and a real `on_bytes` (`test/lua/document.lua`), the plugin's own wiring against a
-# stubbed companion (`test/lua/session.lua`), what the commands themselves decide
-# (`test/lua/commands.lua`), and what stopping the process does to it (`test/lua/leave.lua`,
-# against a real job).
+# stubbed companion (`test/lua/session.lua`), the folder a session shares and what moves it
+# (`test/lua/grant.lua`), what the commands themselves decide (`test/lua/commands.lua`), and what
+# stopping the process does to it (`test/lua/leave.lua`, against a real job).
 #
 #   scripts/test-lua.sh
 #
@@ -17,5 +17,6 @@ cd "$repo_root"
 
 nvim --headless -l test/lua/document.lua
 nvim --headless -l test/lua/session.lua
+nvim --headless -l test/lua/grant.lua
 nvim --headless -l test/lua/commands.lua
 nvim --headless -l test/lua/leave.lua

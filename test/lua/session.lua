@@ -1036,8 +1036,11 @@ handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomI
 local hosted_opens = count_type('open')
 
 -- A second host starts from the companion's own `idle`, and the buffer the first one shared is
--- shared again under the same path.
+-- shared again under the same path. The command in between is what starts it: a `status hosting`
+-- this front-end did not ask for is not a sequence it can produce, and the folder the session was
+-- started in comes from the command that started it.
 handlers().on_message({ type = 'status', state = 'idle' })
+selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-second' })
 check('a second host re-opens the buffer the first one shared', count_type('open'), hosted_opens + 1)
 check('  under the same path', last_of('open') and last_of('open').path, path)

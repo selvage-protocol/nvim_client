@@ -23,6 +23,14 @@ local state = {
   --- The room paths this session refused to share, so the refusal is said once: a buffer that
   --- is not UTF-8 is entered and left many times over a session.
   unshareable = {},
+  --- The folder this session's grant is rooted at, as it stood when the session started. The
+  --- working directory can move under it at any moment (`:cd`, `:lcd`, `:tcd`) and the grant
+  --- does not: it is the folder the invite was offered from (`DESIGN.md` §4.2), not wherever
+  --- the person happens to be looking now.
+  root = nil,
+  --- The paths this session refused to share because they are outside that folder, so the
+  --- refusal is said once per path, as it is for a buffer that is not UTF-8.
+  outside = {},
   group = nil,
   -- Presence: the augroup the caret watchers live in, the marks drawn for peers, and the one
   -- scheduled flush that publishes this user's caret.
@@ -474,23 +482,65 @@ local function watch_presence()
   })
 end
 
---- The room path a buffer is shared under, or nil when it is not one to share.
+--- The folder this session's grant is rooted at: where the person stood when they started it.
+--- Called as a session starts, before the buffer in front of them is shared.
+---
+--- The root is kept as a prefix — `/` separators, no trailing slash — so a buffer's own path
+--- can be measured against it with one comparison. `getcwd()` answers with the directory in
+--- force in this window, so a `:lcd` or `:tcd` made before the session is where the session
+--- started, which is the folder the person chose to invite from.
+local function capture_root()
+  state.root = vim.fn.getcwd():gsub('\\', '/'):gsub('/+$', '')
+end
+
+--- Says, once per path, that a file is not the room's to share because it lies outside the
+--- session's grant. Neovim shows no workspace the way the other client's window does, so
+--- nothing else here tells a person which folder the room can see: a refusal nobody hears is
+--- indistinguishable from a plugin that is not sharing at all.
+local function refuse_outside(path)
+  if state.outside[path] ~= nil then
+    return
+  end
+  state.outside[path] = true
+  notify(
+    ('%s is outside %s, the folder this session shares, so it is not shared'):format(
+      path,
+      state.root == '' and '/' or state.root
+    ),
+    vim.log.levels.WARN
+  )
+end
+
+--- The room path a buffer is shared under, and the absolute name it is refused for when it
+--- is not one to share.
+---
+--- The grant is the folder the session was started in (`DESIGN.md` §4.2), so a name is
+--- measured against that and never against the working directory, which `:cd` moves at any
+--- moment. A name is absolute — Neovim resolves it when it sets one — and the separator in
+--- the prefix is what keeps a sibling whose name merely begins with the grant's out of it.
+--- A file outside the grant comes back as the second value so the refusal can be said;
+--- anything that is not a file buffer is neither shared nor refused.
 local function room_path(bufnr)
   if vim.bo[bufnr].buftype ~= '' then
-    return nil
+    return nil, nil
   end
   local name = api.nvim_buf_get_name(bufnr)
   if name == '' then
-    return nil
+    return nil, nil
   end
-  local relative = vim.fn.fnamemodify(name, ':.')
-  -- `:.` leaves the path absolute when it is not under the working directory. The directory
-  -- the session was started in is the grant (`DESIGN.md` §4.2); anything outside it is not
-  -- this room's to share.
-  if relative:sub(1, 1) == '/' then
-    return nil
+  local root = state.root
+  if root == nil then
+    return nil, nil
   end
-  return (relative:gsub('\\', '/'))
+  local absolute = (name:gsub('\\', '/'))
+  local prefix = root .. '/'
+  if absolute:sub(1, #prefix) == prefix then
+    return absolute:sub(#prefix + 1), nil
+  end
+  if absolute:sub(1, 1) == '/' or absolute:match('^%a:/') ~= nil then
+    return nil, absolute
+  end
+  return nil, nil
 end
 
 local function share(bufnr, path)
@@ -533,11 +583,14 @@ local function guest_buffer(path)
   return bufnr
 end
 
+--- Shares the buffer in the window, or says why it is not the room's to share.
 local function share_current()
   local bufnr = api.nvim_get_current_buf()
-  local path = room_path(bufnr)
+  local path, refused = room_path(bufnr)
   if path ~= nil then
     share(bufnr, path)
+  elseif refused ~= nil then
+    refuse_outside(refused)
   end
 end
 
@@ -625,9 +678,11 @@ local function watch_buffers()
   api.nvim_create_autocmd({ 'BufReadPost', 'BufEnter' }, {
     group = state.group,
     callback = function(event)
-      local path = room_path(event.buf)
+      local path, refused = room_path(event.buf)
       if path ~= nil then
         share(event.buf, path)
+      elseif refused ~= nil then
+        refuse_outside(refused)
       end
     end,
   })
@@ -671,6 +726,7 @@ local function forget_documents()
   end
   state.documents = {}
   state.unshareable = {}
+  state.outside = {}
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
@@ -699,6 +755,8 @@ local function reset()
   state.room = nil
   state.invite = nil
   state.auto_open = false
+  -- The grant belongs to the session, and a session that has ended grants nothing.
+  state.root = nil
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil
@@ -1102,6 +1160,7 @@ function M.host(url)
     resolve_display_name(function(display_name)
       local process = ensure()
       if process ~= nil then
+        capture_root()
         process:send({
           type = 'host',
           serverUrl = address,
@@ -1144,6 +1203,7 @@ function M.join(invite)
     resolve_display_name(function(display_name)
       local process = ensure()
       if process ~= nil then
+        capture_root()
         process:send({
           type = 'join',
           invite = link,
