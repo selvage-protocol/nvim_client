@@ -302,7 +302,8 @@ Three things the mirror does not do, all deliberately:
 **Create, rename and delete are not implemented as document operations**: the protocol has no frame
 for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
 shared; a file deleted or renamed in it does not reach the room, and the room's copy comes back the
-next time the path is fetched. What does follow a host's folder is its **listing**: a file the host
+next time the path is fetched. Trying one says so where it happens: creating a file in the mirror,
+renaming a buffer onto a mirror name, or deleting a listed file's cache each say `the room carries no file mutations yet`, once per path. What does follow a host's folder is its **listing**: a file the host
 creates, deletes or renames under the folder it shares is republished as the room's grant, and a
 guest's mirror gains a file for a path that appeared and loses one for a path that went. The mirror
 is where a person reads and edits what the room holds, not where they restructure a project.

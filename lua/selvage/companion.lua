@@ -41,7 +41,9 @@ function M.start(handlers, command)
     if vim.fn.filereadable(entry) == 0 then
       return nil, 'the companion is missing at ' .. entry
     end
-    argv = { node, entry }
+    -- Node prints its own ExperimentalWarning on stderr at startup, which the forwarder
+    -- below would show as a session warning. It is not session output, so it is not started with.
+    argv = { node, '--no-warnings', entry }
   end
   self.job = vim.fn.jobstart(argv, {
     cwd = root(),

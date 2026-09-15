@@ -116,6 +116,11 @@ harness.log('this window\'s file holds', vim.inspect(harness.read_file(harness.g
 -- The directory the file is created in existed before the session started, so what the watcher
 -- has to see is a file arriving, and the file that is deleted was in the listing from the join:
 -- the guest has already mirrored it, which is what makes its removal the thing being proved.
+harness.wait_for_file(
+  'the guest to hold the path about to be deleted open',
+  harness.deadline_ms + 15000,
+  harness.delete_open_ready_file
+)
 vim.fn.writefile({ (harness.created_text:gsub('\n$', '')) }, harness.created_path)
 vim.fn.delete(harness.removed_path)
 harness.log('created', harness.created_path, 'and deleted', harness.removed_path)

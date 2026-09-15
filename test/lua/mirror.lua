@@ -519,6 +519,67 @@ check('  and the buffer is not left modified', vim.bo[open_buffer].modified, fal
 check('  and nobody was told anything was wrong', #notices, writing)
 check('  and the file that came back is not in the room\'s listing', mirror.granted('notes/deep.txt'), false)
 
+-- -- a fresh open of a path the host deleted ------------------------------------------------
+--
+-- A guest opening from a stale listing shares an empty buffer the room never answers. When the
+-- listing catches up and leaves the path, the empty buffer is not content still loading: the
+-- guest is told the host no longer has it. A buffer holding text is not this — content that
+-- arrived, or the person's own keystrokes, stays without a word — and no open buffer is taken
+-- away either way.
+
+responder = nil
+join({}, { 'gone.txt', 'stays.txt' }, 'r-gone')
+selvage.open('gone.txt')
+local gone_buf = vim.api.nvim_get_current_buf()
+local gone_before = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check(
+  'a fresh open the listing leaves says the host no longer has it',
+  said_since(gone_before, 'gone.txt is no longer in the room; the host no longer has it') ~= nil,
+  true
+)
+check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(gone_buf), true)
+check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'gone.txt'), true)
+local gone_repeated = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'gone.txt', 'stays.txt' } } })
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check('  and says so once per path', #notices, gone_repeated)
+
+responder = room_holding({ ['kept.txt'] = 'kept\n' })
+join({}, { 'kept.txt' }, 'r-kept')
+selvage.open('kept.txt')
+local kept_buf = vim.api.nvim_get_current_buf()
+local kept_before = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = {} } })
+check(
+  'a held document with content says nothing about being gone',
+  said_since(kept_before, 'kept.txt is no longer') ~= nil,
+  false
+)
+check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(kept_buf), true)
+check('  and it keeps its text', buffer_text(kept_buf), 'kept\n')
+
+-- An empty document the session already wrote is not a fresh open without an answer: the save
+-- marked it written even though its text is still empty, so the listing leaving it stays silent.
+-- The removal takes the file and its written mark with it; the grant handler reads the pre-update
+-- mark, which is what makes this the written half rather than the gone one above.
+responder = room_holding({ ['saved.txt'] = '\n' })
+join({}, { 'saved.txt', 'stays.txt' }, 'r-gone-written')
+selvage.open('saved.txt')
+local saved_buf = vim.api.nvim_get_current_buf()
+check('an empty document the room answered is still empty', buffer_text(saved_buf), '\n')
+check('  and the save marked it written', mirror.written('saved.txt'), true)
+local saved_before = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check(
+  'an empty document already written says nothing about being gone',
+  said_since(saved_before, 'saved.txt is no longer') ~= nil,
+  false
+)
+check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(saved_buf), true)
+check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'saved.txt'), true)
+responder = nil
+
 -- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
 -- room, which now lists no files at all.
 
@@ -648,6 +709,49 @@ check('  and the person is told why', said_since(before, 'save it outside the mi
 check('  and the buffer is left with the edit, unsaved', vim.bo.modified, true)
 check('  and the room was never told about it', selvage.text('stray.txt'), nil)
 
+-- -- a file mutation has no frame -----------------------------------------------------------
+--
+-- Create, rename and delete stay out of v1, so the mirror refuses each where the editor names
+-- it, once per path, with the one sentence both clients share.
+
+root = join({}, GRANT)
+vim.cmd('silent! bufdo bwipeout!')
+before = #notices
+vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/created-by-hand.txt'))
+check(
+  'creating a file in the mirror says the room has no frame for it',
+  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  true
+)
+local created_repeated = #notices
+vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/created-by-hand.txt'))
+check('  and says so once per path', #notices, created_repeated)
+vim.cmd('bwipeout!')
+
+before = #notices
+vim.cmd('enew')
+vim.cmd('file ' .. vim.fn.fnameescape(root .. '/renamed-by-hand.txt'))
+check(
+  'renaming a buffer onto a mirror name says the room has no frame for it',
+  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  true
+)
+vim.cmd('bwipeout!')
+
+selvage.open('notes/deep.txt')
+local listed_buf = vim.api.nvim_get_current_buf()
+local listed_file = root .. '/notes/deep.txt'
+vim.fn.delete(listed_file)
+before = #notices
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = listed_buf })
+check(
+  'deleting a listed file says the room has no frame for it',
+  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  true
+)
+check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(listed_buf), true)
+vim.cmd('bwipeout!')
+
 -- -- a write that is not the whole buffer ---------------------------------------------------
 --
 -- A whole `:w` is routed, and so is a `:w {file}` naming a file outside the mirror, which the
@@ -724,21 +828,21 @@ responder = room_holding({
 before = #notices
 selvage.fetch('deep.txt')
 check('a fetch of one path writes its file', read(root .. '/notes/deep.txt'), 'deep\n')
-check('  and says what it did', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('  and says what it did', said_since(before, 'fetched the files') ~= nil, true)
 
 before = #notices
 selvage.fetch('src')
 check('a fetch of a directory writes every file of it', read(root .. '/src/main.rs'), 'fn main() {}\n')
 check('  and the other one too', read(root .. '/src/util.rs'), 'fn util() {}\n')
-check('  and says how many', said_since(before, 'fetched 2 of 2 files') ~= nil, true)
+check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
 
 before = #notices
 selvage.fetch()
 check('a fetch of nothing fetches the whole listing', read(root .. '/README.md'), 'readme\n')
-check('  and says how many', said_since(before, 'fetched 4 of 4 files') ~= nil, true)
+check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
 check('  and every file it names is held in the room', #selvage.documents(), 4)
 local opened_at = notice_at(before, 'opens them in the room, so every peer receives them')
-local fetched_at = notice_at(before, 'fetched 4 of 4 files')
+local fetched_at = notice_at(before, 'fetched the files')
 check(
   '  and said it would open them in the room before it did',
   opened_at ~= nil and fetched_at ~= nil and opened_at < fetched_at,
@@ -754,7 +858,7 @@ local already = root .. '/README.md'
 uv.fs_utime(already, 1000, 1000)
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('README.md')
-check('a path fetched already answers without waiting', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('a path fetched already answers without waiting', said_since(before, 'fetched the files') ~= nil, true)
 check('  and is not written again', uv.fs_stat(already).mtime.sec, 1000)
 check(
   '  and says nothing about opening what the room already holds',
@@ -777,14 +881,14 @@ end
 before = #notices
 selvage.fetch('late.txt')
 check('a fetch waits for the room to answer', read(root .. '/late.txt'), 'answered late\n')
-check('  and says what arrived', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('  and says what arrived', said_since(before, 'fetched the files') ~= nil, true)
 
 responder = nil
 root = join({}, { 'quiet.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('quiet.txt')
-check('a fetch the room never answers reports what arrived', said_since(before, 'fetched 0 of 1 files; 1 had not arrived within 0s: quiet.txt') ~= nil, true)
+check('a fetch the room never answers reports what arrived', said_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
 check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
 
 -- The room answering late is not a lost fetch: the document is still held, so the text arriving
@@ -793,7 +897,7 @@ room_text('quiet.txt', 'at last\n', 0)
 check('  and content that arrives after the deadline is written all the same', read(root .. '/quiet.txt'), 'at last\n')
 before = #notices
 selvage.fetch('quiet.txt')
-check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched the files') ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
 
 -- A word that names nothing is refused rather than fetched as nothing.
