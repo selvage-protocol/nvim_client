@@ -112,9 +112,10 @@ The sign column carries the first two characters of a peer's name, coloured with
 highlight, so two peers whose names share an initial — `pi` and `pc` — are not identical signs. The
 name is never drawn over the text: the gutter is where it lives, and two cells is all `sign_text`
 takes, so a peer called `thisismylongusername` is `th` there and nothing more. `:SelvagePeers`
-lists everyone the gutter drew — sign, whole display name and room path — as the reference to
-look the two cells up in, and it prints each sign in the very highlight that peer's caret and
-sign are drawn with, because a list that explains the gutter has to agree with it cell for cell.
+lists every peer the room names: the sign the gutter drew beside the whole display name and room
+path for the peers this client holds a document for, and the name and role alone for the ones it
+does not. It prints each sign in the very highlight that peer's caret and sign are drawn with,
+because a list that explains the gutter has to agree with it cell for cell.
 Nothing is put over the document when a peer moves; a name over their caret would cover a line
 and a half of the buffer, which is worse than the two cells it explains. Every mark is cleared
 and recreated when presence changes, and every one goes when the session ends.
@@ -138,23 +139,31 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 
 | | |
 |---|---|
-| `:SelvageHost <serverUrl>` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. |
-| `:SelvageJoin <invite>` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. |
-| `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force. |
-| `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
+| `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
+| `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A host is refused: its own files are already in its buffer list. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
-| `:SelvageLeave` | Leave the session and stop the companion. |
-| `:SelvagePeers` | List the participants the gutter drew: each one's sign, whole display name and room path, in the colour their caret is drawn in. |
+| `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
+| `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
+
+`:SelvageHost` and `:SelvageJoin` open a session and never end one. Hosting while hosting reaches
+for the invite link instead of minting a second room, and a `:SelvageHost` while a guest or a
+`:SelvageJoin` while in a session asks first, naming the room and what leaving it does, and
+does nothing at all when the answer is no. A process with nobody to answer the question cannot be
+asked, so it says what the command would have done and leaves the session alone.
 
 The name other participants see is resolved when a session starts, in this order:
 `vim.g.selvage_display_name`, then the `SELVAGE_DISPLAY_NAME` environment variable, then a
-`vim.ui.input` prompt pre-filled with the login name, and finally `$USER` (or `neovim`).
-`:SelvageDisplayName` sets the global, and the prompt remembers its answer there, so the same Neovim
-is not asked again. The prompt is only shown where there is a UI to show it
-in: a headless process falls back to the login name and says so, so a room is never silently
-given a name nobody chose. The name rides in the `host`/`join` handshake, and a change made while
-a session is live is sent as `session.rename`: the room answers with `peer.renamed`, and the sign
-and `:SelvagePeers` re-label from that event, so the session goes on under the new name. Setting
+`vim.ui.input` prompt pre-filled with the login name. The pre-fill is a suggestion and nothing
+more: a cancelled or emptied prompt refuses the session rather than seating a room under a name
+nobody chose, and a process with nobody to ask refuses it too, saying how to configure one. The
+login name is never a name of its own, and `require('selvage').display_name()` is `nil` until one
+is set, so a script can tell that the next host or join will ask. `:SelvageDisplayName` sets the
+global and the prompt remembers its answer there, so the same Neovim is not asked again. The name
+rides in the `host`/`join` handshake, and a change made while a session is live is sent as
+`session.rename`: the room answers with `peer.renamed`, and the sign and `:SelvagePeers` re-label
+from that event, so the session goes on under the new name. Setting
 `vim.g.selvage_display_name` directly mid-session does not send anything — Neovim has no
 configuration-change event to watch — so only `:SelvageDisplayName` renames a live session; a
 direct write is picked up by the next host or join.
@@ -165,6 +174,11 @@ how long it is and asks again; one that arrived from the global or the environme
 to re-ask, so the session is not started and the refusal names the setting to change.
 `vim.g.selvage_open_on_join = false` keeps the join from changing the window, while still
 opening the room's documents as buffers `:SelvageOpen` reaches.
+`vim.g.selvage_auto_save = false` keeps the room's changes out of the files on disk: a host
+writes a document the room changed by default, as the other client's `selvage.autoSave` does, and
+a guest's buffers have nowhere to write either way. Both are read when a session starts, so a
+change to either applies to the next host or join. `vim.g.selvage_server_url` is the address
+`:SelvageHost` does not have to ask for.
 
 The working directory is the grant: a host shares the file buffers under it, and nothing above
 it. A guest's buffers are the room's, not files here — they have nowhere on disk to be written.
@@ -208,7 +222,7 @@ nix flake check             # the same three suites, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
-`nix flake check` runs `typecheck`, the companion suite and the three files under `test/lua/` —
+`nix flake check` runs `typecheck`, the companion suite and the four files under `test/lua/` —
 each in its own Neovim — with no network and no editor session. The two-instance proof is not
 one of them: it needs a `selvaged` from the sibling `reference_server` checkout, which a
 sandboxed build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof
@@ -242,8 +256,10 @@ first against a real buffer and a real `on_bytes`, because a framework mocking t
 testing the mock; the second against a stubbed companion, because what it checks is the wiring
 around a session — which buffers it shares, that it lets them go when the session ends, and
 that a caret is published and a peer's caret and selection are drawn at the peer's position.
-`test/lua/leave.lua` starts a real job, one that ignores its stdin, to check what
-`:SelvageLeave` does to a companion that does not go on its own.
+`test/lua/commands.lua` is the commands' own policy, through the real command definitions rather
+than the Lua functions behind them: what `:SelvageHost`, `:SelvageJoin` and `:SelvageOpen` ask
+for, refuse and never do. `test/lua/leave.lua` starts a real job, one that ignores its stdin, to
+check what `:SelvageLeave` does to a companion that does not go on its own.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
 each loading the real plugin and starting its own real companion, one hosting and one joining
