@@ -10,6 +10,12 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 vim.cmd('runtime! plugin/selvage.lua')
 
+-- A name for the sessions this file starts. A process with nothing configured and nobody to ask
+-- refuses to open a room rather than seating one under the login name, and every section but the
+-- one about the name itself wants a live session. That section configures the name its own way
+-- and puts this one back when it is done.
+vim.g.selvage_display_name = 'Test User'
+
 local failures = 0
 
 local function check(name, got, want)
@@ -756,8 +762,9 @@ check(
 --
 -- The name travels in the `host`/`join` handshake, and a change made while a session is live is
 -- sent as `session.rename`. Every source of it is exercised here: the plugin's global,
--- `SELVAGE_DISPLAY_NAME`, the prompt, and the login name as a last resort. A configured name is
--- never asked about, and a process with no one to ask falls back rather than block.
+-- `SELVAGE_DISPLAY_NAME` and the prompt. A configured name is never asked about; with nothing
+-- configured the user is asked, and an answer nobody gave refuses the session rather than
+-- inventing a name for it.
 
 local saved_input = vim.ui.input
 local prompted = 0
@@ -785,7 +792,7 @@ vim.g.selvage_display_name = nil
 vim.env.SELVAGE_DISPLAY_NAME = nil
 vim.ui.input = function(opts, on_confirm)
   prompted = prompted + 1
-  check('  the prompt pre-fills the login name', opts and opts.default, vim.env.USER or 'neovim')
+  check('  the prompt pre-fills the login name', opts and opts.default, vim.env.USER or '')
   check('  and separates the prompt from the value', opts and opts.prompt, 'The name other participants see: ')
   on_confirm('  Ada  ')
 end
@@ -800,8 +807,9 @@ selvage.host('ws://127.0.0.1:1')
 check('a configured name is not asked about again', prompted, 1)
 check('  and it names the next session too', last_of('host') and last_of('host').displayName, 'Ada')
 
--- Dismissing the prompt is not a name; the login name is used for this session, the global is
--- left unset so the question is asked again, and the reason is said rather than silent.
+-- Dismissing the prompt is not a name, and nothing else is: the suggestion it started from is
+-- not an answer, so no session is opened and the global is left unset, ready to be asked for
+-- again.
 vim.g.selvage_display_name = nil
 vim.ui.input = function(_, on_confirm)
   prompted = prompted + 1
@@ -809,27 +817,39 @@ vim.ui.input = function(_, on_confirm)
 end
 local before_dismissal = #notices
 selvage.leave()
+local hosts_before_dismissal = count_type('host')
 selvage.host('ws://127.0.0.1:1')
-check(
-  'a dismissed prompt falls back to the login name',
-  last_of('host') and last_of('host').displayName,
-  vim.env.USER or 'neovim'
-)
-check('  and does not configure it', vim.g.selvage_display_name, nil)
-check('  and the room is told why', said_since(before_dismissal, 'no display name chosen') ~= nil, true)
+check('a dismissed prompt starts no session', count_type('host'), hosts_before_dismissal)
+check('  and does not configure a name', vim.g.selvage_display_name, nil)
+check('  and says a name is needed', said_since(before_dismissal, 'a name is needed') ~= nil, true)
+
+-- An emptied box is the same answer as a dismissed one.
+vim.ui.input = function(_, on_confirm)
+  prompted = prompted + 1
+  on_confirm('   ')
+end
+local before_blank = #notices
+local hosts_before_blank = count_type('host')
+selvage.host('ws://127.0.0.1:1')
+check('an emptied prompt starts no session', count_type('host'), hosts_before_blank)
+check('  and says a name is needed', said_since(before_blank, 'a name is needed') ~= nil, true)
+check('  and does not configure a name', vim.g.selvage_display_name, nil)
 
 -- No input at all: the built-in `vim.ui.input` reads a terminal a headless process does not
--- have, so it is never shown and the fallback's reason is said instead.
+-- have, so the question cannot be put to anyone and no room is opened under a guessed name.
 vim.ui.input = saved_input
+local prompted_before_headless = prompted
 local before_headless = #notices
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
+check('a process with no one to ask is not prompted', prompted, prompted_before_headless)
+check('  and starts no session', count_type('host'), hosts_before_blank)
 check(
-  'a process with no one to ask is not prompted',
-  last_of('host') and last_of('host').displayName,
-  vim.env.USER or 'neovim'
+  '  and the refusal says how to configure a name',
+  said_since(before_headless, 'set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME') ~= nil,
+  true
 )
-check('  and the room is told why', said_since(before_headless, 'no display name is set') ~= nil, true)
+check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
 
 -- `:SelvageDisplayName` sets the configured name before a session, says so, and reports the name in
 -- force when given none.
@@ -972,19 +992,27 @@ check('an over-long name in force is not reported as the name others see', said_
 check('  and why the next session would not start', said_since(before_report, 'the next session will not start') ~= nil, true)
 vim.g.selvage_display_name = nil
 
--- The login-name fallback is bounded too: with nobody to ask and `$USER` itself over the
--- limit, there is no name the room would take and the session stops instead of sending one.
+-- The login name is a suggestion and nothing more, however long it is: it is what the prompt
+-- starts from, and a process with nobody to ask starts no room at all rather than seating one
+-- under a name that was never answered for.
 local saved_user = vim.env.USER
 vim.env.USER = string.rep('g', 33)
 vim.ui.input = saved_input
-local hosts_before_fallback = count_type('host')
-local before_fallback = #notices
+local hosts_before_suggestion = count_type('host')
+local before_suggestion = #notices
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
-check('an over-long login name starts nothing', count_type('host'), hosts_before_fallback)
-check('  naming it', said_since(before_fallback, 'the login name ($USER)') ~= nil, true)
+check('an over-long login name starts nothing', count_type('host'), hosts_before_suggestion)
+check(
+  '  and the refusal is about there being no name, not about its length',
+  said_since(before_suggestion, 'no display name is set and there is no one to ask') ~= nil,
+  true
+)
 vim.env.USER = saved_user
 vim.g.selvage_display_name = nil
+
+-- Put this file's own name back: the sections after this one are not about the name.
+vim.g.selvage_display_name = 'Test User'
 
 -- -- a session that ends without leaving ------------------------------------------
 --
