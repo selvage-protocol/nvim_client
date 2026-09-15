@@ -931,32 +931,112 @@ local function resolve_display_name(callback)
   ask()
 end
 
---- Mints a room on `url` and shares the current buffer.
-function M.host(url)
-  if url == nil or url == '' then
+--- The last server address a host was started on, so the question the next bare `:SelvageHost`
+--- asks starts from it. It is this Neovim's memory for as long as it runs and no more;
+--- `vim.g.selvage_server_url` is the setting that stops the question being asked.
+local last_server = nil
+
+--- The server to mint a room on: the configured address, else a question starting from the last
+--- one typed. An answer is remembered for this Neovim and the question is still asked next time,
+--- as it is in the other client: a value baked in would be an endpoint nobody chose.
+local function resolve_server_url(callback)
+  local configured = vim.g.selvage_server_url
+  if configured ~= nil and vim.trim(tostring(configured)) ~= '' then
+    callback(vim.trim(tostring(configured)))
+    return
+  end
+  if not can_prompt() then
     notify('a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080', vim.log.levels.ERROR)
     return
   end
-  resolve_display_name(function(display_name)
-    local process = ensure()
-    if process ~= nil then
-      process:send({ type = 'host', serverUrl = url, displayName = display_name })
+  vim.ui.input({
+    prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (set vim.g.selvage_server_url to stop being asked): ',
+    default = last_server or '',
+  }, function(input)
+    local address = vim.trim(input or '')
+    if address == '' then
+      return
     end
+    callback(address)
   end)
+end
+
+--- What the clipboard holds, when it holds an invite: the host has just sent the link and pasting
+--- it is the next thing the person does. Only a link that names a room is offered, so a stray
+--- address in the clipboard is not joined by mistake.
+local function clipboard_invite()
+  local ok, text = pcall(vim.fn.getreg, '+')
+  if not ok or text == nil or text == '' then
+    ok, text = pcall(vim.fn.getreg, '"')
+  end
+  if not ok or type(text) ~= 'string' then
+    return ''
+  end
+  text = vim.trim(text)
+  if text:match('^wss?://%S+$') ~= nil and text:find('room=', 1, true) ~= nil then
+    return text
+  end
+  return ''
+end
+
+--- The invite to join on, asked for when the command was given none.
+local function resolve_invite(callback)
+  if not can_prompt() then
+    notify('an invite link is needed', vim.log.levels.ERROR)
+    return
+  end
+  vim.ui.input({ prompt = 'Join a Selvage session: ', default = clipboard_invite() }, function(input)
+    local invite = vim.trim(input or '')
+    if invite == '' then
+      return
+    end
+    callback(invite)
+  end)
+end
+
+--- Mints a room and shares the current buffer.
+function M.host(url)
+  local wanted = vim.trim(url or '')
+  local function with_url(address)
+    last_server = address
+    resolve_display_name(function(display_name)
+      local process = ensure()
+      if process ~= nil then
+        process:send({
+          type = 'host',
+          serverUrl = address,
+          displayName = display_name,
+        })
+      end
+    end)
+  end
+  if wanted ~= '' then
+    with_url(wanted)
+    return
+  end
+  resolve_server_url(with_url)
 end
 
 --- Joins the room an invite link names.
 function M.join(invite)
-  if invite == nil or invite == '' then
-    notify('an invite link is needed', vim.log.levels.ERROR)
+  local wanted = vim.trim(invite or '')
+  local function with_invite(link)
+    resolve_display_name(function(display_name)
+      local process = ensure()
+      if process ~= nil then
+        process:send({
+          type = 'join',
+          invite = link,
+          displayName = display_name,
+        })
+      end
+    end)
+  end
+  if wanted ~= '' then
+    with_invite(wanted)
     return
   end
-  resolve_display_name(function(display_name)
-    local process = ensure()
-    if process ~= nil then
-      process:send({ type = 'join', invite = invite, displayName = display_name })
-    end
-  end)
+  resolve_invite(with_invite)
 end
 
 --- Puts the invite on the clipboard and the unnamed register.
