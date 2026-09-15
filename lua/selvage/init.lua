@@ -787,10 +787,31 @@ local function on_report(report)
     notify(tostring((report.peer or {}).display_name or 'the host') .. ' is hosting again')
   elseif report.kind == 'sessionError' then
     notify(tostring(report.code) .. ': ' .. tostring(report.message), vim.log.levels.ERROR)
-  elseif report.kind == 'applyRefused' or report.kind == 'divergence' then
-    notify(report.kind .. ' on ' .. tostring(report.path), vim.log.levels.WARN)
+  elseif report.kind == 'applyRefused' then
+    notify(
+      ('the editor would not apply the room\'s change to %s; the file may be read-only'):format(
+        tostring(report.path)
+      ),
+      vim.log.levels.ERROR
+    )
+  elseif report.kind == 'divergence' then
+    notify(
+      ('%s was out of step with the room; the room\'s copy has been put back'):format(
+        tostring(report.path)
+      ),
+      vim.log.levels.WARN
+    )
   elseif report.kind == 'saveFailed' then
-    notify('could not write ' .. tostring(report.path), vim.log.levels.WARN)
+    -- The reason, when the report has one, is what says what to do about it: the sentence is the
+    -- fact and the parenthetical is why.
+    local why = report.message
+    notify(
+      ('could not save %s; the file on disk is behind the room%s'):format(
+        tostring(report.path),
+        why == nil and '' or (' (' .. tostring(why) .. ')')
+      ),
+      vim.log.levels.ERROR
+    )
   elseif report.kind == 'disconnected' then
     -- The bridge reconnects on its own until it runs out of attempts, and this is that end:
     -- the session is over and typing would accumulate in a replica nobody hears. The

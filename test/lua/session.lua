@@ -1126,6 +1126,40 @@ check('  and the session ends with it', selvage.session().status, 'idle')
 check('  and its documents are let go', #selvage.documents(), 0)
 check('  and its peers with them', #selvage.peers(), 0)
 
+-- A report's cause is part of what it says: the sentence is the fact and the parenthetical is
+-- why, and a report that carries a reason must not lose it. The kind name is not a sentence.
+local before_reports = #notices
+handlers().on_message({ type = 'report', report = { kind = 'applyRefused', path = 'a.txt' } })
+check(
+  'a refused apply is a sentence',
+  said_since(before_reports, "the editor would not apply the room's change to a.txt; the file may be read-only") ~= nil,
+  true
+)
+check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
+handlers().on_message({ type = 'report', report = { kind = 'divergence', path = 'a.txt' } })
+check(
+  'a divergence is a sentence',
+  said_since(before_reports, "a.txt was out of step with the room; the room's copy has been put back") ~= nil,
+  true
+)
+check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'saveFailed', path = 'a.txt', message = 'the path is read-only' },
+})
+check(
+  'a save that failed says why',
+  said_since(before_reports, 'could not save a.txt; the file on disk is behind the room (the path is read-only)') ~= nil,
+  true
+)
+handlers().on_message({ type = 'report', report = { kind = 'saveFailed', path = 'a.txt' } })
+check(
+  '  and the sentence alone when the report carried no reason',
+  said_since(before_reports, 'could not save a.txt; the file on disk is behind the room') ~= nil,
+  true
+)
+check('  without inventing one', notices[#notices].message:find('()', 1, true) == nil, true)
+
 -- -- a buffer that is not valid UTF-8 -------------------------------------------
 --
 -- A Neovim buffer is bytes, and a file opened as Latin-1 holds bytes that no UTF-8 sequence
