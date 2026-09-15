@@ -36,8 +36,8 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 
 | Plugin → companion | |
 |---|---|
-| `host {serverUrl, displayName?}` | Mint a room and become its host. |
-| `join {invite, displayName?}` | Join the room an invite link names. |
+| `host {serverUrl, displayName?, autoSave?}` | Mint a room and become its host. Refused while a session is live: see `refused`. |
+| `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
 | `leave {}` | End the session; the process stays up. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
 | `open {path, text}` | A buffer is now shared under `path` and holds `text`. |
@@ -52,6 +52,7 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
 | `status {state, role?, roomId?, invite?, message?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. |
+| `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about — the room named is the one still standing. |
 | `report {report}` | The bridge's own report — the room's documents, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
 
@@ -159,7 +160,8 @@ The name other participants see is resolved when a session starts, in this order
 more: a cancelled or emptied prompt refuses the session rather than seating a room under a name
 nobody chose, and a process with nobody to ask refuses it too, saying how to configure one. The
 login name is never a name of its own, and `require('selvage').display_name()` is `nil` until one
-is set, so a script can tell that the next host or join will ask. `:SelvageDisplayName` sets the
+is set: a script reading it can tell that the next host or join has no name to go with, and will
+ask for one — or, where there is nobody to ask, refuse. `:SelvageDisplayName` sets the
 global and the prompt remembers its answer there, so the same Neovim is not asked again. The name
 rides in the `host`/`join` handshake, and a change made while a session is live is sent as
 `session.rename`: the room answers with `peer.renamed`, and the sign and `:SelvagePeers` re-label
