@@ -85,6 +85,11 @@ end
 --- The canonical English phrase for each command, as `nvim_create_user_command`'s `desc`. The
 --- command names are this editor's idiom; the phrase is the one both clients name the intent by.
 ---
+--- `SelvageFetch` is the one command the other client has no counterpart for, and the divergence
+--- is deliberate: the mirror is a real directory that this editor's own extensions — ripgrep,
+--- ctags, a language server — read for themselves, and the other client, whose filesystem
+--- provider fetches a file when it is read, has nothing of the kind to name. The README says why;
+--- `AGENTS.md` §4 is the rule.
 local TITLES = {
   SelvageHost = 'Host a session',
   SelvageJoin = 'Join a session from an invite link',
@@ -93,6 +98,7 @@ local TITLES = {
   SelvageLeave = 'Leave the session',
   SelvageDisplayName = 'Set the name other participants see',
   SelvagePeers = "List the room's participants",
+  SelvageFetch = "Fetch the room's content into the mirror",
 }
 
 --- Every sentence this front-end notifies, with the level it notifies it at, and the two
@@ -154,6 +160,12 @@ local MESSAGES = {
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends" },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it' },
   { 'ERROR', '%s could not be written into the mirror' },
+  { 'INFO', 'you are hosting, so the files a mirror would hold are already on your disk' },
+  { 'INFO', 'the room lists no files to fetch' },
+  { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them' },
+  { 'INFO', 'fetched %d of %d files' },
+  { 'WARN', 'fetched %d of %d files; %d had not arrived within %ds: %s' },
+  { 'WARN', 'the session ended before the files were fetched' },
 }
 
 --- The calls whose first argument is a sentence a user reads: the front-end's own `notify`, and

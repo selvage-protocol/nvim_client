@@ -35,6 +35,22 @@ end, {
   end,
 })
 
+command('SelvageFetch', function(args)
+  require('selvage').fetch(args.args)
+end, {
+  nargs = '?',
+  desc = "Fetch the room's content into the mirror",
+  complete = function(lead)
+    local matches = {}
+    for _, path in ipairs(require('selvage').fetchable()) do
+      if path:sub(1, #lead) == lead then
+        matches[#matches + 1] = path
+      end
+    end
+    return matches
+  end,
+})
+
 command('SelvageLeave', function()
   require('selvage').leave()
 end, { nargs = 0, desc = 'Leave the session' })

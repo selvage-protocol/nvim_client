@@ -10,6 +10,7 @@ local mirror = require('selvage.mirror')
 local utf16 = require('selvage.utf16')
 
 local api = vim.api
+local uv = vim.uv or vim.loop
 
 local M = {}
 
@@ -109,6 +110,20 @@ function M.offered()
       seen[path] = true
       paths[#paths + 1] = path
     end
+  end
+  table.sort(paths)
+  return paths
+end
+
+--- The paths the room's listing names, ordered as `offered()` is: what `:SelvageFetch` can be
+--- given, and what its completion offers.
+---
+--- The listing rather than everything the room offers: a document the room holds open that its
+--- listing does not name has no file in the mirror, so there is nothing to fetch for it.
+function M.fetchable()
+  local paths = {}
+  for _, path in ipairs(state.grant) do
+    paths[#paths + 1] = path
   end
   table.sort(paths)
   return paths
@@ -808,6 +823,166 @@ function M.open(path)
     return
   end
   reveal(resolved)
+end
+
+--- How many unarrived paths a fetch that ran out of time names.
+local FETCH_NAMES = 3
+
+--- How long a fetch waits, in total, for the room's content to arrive.
+---
+--- The room has to answer every hold and send every document it holds, and a fetch of a whole
+--- project is a lot of both: this bounds silence rather than work, and it is given room to scale
+--- with how much was asked for. A fetch that reaches it says what it got rather than failing,
+--- because content that is late is still content. `vim.g.selvage_fetch_timeout_ms` sets it for a
+--- run that knows better than the default.
+---
+--- @param count integer how many paths the fetch names
+--- @return integer milliseconds
+local function fetch_timeout_ms(count)
+  local configured = tonumber(vim.g.selvage_fetch_timeout_ms)
+  if configured ~= nil and configured > 0 then
+    return configured
+  end
+  return math.min(60000, 5000 + 500 * count)
+end
+
+--- The room paths a fetch's argument names: the whole listing, one path of it, or a directory of
+--- it. Nil and the paths it would have matched when the words name nothing the listing has.
+---
+--- The argument is read against the *listing* rather than against everything the room offers: a
+--- document the room holds and its listing does not name has no file in the mirror, so there is
+--- nothing to fetch for it.
+---
+--- @param wanted string
+--- @return string[]|nil targets, string[]|nil candidates
+local function fetch_targets(wanted)
+  local paths = {}
+  for _, path in ipairs(state.grant) do
+    paths[#paths + 1] = path
+  end
+  if wanted == '' then
+    return paths
+  end
+  local prefix = wanted .. '/'
+  local under = {}
+  for _, path in ipairs(paths) do
+    if path == wanted then
+      return { path }
+    end
+    if path:sub(1, #prefix) == prefix then
+      under[#under + 1] = path
+    end
+  end
+  if #under > 0 then
+    return under
+  end
+  local resolved, candidates = resolve(wanted)
+  if resolved ~= nil and mirror.granted(resolved) then
+    return { resolved }
+  end
+  return nil, candidates
+end
+
+--- The paths of `pending` whose content the mirror does not hold yet, dropping the ones it does.
+---
+--- Fetched is the file, not a message: a path counts once the room's content has been written into
+--- it, which is what a save does and what a fetch waits for. An empty file is not evidence of
+--- anything, because an empty placeholder and an empty room document look exactly alike — so a
+--- path this client holds but whose room's text never arrived is reported as not arrived, rather
+--- than read back off disk as an answer.
+---
+--- @param pending table<string, boolean>
+--- @return string[] unfetched
+local function unfetched(pending)
+  local left = {}
+  for path in pairs(pending) do
+    if mirror.written(path) then
+      pending[path] = nil
+    else
+      left[#left + 1] = path
+    end
+  end
+  return left
+end
+
+--- Fetches the room's content into the mirror: one file, a directory of them, or all of it.
+---
+--- A file's content arrives the way any shared document's does — the path is held in the room, the
+--- host reads its working copy when the room asks, and the text comes back — so a fetch takes a
+--- hold on what it names and opens it as a buffer without putting it in front of the user. What
+--- writes the file is the same save that follows a document the room changed, which is why the
+--- wait is for the file and not for a message: content is fetched when it is on disk and not
+--- before, and a search over the mirror sees exactly that.
+---
+--- @param path string|nil one path, a directory of them, or nil for the whole listing
+function M.fetch(path)
+  if not in_session() then
+    notify('join a session first', vim.log.levels.WARN)
+    return
+  end
+  if state.role == 'host' then
+    notify('you are hosting, so the files a mirror would hold are already on your disk', vim.log.levels.INFO)
+    return
+  end
+  if mirror.root() == nil then
+    notify('the room lists no files to fetch', vim.log.levels.INFO)
+    return
+  end
+  local wanted = vim.trim(path or '')
+  local targets, candidates = fetch_targets(wanted)
+  if targets == nil then
+    if candidates ~= nil and #candidates > 1 then
+      notify(
+        ('"%s" matches several: %s'):format(wanted, table.concat(candidates, ', ')),
+        vim.log.levels.WARN
+      )
+    else
+      notify(
+        ('no file the room lists matches "%s"; :SelvageOpen and completion name them'):format(wanted),
+        vim.log.levels.WARN
+      )
+    end
+    return
+  end
+  if #targets == 0 then
+    notify('the room lists no files to fetch', vim.log.levels.INFO)
+    return
+  end
+  local pending = {}
+  for _, target in ipairs(targets) do
+    pending[target] = true
+    local document = state.documents[target]
+    if document == nil then
+      share(guest_buffer(target), target)
+    elseif not mirror.holds(target, document:text()) then
+      -- A document this session already holds: the file is given what this client holds for the
+      -- room, so that fetching a path whose file a tool overwrote is a fetch and not a no-op.
+      document:save()
+    end
+  end
+  local timeout = fetch_timeout_ms(#targets)
+  vim.wait(timeout, function()
+    return not in_session() or #unfetched(pending) == 0
+  end, 50)
+  if not in_session() then
+    notify('the session ended before the files were fetched', vim.log.levels.WARN)
+    return
+  end
+  local left = unfetched(pending)
+  if #left == 0 then
+    notify(('fetched %d of %d files'):format(#targets, #targets))
+    return
+  end
+  notify(
+    ('fetched %d of %d files; %d had not arrived within %ds: %s'):format(
+      #targets - #left,
+      #targets,
+      #left,
+      seconds(timeout),
+      table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
+    ),
+    vim.log.levels.WARN
+  )
 end
 
 --- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
