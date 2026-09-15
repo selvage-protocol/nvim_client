@@ -144,7 +144,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
-| `:SelvageFetch [path]` | Fetch the room's content into the mirror: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. A host is refused: the room's files are already on its disk. |
+| `:SelvageFetch [path]` | Fetch the room's content into the mirror: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
@@ -215,6 +215,11 @@ file opened in the editor, or `:SelvageFetch` — which takes one path, a direct
 whole listing. A project-wide search is therefore partial until the paths it covers have been
 fetched, and `:SelvageFetch` is the one command that answers that. `require('selvage').session()
 .mirror` is where the directory is, for a plugin that has to be pointed at it.
+
+A fetch is a **hold**, not a read: the paths it names join the room's open-document set, so every
+peer receives them and a peer with a mirror materialises them. A file, two of them or a directory
+is one thing; `:SelvageFetch` alone is a whole project published to the room, and the notification
+before it happens says so — the one after it would be too late to be a choice.
 
 A **listed path's buffer is the mirror's file** — a real path on disk — rather than a `selvage://`
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being edited.
