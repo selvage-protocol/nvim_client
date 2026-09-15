@@ -244,12 +244,47 @@ vim.fn.mkdir(stale, 'p')
 vim.fn.writefile({ 'left behind' }, stale .. '/x.txt')
 local live = room_dir .. '/' .. uv.os_getpid() .. '-other'
 vim.fn.mkdir(live, 'p')
+-- A stale directory whose name holds a variable is pruned by name too: `vim.fs.dir`/`vim.fs.rm`
+-- would look for the expanded path, find nothing there, and leave the directory to make the next
+-- join fail on a removal of its own.
+local stale_variable = room_dir .. '/' .. dead .. '-x-$HOME'
+vim.fn.mkdir(stale_variable, 'p')
+vim.fn.writefile({ 'left behind' }, stale_variable .. '/x.txt')
 
 join({}, GRANT, 'r-pruned')
 check('a mirror a crashed session left behind is gone', vim.fn.isdirectory(stale), 0)
+check(
+  '  and one whose name holds a variable too',
+  vim.fn.isdirectory(stale_variable),
+  0
+)
 check('  and one a live process owns is left alone', vim.fn.isdirectory(live), 1)
 selvage.leave()
 vim.fs.rm(room_dir, { recursive = true, force = true })
+
+-- -- a listing that names a variable -------------------------------------------------------
+--
+-- The listing is a peer's names, and one of them may be a name this platform treats as ordinary
+-- and a shell treats as a variable: `$HOME` is a directory like any other. Creating the tree and
+-- removing it have to agree on that literal name, which is why neither goes through
+-- `vim.fs.dir`/`vim.fs.rm`: those expand a defined variable in a path, so the removal would
+-- enumerate a different tree than the one that was created and the mirror would be leaked.
+
+local variable_root = join({}, { '$HOME/escaped.txt', 'notes/deep.txt' }, 'r-variable')
+check(
+  'a listing may name a directory that is a defined variable',
+  vim.fn.filereadable(variable_root .. '/$HOME/escaped.txt'),
+  1
+)
+check(
+  '  and the path beside it is materialised as usual',
+  vim.fn.filereadable(variable_root .. '/notes/deep.txt'),
+  1
+)
+selvage.leave()
+check('  and the session that mirrored it removes it', vim.fn.isdirectory(variable_root), 0)
+check('  and the room directory with it', vim.fn.isdirectory(CACHE .. '/r-variable'), 0)
+check('  and reports none', selvage.session().mirror, nil)
 
 -- -- the shape the listing is materialised as --------------------------------------------
 --
