@@ -936,6 +936,17 @@ end
 --- `vim.g.selvage_server_url` is the setting that stops the question being asked.
 local last_server = nil
 
+--- Whether a document the room changes is written. Nothing is sent when the plugin's global says
+--- nothing, so the companion's own default — write it — stands, as the other client's setting
+--- defaults to on.
+local function auto_save()
+  local configured = vim.g.selvage_auto_save
+  if type(configured) == 'boolean' then
+    return configured
+  end
+  return nil
+end
+
 --- The server to mint a room on: the configured address, else a question starting from the last
 --- one typed. An answer is remembered for this Neovim and the question is still asked next time,
 --- as it is in the other client: a value baked in would be an endpoint nobody chose.
@@ -1006,6 +1017,7 @@ function M.host(url)
           type = 'host',
           serverUrl = address,
           displayName = display_name,
+          autoSave = auto_save(),
         })
       end
     end)
@@ -1028,6 +1040,7 @@ function M.join(invite)
           type = 'join',
           invite = link,
           displayName = display_name,
+          autoSave = auto_save(),
         })
       end
     end)
