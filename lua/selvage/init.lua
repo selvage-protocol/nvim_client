@@ -697,6 +697,17 @@ local function reset()
   end
 end
 
+--- Ends the session this front-end is in, leaving the companion process for what comes next: one
+--- process serves every session a Neovim instance runs, and only `:SelvageLeave` stops it. The
+--- companion hears the `leave` and answers with `status idle`, which is the same teardown again
+--- from the other side; a front-end that has already forgotten the session does not notice.
+local function end_session()
+  if state.process ~= nil then
+    state.process:send({ type = 'leave' })
+  end
+  reset()
+end
+
 local function on_status(message)
   state.status = message.state
   state.role = message.role
@@ -789,6 +800,11 @@ local function on_message(message)
     state.process:send({ type = 'saved', id = message.id, ok = ok })
   elseif message.type == 'status' then
     on_status(message)
+  elseif message.type == 'refused' then
+    -- This process did not open a second session: one is already live. The commands ask before
+    -- they send one, so this is the answer when something else did not.
+    local where = message.what == 'host' and 'hosting' or 'in'
+    notify(('already %s room %s; leave that session first'):format(where, tostring(message.roomId)), vim.log.levels.WARN)
   elseif message.type == 'report' then
     on_report(message.report)
   elseif message.type == 'presence' then
@@ -947,6 +963,18 @@ local function auto_save()
   return nil
 end
 
+--- The question a session that is already live needs before another one replaces it: giving up a
+--- room is the person's call, and a join or a host that took one from them silently could take the
+--- room from everyone in it. Answered yes only by the button that names it; a process with nobody
+--- to ask cannot be asked, so the question is said and the answer is no.
+local function confirm_leave(question, button)
+  if not can_prompt() then
+    notify(question, vim.log.levels.WARN)
+    return false
+  end
+  return vim.fn.confirm(question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
+end
+
 --- The server to mint a room on: the configured address, else a question starting from the last
 --- one typed. An answer is remembered for this Neovim and the question is still asked next time,
 --- as it is in the other client: a value baked in would be an endpoint nobody chose.
@@ -1006,8 +1034,25 @@ local function resolve_invite(callback)
 end
 
 --- Mints a room and shares the current buffer.
+---
+--- Hosting while hosting is reaching for the invite, not asking for a room: a second room would
+--- end the first for everyone in it, and nobody asked for that. Hosting while a guest means
+--- leaving the room first, which is the person's call and so a question.
 function M.host(url)
   local wanted = vim.trim(url or '')
+  if state.status == 'hosting' then
+    M.copy_invite()
+    return
+  end
+  if in_session() then
+    local question = ('you are in room %s; hosting a session means leaving it first'):format(
+      tostring(state.room)
+    )
+    if not confirm_leave(question, 'Leave and host') then
+      return
+    end
+    end_session()
+  end
   local function with_url(address)
     last_server = address
     resolve_display_name(function(display_name)
@@ -1030,8 +1075,27 @@ function M.host(url)
 end
 
 --- Joins the room an invite link names.
+---
+--- A session already live is given up first, and only when the person says so: joining another
+--- room ends this one for everyone in it, and a mistyped link must not do that on its own.
 function M.join(invite)
   local wanted = vim.trim(invite or '')
+  if in_session() then
+    local question
+    if state.role == 'host' then
+      question = ('you are hosting room %s; joining another session ends this room for everyone'):format(
+        tostring(state.room)
+      )
+    else
+      question = ('you are in room %s; joining another session leaves it'):format(
+        tostring(state.room)
+      )
+    end
+    if not confirm_leave(question, 'Leave and join') then
+      return
+    end
+    end_session()
+  end
   local function with_invite(link)
     resolve_display_name(function(display_name)
       local process = ensure()
