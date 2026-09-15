@@ -26,7 +26,7 @@ end, {
   desc = 'Open a document from the room',
   complete = function(lead)
     local matches = {}
-    for _, path in ipairs(require('selvage').documents()) do
+    for _, path in ipairs(require('selvage').offered()) do
       if path:sub(1, #lead) == lead then
         matches[#matches + 1] = path
       end

@@ -19,6 +19,8 @@ export class FakeEngine implements CompanionEngine {
   readonly opened: string[] = [];
   readonly closed: string[] = [];
   readonly renamed: string[] = [];
+  /** What this replica holds of the room's grant, as a `doc.granted` would have left it. */
+  granted: string[] = [];
   /** When set, the next `rename` rejects with it — the way a refused name reaches a caller. */
   renameError: Error | undefined;
   readonly selections: Array<{ path: string; selection: OffsetSelection }> = [];
@@ -114,6 +116,10 @@ export class FakeEngine implements CompanionEngine {
     const error = this.renameError;
     this.renameError = undefined;
     return error === undefined ? Promise.resolve() : Promise.reject(error);
+  }
+
+  grantedPaths(): string[] {
+    return [...this.granted];
   }
 
   insert(path: string, index: number, text: string): void {
