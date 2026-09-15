@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { LineReader } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
@@ -32,6 +33,7 @@ function harness(
   role: 'host' | 'guest' = 'host',
   documents: string[] = [],
   peers: PeerInfo[] = [],
+  options: { defaultAutoSave?: boolean } = {},
 ): Harness {
   const sent: Notification[] = [];
   const hosts: string[] = [];
@@ -44,7 +46,7 @@ function harness(
   };
   const companion = new Companion({
     send: (notification) => sent.push(notification),
-    autoSave: false,
+    autoSave: options.defaultAutoSave ?? false,
     engines: {
       host: (serverUrl) => {
         hosts.push(serverUrl);
@@ -236,6 +238,53 @@ test("a joining client is told the room's peers the handshake carried", async ()
     'who is in the room arrives with the rest of the handshake, not only when someone moves',
   );
 });
+
+test('a remote change is written when the front-end asks for it', async () => {
+  const it = harness('host', [], [], { defaultAutoSave: true });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+
+  it.engine.remote('notes.txt', 'hello, world\n');
+
+  await until("the room's change to be written", () => {
+    return it.sent.some((notification) => notification.type === 'save');
+  });
+});
+
+test('a remote change is not written when the front-end says not to', async () => {
+  const it = harness('host', [], [], { defaultAutoSave: true });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', autoSave: false });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+
+  it.engine.remote('notes.txt', 'hello, world\n');
+  // The bridge writes a settled document, and its settle window is 500ms: a write this session
+  // was going to schedule has been scheduled by the end of this wait, and the sibling test
+  // above shows the same stimulus reaching the write when the front-end asks for it.
+  await delay(1200);
+  assert.deepEqual(
+    it.sent.filter((notification) => notification.type === 'save'),
+    [],
+    "the front-end said not to write it, and that is the front-end's setting, not this default",
+  );
+  assert.equal(it.engine.text('notes.txt'), 'hello, world\n', 'the room still reached the replica');
+});
+
+/**
+ * Waits for `check` with a deadline, reporting the wait when it expires. A test that sampled an
+ * asynchronous effect instead would pass or fail on how the scheduler ran that day.
+ */
+async function until(label: string, check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    if (check()) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`timed out after 2000ms waiting for ${label}`);
+    }
+    await delay(10);
+  }
+}
 
 test('a joining client is told the room documents the handshake carried', async () => {
   const it = harness('guest', ['notes.txt']);
