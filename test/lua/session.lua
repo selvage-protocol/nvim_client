@@ -1248,6 +1248,40 @@ vim.api.nvim_buf_delete(wiped_buf, { force = true })
 check('wiping a shared buffer tells the room', last_of('close') and last_of('close').path, path)
 check('  and the session no longer holds it', #selvage.documents(), 0)
 
+-- -- a companion the session has let go says nothing -----------------------------
+--
+-- `:SelvageLeave` sends the `leave` and stops the process without waiting for the round trip
+-- that leaving the room takes, so the process writes on its way out: a `status idle` for the
+-- `leave`, and another when its stdin closes. A host started in the same event-loop turn makes
+-- that trailing idle arrive after the new process has already said `hosting`, and processing it
+-- would put the front-end back to idle — the buffers the new room holds unshared while the
+-- companion goes on holding it — and an `applyEdit` from the same pipe would be answered on the
+-- wrong process. A message is the sender's, and a process this session has let go is not the
+-- one it is in.
+
+selvage.leave()
+vim.cmd('edit! ' .. path)
+local stale_buf = vim.api.nvim_get_current_buf()
+
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-old' })
+local stale = handlers()
+
+selvage.leave()
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-fresh' })
+check('the session after a leave is hosting', selvage.session().status, 'hosting')
+check('  and holds the buffer it was shown', #selvage.documents(), 1)
+
+stale.on_message({ type = 'status', state = 'idle' })
+check('a late idle from the process let go leaves the session alone', selvage.session().status, 'hosting')
+check('  and its documents with it', #selvage.documents(), 1)
+local before_stale = count_type('change')
+vim.api.nvim_buf_set_lines(stale_buf, -1, -1, true, { 'after' })
+check('  and a keystroke still reaches the room', count_type('change'), before_stale + 1)
+
+selvage.leave()
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))

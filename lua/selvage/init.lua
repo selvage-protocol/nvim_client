@@ -852,7 +852,18 @@ local function ensure()
   end
   local process, err
   process, err = companion.start({
-    on_message = on_message,
+    on_message = function(message)
+      -- The handler is registered per process, so this is where a message can be attributed to
+      -- the process that sent it. A companion this session has let go is not the one to believe:
+      -- `leave` forgets the process before stopping it and does not wait for the stop, so the
+      -- `status idle` that leave earns can still be in the pipe when the next host or join has
+      -- started a process of its own and already heard `hosting` from it. An `applyEdit` from
+      -- the same pipe would be answered on the wrong process just as readily.
+      if state.process ~= process then
+        return
+      end
+      on_message(message)
+    end,
     on_exit = function(code)
       -- A companion this session stopped is no longer its process — `leave` forgets it before
       -- stopping it, and the stop is not waited for — so its exit is not news, whether the
