@@ -90,6 +90,7 @@
           lua = mkSuite "nvim-client-lua-suite" [ pkgs.neovim ] [
             "nvim --headless -l test/lua/document.lua"
             "nvim --headless -l test/lua/session.lua"
+            "nvim --headless -l test/lua/grant.lua"
             "nvim --headless -l test/lua/commands.lua"
             "nvim --headless -l test/lua/leave.lua"
           ];
