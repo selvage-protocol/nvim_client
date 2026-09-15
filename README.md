@@ -228,7 +228,7 @@ nix flake check             # the same three suites, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
-`nix flake check` runs `typecheck`, the companion suite and the four files under `test/lua/` —
+`nix flake check` runs `typecheck`, the companion suite and the five files under `test/lua/` —
 each in its own Neovim — with no network and no editor session. The two-instance proof is not
 one of them: it needs a `selvaged` from the sibling `reference_server` checkout, which a
 sandboxed build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof
@@ -264,8 +264,13 @@ around a session — which buffers it shares, that it lets them go when the sess
 that a caret is published and a peer's caret and selection are drawn at the peer's position.
 `test/lua/commands.lua` is the commands' own policy, through the real command definitions rather
 than the Lua functions behind them: what `:SelvageHost`, `:SelvageJoin` and `:SelvageOpen` ask
-for, refuse and never do. `test/lua/leave.lua` starts a real job, one that ignores its stdin, to
-check what `:SelvageLeave` does to a companion that does not go on its own.
+for, refuse and never do. `test/lua/vocabulary.lua` pins the words rather than the behaviour, as
+the other client's `test/vocabulary.test.ts` does: the phrase each command is described by, and
+every sentence the front-end notifies, with the level it notifies it at. Both clients say the
+same sentence at a moment and keep only the presentation around it to themselves, so a reworded
+sentence fails this suite here rather than drifting away from the other editor's.
+`test/lua/leave.lua` starts a real job, one that ignores its stdin, to check what `:SelvageLeave`
+does to a companion that does not go on its own.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
 each loading the real plugin and starting its own real companion, one hosting and one joining
@@ -295,7 +300,8 @@ keystroke in that window every run — which it can only do if the relay is what
   room's text is what the buffer ends on and the keystroke is in neither the buffer nor the room.
 - A join shows only the room's first document. A room with several leaves the rest as buffers
   for `:SelvageOpen` rather than opening a window each, and a document the host opens after the
-  join gets a buffer but never takes the guest's window.
+  join gets a buffer without taking the guest's window — except the first one into a room that
+  was empty at the join, which is the landing the join asked for.
 - A room document whose text does not end in a newline gains one here. Neovim's line-array
   buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
   has to add.
