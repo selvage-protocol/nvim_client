@@ -73,6 +73,10 @@ vim.notify = function(message, level)
 end
 
 local selvage = require('selvage')
+--- The module the plugin materialises the room with, asked directly what it holds: a listed path
+--- that would leave the mirror is refused before anything is written, and that refusal is what
+--- the traversal checks are about.
+local mirror = require('selvage.mirror')
 vim.g.selvage_display_name = 'Test User'
 
 --- The notice, if any, a command added since `from`.
@@ -181,11 +185,16 @@ local function room_holding(texts)
   end
 end
 
---- The message, if any, of a kind this session sent.
-local function sent_of(kind)
-  for _, message in ipairs(sent) do
-    if message.type == kind then
-      return message
+--- The message, if any, of a kind this session sent since `from`, which is what makes an
+--- assertion about one message an assertion about *this* step rather than about the run.
+---
+--- @param kind string
+--- @param from integer an index in `sent`
+--- @return table|nil
+local function sent_since(kind, from)
+  for index = from + 1, #sent do
+    if sent[index].type == kind then
+      return sent[index]
     end
   end
   return nil
@@ -309,11 +318,33 @@ check('  and republishing the listing says nothing about it', #notices, before)
 
 -- A name that would leave the root is refused rather than written: the listing comes from a
 -- peer, and `..` in it would put a file outside the mirror, where the person keeps their work.
+--
+-- The benign path is listed first, so that the session's root exists by the time a hostile name
+-- is resolved against it. With one listed first it is not: `root/..` cannot be resolved while
+-- `root` is not there, so the hostile name fails for a reason of the kernel's, and this test
+-- would keep passing with the refusal deleted. The room is this test's own, so what it asserts —
+-- nothing of the room's is written one level up — is about a run that started from nothing.
+
+local HOSTILE = { '../escaped.txt', 'notes/../../escaped.txt', '/escaped.txt', 'notes\\escaped.txt' }
+local escape_room = CACHE .. '/r-escape'
+vim.fn.delete(escape_room, 'rf')
 before = #notices
-join({}, { '../escaped.txt', 'notes/deep.txt' })
+local listed = { 'notes/deep.txt' }
+for _, hostile in ipairs(HOSTILE) do
+  listed[#listed + 1] = hostile
+end
+join({}, listed, 'r-escape')
 root = selvage.session().mirror
-check('a listed path that leaves the mirror is not materialised', vim.fn.filereadable(root .. '/../escaped.txt'), 0)
 check('  and the paths beside it are', vim.fn.filereadable(root .. '/notes/deep.txt'), 1)
+check('  and nothing was written beside the mirror', vim.fn.filereadable(escape_room .. '/escaped.txt'), 0)
+for _, hostile in ipairs(HOSTILE) do
+  check(
+    ('a listed path that leaves the mirror is not materialised (%s)'):format(hostile),
+    mirror.granted(hostile),
+    false
+  )
+  check(('  and it has no file there (%s)'):format(hostile), mirror.file(hostile), nil)
+end
 check('  and the person is told which one was not', said_since(before, 'could not be mirrored, starting with ../escaped.txt') ~= nil, true)
 
 -- -- which buffer a room path is opened in -----------------------------------------------
@@ -337,8 +368,8 @@ check(
 )
 check(
   '  and it has no file in the mirror',
-  read(selvage.session().mirror .. '/held-but-not-listed.txt'),
-  nil
+  vim.fn.filereadable(selvage.session().mirror .. '/held-but-not-listed.txt'),
+  0
 )
 
 -- -- a listing that arrives after the room named a document -------------------------------
@@ -492,11 +523,17 @@ check('a fetch of nothing fetches the whole listing', read(root .. '/README.md')
 check('  and says how many', said_since(before, 'fetched 4 of 4 files') ~= nil, true)
 check('  and every file it names is held in the room', #selvage.documents(), 4)
 
--- A file already fetched is answered at once rather than fetched again.
+-- A path the mirror already holds is answered at once rather than fetched again: the fast path
+-- is the file itself, so nothing is written and the timestamp the fetch before it left stands.
+-- The timestamp is set to a moment nothing else can produce, which is what makes this an
+-- assertion about the write rather than about a clock's resolution.
 before = #notices
+local already = root .. '/README.md'
+uv.fs_utime(already, 1000, 1000)
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('README.md')
 check('a path fetched already answers without waiting', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('  and is not written again', uv.fs_stat(already).mtime.sec, 1000)
 vim.g.selvage_fetch_timeout_ms = nil
 
 -- The room answers a beat later, the way a real one does: the open is a round trip, and the text
@@ -553,7 +590,21 @@ selvage.leave()
 join({}, {})
 before = #notices
 selvage.fetch()
-check('a fetch in a room that lists nothing says so', said_since(before, 'the room lists no files to fetch') ~= nil, true)
+check(
+  'a fetch in a room that lists nothing says so',
+  said_since(before, 'the room lists no files to fetch') ~= nil,
+  true
+)
+
+-- A listing that shrinks to nothing under a session that already has a mirror is the same
+-- sentence from the other side: there is a directory, and the room now names nothing to put in
+-- it. What the fetch is told is the listing, not the directory.
+root = join({}, { 'a.txt' }, 'r-shrunk')
+handle({ type = 'report', report = { kind = 'grant', paths = {} } })
+before = #notices
+selvage.fetch()
+check('a fetch after the listing shrank to nothing says so', selvage.session().mirror, root)
+check('  and the fetch says it too', said_since(before, 'the room lists no files to fetch') ~= nil, true)
 
 -- -- a file closed while it is being fetched ----------------------------------------------
 --
@@ -571,6 +622,7 @@ responder = function(message)
   end
 end
 before = #notices
+local opened = #sent
 vim.g.selvage_fetch_timeout_ms = 300
 selvage.fetch('slow.txt')
 check(
@@ -578,7 +630,7 @@ check(
   said_since(before, 'had not arrived within') ~= nil,
   true
 )
-check('  and the close reached the room', sent_of('close') ~= nil, true)
+check('  and the close reached the room', sent_since('close', opened) ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
 responder = nil
 
@@ -614,6 +666,8 @@ selvage.leave()
 
 check('every mirror this file started was removed', vim.fn.isdirectory(CACHE .. '/r-mirror'), 0)
 check('  and the room directory with it', vim.fn.isdirectory(CACHE .. '/r-pruned'), 0)
+check('  and the one the traversal test used', vim.fn.isdirectory(CACHE .. '/r-escape'), 0)
+check('  and the one whose listing shrank', vim.fn.isdirectory(CACHE .. '/r-shrunk'), 0)
 
 vim.notify = notify
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
