@@ -36,6 +36,9 @@ const MARKER_HOST = '[[HOST-EDIT]]';
 const MARKER_GUEST = '[[GUEST-EDIT]]';
 const MARKER_HOST_2 = '[[HOST-EDIT-2]]';
 const MARKER_GUEST_2 = '[[GUEST-EDIT-2]]';
+// The guest's second edit to the granted path, made in its mirror and saved there: what proves the
+// save reached the room is that the host's own working copy ends up holding it.
+const MARKER_MIRROR = '[[MIRROR-EDIT]]';
 // The names the two instances join under. The host's is handed to the guest too, so the guest
 // knows which peer's caret it is waiting for.
 const HOST_DISPLAY_NAME = 'Ada';
@@ -157,6 +160,12 @@ interface InstanceOutcome {
   phase2?: { text: string };
   /** What the granted path held in this editor, and whether the host had it open too early. */
   granted?: { text: string; heldBeforeGuest?: boolean };
+  /**
+   * The mirror's own phase: what the granted path's file held after a save in the mirror. On the
+   * guest that file is the mirror's, and `root` is the directory the room was materialised into,
+   * with `rgFound` saying whether ripgrep read it; on the host it is the working copy's own file.
+   */
+  mirror?: { text: string; root?: string; rgFound?: boolean };
   error?: string;
 }
 
@@ -261,6 +270,7 @@ async function main(): Promise<void> {
   const joinedFile = resolve(RUN_DIR, 'joined.txt');
   const ackFile = resolve(RUN_DIR, 'ack');
   const grantedDoneFile = resolve(RUN_DIR, 'granted-done.txt');
+  const mirrorDoneFile = resolve(RUN_DIR, 'mirror-done.txt');
   const controlFile = RECONNECT ? resolve(RUN_DIR, 'blip-done.txt') : undefined;
   const hostResultFile = resolve(RUN_DIR, 'host-result.json');
   const guestResultFile = resolve(RUN_DIR, 'guest-result.json');
@@ -275,6 +285,8 @@ async function main(): Promise<void> {
     SELVAGE_E2E_MARKER_GUEST: MARKER_GUEST,
     SELVAGE_E2E_MARKER_HOST_2: MARKER_HOST_2,
     SELVAGE_E2E_MARKER_GUEST_2: MARKER_GUEST_2,
+    SELVAGE_E2E_MARKER_MIRROR: MARKER_MIRROR,
+    SELVAGE_E2E_MIRROR_DONE_FILE: mirrorDoneFile,
     SELVAGE_E2E_DEADLINE_MS: String(DEADLINE_MS),
     SELVAGE_E2E_RECONNECT_DEADLINE_MS: String(RECONNECT_DEADLINE_MS),
     SELVAGE_E2E_HOST_DISPLAY_NAME: HOST_DISPLAY_NAME,
@@ -350,6 +362,19 @@ async function main(): Promise<void> {
     throw error;
   });
 
+  // The guest then opens the mirrored file, checks that ripgrep reads it, and saves an edit into
+  // it — and the host confirms its own working copy took that edit. The blip must not land in the
+  // middle of that, so this waits for the host's half before cutting anything.
+  await pollFor(
+    'the guest to save an edit in its mirror and the host to take it',
+    () => (existsSync(ackFile + '.mirror') ? true : undefined),
+    DEADLINE_MS + 20_000,
+  ).catch(async (error: unknown) => {
+    await Promise.race([Promise.all([hostRun, guestRun]), delay(5000)]);
+    throw error;
+  });
+  log('the guest\'s mirror held the room, ripgrep read it, and its save reached the host');
+
   if (RECONNECT && controlFile !== undefined) {
     log('cutting the guest relay (a real TCP close)');
     guestRelay.dropAll();
@@ -404,6 +429,21 @@ async function main(): Promise<void> {
       guestText: guestOutcome?.granted?.text,
       heldBeforeGuest: hostOutcome?.granted?.heldBeforeGuest,
     },
+    mirror: {
+      // The guest's mirror is a real directory holding the room's shape before anything is
+      // fetched, the guest's file holds the room's text after the path was opened, ripgrep read
+      // that file from outside this editor, and a save made in it reached the host's own copy.
+      // The expected text is what the host's file must hold at the end of it.
+      converged:
+        guestOutcome?.mirror?.text === GRANTED_TEXT + MARKER_GUEST + '\n' + MARKER_MIRROR + '\n' &&
+        guestOutcome?.mirror?.root !== undefined &&
+        guestOutcome?.mirror?.rgFound === true &&
+        hostOutcome?.mirror?.text === GRANTED_TEXT + MARKER_GUEST + '\n' + MARKER_MIRROR + '\n',
+      guestFile: guestOutcome?.mirror?.text,
+      guestMirrorRoot: guestOutcome?.mirror?.root,
+      guestRgFound: guestOutcome?.mirror?.rgFound,
+      hostFile: hostOutcome?.mirror?.text,
+    },
     exitCodes: { host: hostCode, guest: guestCode },
   };
   writeFileSync(resolve(RUN_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
@@ -419,6 +459,12 @@ async function main(): Promise<void> {
   if (!summary.granted.converged) {
     throw new Error('the guest did not converge on a granted path the host supplied on request');
   }
+  if (!summary.mirror.converged) {
+    throw new Error(
+      'the guest did not mirror the room: a file was not materialised empty, opened as a real path, ' +
+        'read by ripgrep, or saved back to the host',
+    );
+  }
   if (RECONNECT && summary.phase2?.converged !== true) {
     throw new Error('the reconnect phase did not converge after the simulated network blip');
   }
@@ -426,7 +472,8 @@ async function main(): Promise<void> {
     throw new Error(`an instance exited non-zero: host ${hostCode}, guest ${guestCode}`);
   }
   log(
-    'PASSED: two real Neovim instances converged on the shared document, and a guest read a granted path the host never opened' +
+    'PASSED: two real Neovim instances converged on the shared document, a guest read a granted path the host never opened, ' +
+      'and a save in the guest\'s mirror of that grant reached the host' +
       (RECONNECT ? ', and again after a simulated network blip' : ''),
   );
 }

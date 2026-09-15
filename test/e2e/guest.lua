@@ -36,7 +36,7 @@ selvage.join(invite)
 -- front of the user, and a buffer that was created but never shown is the failure this proof
 -- exists to catch.
 harness.wait('the room document to open in the window', harness.deadline_ms, function()
-  return vim.fn.bufname('%') == 'selvage://' .. harness.seed_path
+  return vim.fn.bufname('%') == harness.buffer_name(harness.seed_path)
 end, function()
   return vim.inspect(selvage.session())
 end)
@@ -61,7 +61,7 @@ end, function()
 end)
 harness.log('joined with', vim.inspect(harness.text()))
 
-bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
+bufnr = vim.fn.bufnr(harness.buffer_name(harness.seed_path))
 if bufnr == -1 then
   harness.fail('the room document did not open as a buffer')
 end
@@ -79,7 +79,7 @@ end, harness.observe)
 -- is shared on both sides, so the path the marks are addressed to exists here.
 local function presence_marks()
   local namespace = vim.api.nvim_get_namespaces()['selvage.presence']
-  local bufnr = vim.fn.bufnr('selvage://' .. harness.seed_path)
+  local bufnr = vim.fn.bufnr(harness.buffer_name(harness.seed_path))
   if namespace == nil or bufnr == -1 then
     return {}
   end
@@ -152,6 +152,22 @@ end, harness.observe)
 
 harness.record('phase1', harness.text())
 harness.log('phase 1 converged:', vim.inspect(harness.text()))
+
+-- The document this window was editing when the room's listing arrived is a file in the mirror
+-- too, holding what the room and this window converged on: a guest that hears which documents the
+-- room holds before it hears what the room grants opens them as `selvage://` buffers, and the
+-- listing turns each of those into the file it names.
+if harness.mirror() == nil then
+  harness.fail('the guest has no mirror for the room document it is editing')
+end
+local mirrored_seed = harness.mirror() .. '/' .. harness.seed_path
+harness.wait('the mirrored seed document to hold the converged text', harness.deadline_ms, function()
+  return harness.file_text(mirrored_seed) == harness.text()
+end, function()
+  return vim.inspect(harness.file_text(mirrored_seed))
+end)
+harness.log('the mirrored seed document holds', vim.inspect(harness.file_text(mirrored_seed)))
+
 harness.wait_ack('phase1', harness.deadline_ms)
 
 -- -- a path the room grants and nobody has opened yet ---------------------------------
@@ -178,9 +194,41 @@ for _, path in ipairs(selvage.documents()) do
   end
 end
 
+-- -- the mirror: the room's shape, as a directory anything can read -----------------------
+--
+-- This is what the mirror is for. The listing is materialised before a byte of content is
+-- fetched: a tree plugin, `fd`, `rg --files` and a language server's project scan see the whole
+-- project, and a path whose content has not been fetched is a file that is there and empty.
+-- Both halves are asserted here — the file exists, and it holds nothing — and the `rg` further
+-- down is what "any extension works" means: a program outside this editor reads this disk.
+local mirror = harness.mirror()
+if mirror == nil then
+  harness.fail('the guest has no mirror; the room offered ' .. vim.inspect(selvage.offered()))
+end
+if vim.fn.isdirectory(mirror) ~= 1 then
+  harness.fail('the mirror is not a directory: ' .. vim.inspect(mirror))
+end
+local cache = vim.fn.stdpath('cache')
+if mirror:sub(1, #cache + 1) ~= cache .. '/' then
+  harness.fail('the mirror is not under stdpath(cache): ' .. vim.inspect(mirror))
+end
+if mirror:sub(1, #vim.fn.getcwd() + 1) == vim.fn.getcwd() .. '/' then
+  harness.fail('the mirror is inside the project this window is in: ' .. vim.inspect(mirror))
+end
+local mirrored_granted = mirror .. '/' .. harness.granted_path
+harness.wait('the granted path to be materialised in the mirror', harness.deadline_ms, function()
+  return vim.fn.filereadable(mirrored_granted) == 1
+end, function()
+  return 'the mirror holds ' .. vim.inspect(vim.fn.glob(mirror .. '/*', false, true))
+end)
+if harness.file_text(mirrored_granted) ~= '' then
+  harness.fail('a path nobody fetched holds content: ' .. vim.inspect(harness.file_text(mirrored_granted)))
+end
+harness.log("the mirror holds the room's shape, and", harness.granted_path, 'is empty in it')
+
 selvage.open(harness.granted_path)
 harness.wait('the granted path to open in the window', harness.deadline_ms, function()
-  return vim.fn.bufname('%') == 'selvage://' .. harness.granted_path
+  return vim.fn.bufname('%') == harness.buffer_name(harness.granted_path)
 end, function()
   return 'the window holds ' .. vim.inspect(vim.fn.bufname('%'))
 end)
@@ -207,6 +255,57 @@ end)
 harness.record('granted', harness.text_of(harness.granted_path))
 harness.write_file(harness.granted_done_file, 'go')
 harness.log('the granted path reads', vim.inspect(harness.text_of(harness.granted_path)))
+
+-- The content the room sent for a path this window opened is *in the mirror's file*, because that
+-- is what makes it native: the buffer is the file, and the save that follows a document the room
+-- changed wrote it there. A program started outside this editor — ripgrep, ctags, a language
+-- server — reads the bytes this window is editing.
+harness.wait("the mirror's file to hold what the room sent", harness.deadline_ms, function()
+  return harness.file_text(mirrored_granted) == harness.granted_text .. harness.markers.guest .. '\n'
+end, function()
+  return vim.inspect(harness.file_text(mirrored_granted))
+end)
+harness.log('the mirror file holds', vim.inspect(harness.file_text(mirrored_granted)))
+
+-- And a program that walks the directory finds it there, which is the claim the mirror makes and
+-- a buffer could never make. `rg` is not installed everywhere, so a run without it records that
+-- it did not run rather than passing a proof nothing exercised.
+local rg_found = false
+if vim.fn.executable('rg') == 1 then
+  local hits = vim.fn.systemlist({ 'rg', '-l', '--fixed-strings', harness.markers.guest, mirror })
+  harness.log('rg over the mirror found', vim.inspect(hits))
+  rg_found = vim.v.shell_error == 0 and vim.tbl_contains(hits, mirrored_granted)
+  if not rg_found then
+    harness.fail(('rg over the mirror found %s, which does not include %s'):format(vim.inspect(hits), mirrored_granted))
+  end
+end
+
+-- -- a save in the mirror reaches the host -------------------------------------------------
+--
+-- The buffer is a real file, so `:w` is what a person does to it. This client routes the save to
+-- the room and writes the file itself, and the host's own working copy becomes this text — the
+-- path was only ever a name in the listing until this window opened it.
+vim.api.nvim_win_set_buf(0, granted_buf)
+vim.api.nvim_buf_set_lines(granted_buf, -1, -1, true, { harness.markers.mirror })
+vim.cmd('write')
+harness.wait('the save to be written into the mirror file', harness.deadline_ms, function()
+  return harness.file_text(mirrored_granted)
+    == harness.granted_text .. harness.markers.guest .. '\n' .. harness.markers.mirror .. '\n'
+end, function()
+  return vim.inspect(harness.file_text(mirrored_granted))
+end)
+harness.wait('the buffer to be saved', harness.deadline_ms, function()
+  return vim.bo[granted_buf].modified == false
+end, function()
+  return 'modified=' .. tostring(vim.bo[granted_buf].modified)
+end)
+harness.log('saving in the mirror wrote', vim.inspect(harness.file_text(mirrored_granted)))
+harness.record('mirror', harness.file_text(mirrored_granted), {
+  root = mirror,
+  rgFound = rg_found,
+})
+harness.write_file(harness.mirror_done_file, 'go')
+harness.wait_ack('mirror', harness.deadline_ms)
 
 -- The host says the marker has landed in its own copy of the file. The guest cannot leave before
 -- it has: this window's edit is a message still on its way to the room, and a process that exits

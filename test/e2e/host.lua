@@ -84,6 +84,27 @@ harness.record('granted', harness.text_of(harness.granted_path), { heldBeforeGue
 harness.ack('granted')
 harness.log('the granted path reads', vim.inspect(harness.text_of(harness.granted_path)))
 
+-- -- the guest saves in its mirror, and this window's file becomes that text -----------------
+--
+-- The guest edits its own copy of the file — a real file in a real directory — and saves it. The
+-- edit rides the room like any other, and what makes it a *save* is on the guest's disk: this
+-- half is only that the file in the host's working copy, which no guest writes directly, ends up
+-- holding what the guest typed.
+harness.wait_for_file(
+  'the guest to report it saved in its mirror',
+  harness.deadline_ms + 15000,
+  harness.mirror_done_file
+)
+harness.wait('the mirror edit to land in this window\'s file', harness.deadline_ms, function()
+  local text = harness.read_file(harness.granted_path)
+  return text ~= nil and text:find(harness.markers.mirror, 1, true) ~= nil
+end, function()
+  return 'the file holds ' .. vim.inspect(harness.read_file(harness.granted_path))
+end)
+harness.record('mirror', harness.read_file(harness.granted_path))
+harness.ack('mirror')
+harness.log('this window\'s file holds', vim.inspect(harness.read_file(harness.granted_path)))
+
 if harness.control_file ~= nil then
   harness.wait_for_file(
     'the orchestrator to signal the network blip is over',
