@@ -48,6 +48,7 @@ vim.fn.jobstart = jobstart
 
 check('the companion starts', process ~= nil, true)
 check('  and starts without an error', err, nil)
+check('  and uses the resolved Node binary', seen ~= nil and seen[1], '/usr/bin/node')
 check('  and Node runs without its own warnings', seen ~= nil and seen[2], '--no-warnings')
 local entry = seen ~= nil and seen[#seen] or nil
 check('  and still runs the companion entrypoint', entry ~= nil and entry:sub(-#'/companion/main.ts') or nil, '/companion/main.ts')

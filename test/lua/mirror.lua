@@ -528,7 +528,7 @@ check('  and the file that came back is not in the room\'s listing', mirror.gran
 -- away either way.
 
 responder = nil
-local gone_root = join({}, { 'gone.txt', 'stays.txt' }, 'r-gone')
+join({}, { 'gone.txt', 'stays.txt' }, 'r-gone')
 selvage.open('gone.txt')
 local gone_buf = vim.api.nvim_get_current_buf()
 local gone_before = #notices
@@ -546,7 +546,7 @@ handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } }
 check('  and says so once per path', #notices, gone_repeated)
 
 responder = room_holding({ ['kept.txt'] = 'kept\n' })
-local kept_root = join({}, { 'kept.txt' }, 'r-kept')
+join({}, { 'kept.txt' }, 'r-kept')
 selvage.open('kept.txt')
 local kept_buf = vim.api.nvim_get_current_buf()
 local kept_before = #notices
