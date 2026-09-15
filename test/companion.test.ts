@@ -35,7 +35,7 @@ function harness(
   role: 'host' | 'guest' = 'host',
   documents: string[] = [],
   peers: PeerInfo[] = [],
-  options: { defaultAutoSave?: boolean } = {},
+  options: { defaultAutoSave?: boolean; granted?: string[] } = {},
 ): Harness {
   const sent: Notification[] = [];
   const hosts: string[] = [];
@@ -43,6 +43,7 @@ function harness(
   const engines: FakeEngine[] = [];
   const open = (): FakeEngine => {
     const engine = new FakeEngine(role, documents, peers);
+    engine.granted = [...(options.granted ?? [])];
     engines.push(engine);
     return engine;
   };
@@ -333,6 +334,22 @@ test('a joining client is told the room documents the handshake carried', async 
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
   const reports = it.sent.filter((notification) => notification.type === 'report');
   assert.deepEqual(reports[0]?.report, { kind: 'documents', documents: ['notes.txt'] });
+});
+
+test("a joining client is told the room's grant the handshake carried", async () => {
+  const it = harness('guest', [], [], { granted: ['src/main.rs', 'notes.txt'] });
+
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  const reports = it.sent.filter((notification) => notification.type === 'report');
+  assert.deepEqual(
+    reports.map((notification) => (notification.report as { kind: string }).kind),
+    ['documents', 'peers', 'grant'],
+  );
+  assert.deepEqual(reports[2]?.report, {
+    kind: 'grant',
+    paths: ['src/main.rs', 'notes.txt'],
+  });
 });
 
 test('a host seeds the buffer it opens, and only once', async () => {

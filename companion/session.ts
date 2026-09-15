@@ -23,6 +23,12 @@ export interface CompanionEngine extends Engine {
    * — a name is not a document — so it is here, on the adapter's own extension of the seam.
    */
   rename(displayName: string): Promise<void>;
+  /**
+   * The room's grant as this replica holds it. The listing is not a member of the join reply —
+   * the server restates it in a `doc.granted` straight after `room.joined` — so a session read
+   * from the engine at the moment it starts is how a client learns what the room already grants.
+   */
+  grantedPaths(): string[];
 }
 
 /** How a session is opened. A test supplies its own; the default opens a real one. */
@@ -382,6 +388,12 @@ export class Companion {
       report: { kind: 'documents', documents: session.documents },
     });
     this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
+    // The room's grant is the third fact of that handshake, and it is not a member of the join
+    // reply: the server restates it in a `doc.granted` straight after `room.joined`, and only
+    // when the room grants something. The bridge was not listening when that arrived, so the
+    // listing the replica already holds is read here — the way the other client reads it as its
+    // session is built. A later change is the bridge's `grant` report.
+    this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
     // The folder this session shares is what the room's paths are read off, and it is the
     // front-end that knows it: only a host has one, and a later change to where its user is
     // looking is not a statement about the folder the session started in.

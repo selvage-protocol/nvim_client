@@ -20,6 +20,10 @@ local state = {
   invite = nil,
   --- @type table<string, table> room path to document
   documents = {},
+  --- The room's grant: the paths the host listed when the session started, in the order the
+  --- room carries them. A listing, never content — a path here may have no buffer and no text
+  --- behind it yet (`DESIGN.md` §4.2).
+  grant = {},
   --- The room paths this session refused to share, so the refusal is said once: a buffer that
   --- is not UTF-8 is entered and left many times over a session.
   unshareable = {},
@@ -71,6 +75,32 @@ end
 --- The room paths this session holds, ordered so that completion and a prompt agree.
 function M.documents()
   local paths = vim.tbl_keys(state.documents)
+  table.sort(paths)
+  return paths
+end
+
+--- What the room offers: its grant, and the paths it holds open, ordered as `documents()` is.
+---
+--- The union is deliberate rather than the grant alone, so a server that has no grant — one
+--- older than `doc.grant` — still offers everything the room knows, and a document shared after
+--- the listing was published is reachable as well. What this is *not* is a statement of what
+--- this session holds: a granted path with no buffer behind it is offered and openable, and
+--- `documents()` is still the answer to which paths it holds.
+function M.offered()
+  local seen = {}
+  local paths = {}
+  for _, path in ipairs(state.grant) do
+    if not seen[path] then
+      seen[path] = true
+      paths[#paths + 1] = path
+    end
+  end
+  for _, path in ipairs(M.documents()) do
+    if not seen[path] then
+      seen[path] = true
+      paths[#paths + 1] = path
+    end
+  end
   table.sort(paths)
   return paths
 end
@@ -609,13 +639,19 @@ end
 --- The room path a user's words name: the room path, its `selvage://` buffer name, or a
 --- suffix of the path at a directory boundary. A host above a folder called `workspace`
 --- publishes `workspace/README.md`; a guest who types `README.md` means that one.
+---
+--- The search is over what the room offers, so a path the grant named and nobody has opened is
+--- as nameable as one with a buffer behind it.
 local function resolve(wanted)
   wanted = wanted:gsub('^selvage://', '')
-  if state.documents[wanted] ~= nil then
-    return wanted, {}
+  local offered = M.offered()
+  for _, candidate in ipairs(offered) do
+    if candidate == wanted then
+      return wanted, {}
+    end
   end
   local matches = {}
-  for _, candidate in ipairs(M.documents()) do
+  for _, candidate in ipairs(offered) do
     if candidate:sub(-(#wanted + 1)) == '/' .. wanted then
       matches[#matches + 1] = candidate
     end
@@ -626,10 +662,27 @@ local function resolve(wanted)
   return nil, matches
 end
 
+--- Puts a room path in the window: the buffer this session already holds for it, or the buffer
+--- a guest's room path is shown in when the room offers it and nobody has opened it yet.
+---
+--- A granted path goes through exactly what a room document goes through — a `selvage://`
+--- buffer and an `open` the companion turns into a hold — because the room is what has the
+--- content: the host reads its working copy when it is asked, and a path with no `Document`
+--- behind it is not one this session holds.
+local function reveal(path)
+  local document = state.documents[path]
+  if document ~= nil then
+    return show(document.bufnr)
+  end
+  local bufnr = guest_buffer(path)
+  share(bufnr, path)
+  return show(bufnr)
+end
+
 local function choose(paths)
   vim.ui.select(paths, { prompt = 'selvage: open which document?' }, function(choice)
     if choice ~= nil then
-      show(state.documents[choice].bufnr)
+      reveal(choice)
     end
   end)
 end
@@ -637,6 +690,8 @@ end
 --- Opens one of the room's documents in the current window.
 ---
 --- With no argument and one document, that document; with several, the user is asked which.
+--- What is offered is the room's grant unioned with the documents it holds, so a path the host
+--- listed and nobody has opened yet is offered too.
 ---
 --- A host is refused: the room's documents are the host's own files, already in its buffer list,
 --- and the command means the copy the room holds that a window does not have. Its own set is not
@@ -650,7 +705,7 @@ function M.open(path)
     notify('you are hosting, so the files you open are the ones the room has', vim.log.levels.INFO)
     return
   end
-  local paths = M.documents()
+  local paths = M.offered()
   if #paths == 0 then
     notify('the room has no open documents yet', vim.log.levels.INFO)
     return
@@ -658,7 +713,7 @@ function M.open(path)
   local wanted = vim.trim(path or '')
   if wanted == '' then
     if #paths == 1 then
-      show(state.documents[paths[1]].bufnr)
+      reveal(paths[1])
     else
       choose(paths)
     end
@@ -679,7 +734,7 @@ function M.open(path)
     end
     return
   end
-  show(state.documents[resolved].bufnr)
+  reveal(resolved)
 end
 
 --- A host shares what it opens for as long as the session lasts.
@@ -766,8 +821,10 @@ local function reset()
   state.invite = nil
   state.auto_open = false
   state.join_said = false
-  -- The grant belongs to the session, and a session that has ended grants nothing.
+  -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
+  -- was rooted at, and the listing the room carried.
   state.root = nil
+  state.grant = {}
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil
@@ -863,6 +920,12 @@ local function on_report(report)
         notify(('joined room %s; the room has no open documents yet'):format(tostring(state.room)))
       end
     end
+  elseif report.kind == 'grant' then
+    -- The room's whole grant, replacing whatever this front-end held — the same rule the server
+    -- applies to `doc.grant`, and the reason a shorter listing is a smaller grant rather than an
+    -- error. Nothing is told to the user here: the listing is what `:SelvageOpen` completes over,
+    -- and a room that lists five hundred files has nothing worth interrupting a person for.
+    state.grant = report.paths or {}
   elseif report.kind == 'peers' then
     -- The room's own list of who is in it: everyone, not only the peers this client holds a
     -- document for and can draw a caret for.
