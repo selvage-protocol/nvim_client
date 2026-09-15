@@ -923,11 +923,12 @@ end
 
 --- Sets the name other participants see, and says when it takes effect.
 ---
---- The name travels in the `host`/`join` handshake and nothing carries it afterwards, so a
---- session that is already live keeps the name it started with; the change is for the next one.
---- With no name, it reports the one now in force instead of setting an empty one. A name over
---- the room's limit is refused with its length, before either, since a session cannot join under
---- one and a report of it as the name in force would be a lie.
+--- Before a session the name rides in the `host`/`join` handshake. During one the change is sent
+--- now, as `session.rename`, and the room is told with `peer.renamed`: the sign and
+--- `:SelvagePeers` re-label from that event, so the name in force is the room's answer rather
+--- than anything held here. With no name, it reports the one now in force instead of setting an
+--- empty one. A name over the room's limit is refused with its length, before either, since a
+--- session cannot join under one and a report of it as the name in force would be a lie.
 function M.set_display_name(name)
   local wanted = vim.trim(name or '')
   if wanted == '' then
@@ -944,11 +945,8 @@ function M.set_display_name(name)
   end
   vim.g.selvage_display_name = wanted
   if state.process ~= nil then
-    notify(
-      ('display name set to "%s"; this session keeps the name it started with, the change applies to the next host or join'):format(
-        wanted
-      )
-    )
+    state.process:send({ type = 'rename', displayName = wanted })
+    notify(('display name set to "%s"; the room is told, and this session goes on under it'):format(wanted))
   else
     notify(('display name set to "%s"; the next session will use it'):format(wanted))
   end

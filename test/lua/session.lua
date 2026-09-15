@@ -690,10 +690,10 @@ check('  and the list with them', #selvage.peers(), 0)
 
 -- -- the name the room sees -----------------------------------------------------
 --
--- The name travels in the `host`/`join` handshake and nothing carries it afterwards, so a live
--- session keeps the name it started with. Every source of it is exercised here: the plugin's
--- global, `SELVAGE_DISPLAY_NAME`, the prompt, and the login name as a last resort. A configured
--- name is never asked about, and a process with no one to ask falls back rather than block.
+-- The name travels in the `host`/`join` handshake, and a change made while a session is live is
+-- sent as `session.rename`. Every source of it is exercised here: the plugin's global,
+-- `SELVAGE_DISPLAY_NAME`, the prompt, and the login name as a last resort. A configured name is
+-- never asked about, and a process with no one to ask falls back rather than block.
 
 --- The notice, if any, a command added since `from`.
 local function said_since(from, needle)
@@ -790,8 +790,10 @@ local before_report = #notices
 vim.cmd('SelvageDisplayName')
 check('  and with no name reports the one in force', said_since(before_report, 'the name others see is "Pat"') ~= nil, true)
 
--- A change during a live session is for the next one: the name rode in the handshake, and
--- nothing after it carries a name. The command says so and sends nothing.
+-- A change during a live session is sent now: `session.rename` carries it and the room answers
+-- with `peer.renamed`, so the sign and `:SelvagePeers` re-label from that event rather than from
+-- anything held here. The configured name is set too, so a session started after this one
+-- re-hellos under it.
 vim.g.selvage_display_name = nil
 vim.ui.input = function(_, on_confirm)
   on_confirm('First')
@@ -800,16 +802,13 @@ selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('the session starts under the chosen name', last_of('host') and last_of('host').displayName, 'First')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-name' })
-local hosts_before = count_type('host')
+local renames_before = count_type('rename')
 local before_live = #notices
 vim.cmd('SelvageDisplayName Second')
 check('  :SelvageDisplayName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
-check('  and sends nothing to the live session', count_type('host'), hosts_before)
-check(
-  '  and says the change is for the next session',
-  said_since(before_live, 'the change applies to the next host or join') ~= nil,
-  true
-)
+check('  and sends the live rename', count_type('rename'), renames_before + 1)
+check('  naming the new name', last_of('rename') and last_of('rename').displayName, 'Second')
+check('  and says the room is told', said_since(before_live, 'the room is told') ~= nil, true)
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('the next session uses the changed name', last_of('host') and last_of('host').displayName, 'Second')

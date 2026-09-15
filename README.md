@@ -39,6 +39,7 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 | `host {serverUrl, displayName?}` | Mint a room and become its host. |
 | `join {invite, displayName?}` | Join the room an invite link names. |
 | `leave {}` | End the session; the process stays up. |
+| `rename {displayName}` | Change the name this connection is known by, mid-session. |
 | `open {path, text}` | A buffer is now shared under `path` and holds `text`. |
 | `close {path}` | Stop sharing it. |
 | `change {path, start, end, text}` | A local edit: `[start, end)` became `text`. |
@@ -139,7 +140,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 |---|---|
 | `:SelvageHost <serverUrl>` | Mint a room on that server and share the current buffer. Every file buffer opened under the working directory afterwards joins the room too. |
 | `:SelvageJoin <invite>` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. |
-| `:SelvageDisplayName [name]` | Set the name other participants see, for the next host or join. With no name it reports the one in force. |
+| `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force. |
 | `:SelvageOpen [path]` | Put one of the session's documents in the current window. With no argument it opens the only document, or asks which when there are several. `path` completes over the session's documents and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. |
@@ -151,9 +152,12 @@ The name other participants see is resolved when a session starts, in this order
 `:SelvageDisplayName` sets the global, and the prompt remembers its answer there, so the same Neovim
 is not asked again. The prompt is only shown where there is a UI to show it
 in: a headless process falls back to the login name and says so, so a room is never silently
-given a name nobody chose. The name rides in the `host`/`join` handshake and nothing carries it
-afterwards, so a change made while a session is live applies to the next host or join, not the
-current one.
+given a name nobody chose. The name rides in the `host`/`join` handshake, and a change made while
+a session is live is sent as `session.rename`: the room answers with `peer.renamed`, and the sign
+and `:SelvagePeers` re-label from that event, so the session goes on under the new name. Setting
+`vim.g.selvage_display_name` directly mid-session does not send anything — Neovim has no
+configuration-change event to watch — so only `:SelvageDisplayName` renames a live session; a
+direct write is picked up by the next host or join.
 A name is at most **32 UTF-16 code units** — the unit the protocol counts, so an astral
 character costs two — and one over that is refused rather than shortened, because a room must
 see the name its owner chose or none at all. A name typed at the prompt that is too long says
