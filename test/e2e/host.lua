@@ -51,6 +51,39 @@ harness.record('phase1', harness.text())
 harness.ack('phase1')
 harness.log('phase 1 converged:', vim.inspect(harness.text()))
 
+-- -- the file this host never opened ----------------------------------------------------
+--
+-- The orchestrator wrote `granted/never-opened.txt` before this session started and nothing
+-- here has opened it, so the guest's copy of its text can only have come from this window:
+-- the room asked for a path this client did not hold, and the host read its own working copy
+-- for it. Opening it now is the host's own act, and it finds the guest's marker in the room's
+-- copy — content travelled both ways over a path that was only ever a name until somebody
+-- asked for it.
+harness.wait_for_file(
+  'the guest to converge on the granted path',
+  harness.deadline_ms + 15000,
+  harness.granted_done_file
+)
+
+local held_before = false
+for _, path in ipairs(selvage.documents()) do
+  if path == harness.granted_path then
+    held_before = true
+  end
+end
+harness.log('the granted path was held before the guest read it:', held_before)
+
+vim.cmd('edit ' .. vim.fn.fnameescape(harness.granted_path))
+harness.wait('the guest marker to arrive in the granted path', harness.deadline_ms, function()
+  local text = harness.text_of(harness.granted_path)
+  return text ~= nil and text:find(harness.markers.guest, 1, true) ~= nil
+end, function()
+  return vim.inspect(harness.text_of(harness.granted_path))
+end)
+harness.record('granted', harness.text_of(harness.granted_path), { heldBeforeGuest = held_before })
+harness.ack('granted')
+harness.log('the granted path reads', vim.inspect(harness.text_of(harness.granted_path)))
+
 if harness.control_file ~= nil then
   harness.wait_for_file(
     'the orchestrator to signal the network blip is over',

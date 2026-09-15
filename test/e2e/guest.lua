@@ -154,6 +154,65 @@ harness.record('phase1', harness.text())
 harness.log('phase 1 converged:', vim.inspect(harness.text()))
 harness.wait_ack('phase1', harness.deadline_ms)
 
+-- -- a path the room grants and nobody has opened yet ---------------------------------
+--
+-- The room's grant is a listing and never content: this path is offered and no buffer exists
+-- for it, so `documents()` — what this session holds — does not name it. It is opened here the
+-- way a person opens it, through `:SelvageOpen`'s own path, and its text can then only have
+-- come from the host's working copy: the host never opened the file, and the room asked for it
+-- because this editor did.
+harness.wait('the room to grant the path the host never opened', harness.deadline_ms, function()
+  for _, path in ipairs(selvage.offered()) do
+    if path == harness.granted_path then
+      return true
+    end
+  end
+  return false
+end, function()
+  return ('offered %s; held %s'):format(vim.inspect(selvage.offered()), vim.inspect(selvage.documents()))
+end)
+
+for _, path in ipairs(selvage.documents()) do
+  if path == harness.granted_path then
+    harness.fail('the granted path was already held before anyone opened it')
+  end
+end
+
+selvage.open(harness.granted_path)
+harness.wait('the granted path to open in the window', harness.deadline_ms, function()
+  return vim.fn.bufname('%') == 'selvage://' .. harness.granted_path
+end, function()
+  return 'the window holds ' .. vim.inspect(vim.fn.bufname('%'))
+end)
+local granted_buf = vim.api.nvim_get_current_buf()
+
+-- Waited for as the host's own text: nothing this driver knows is in the buffer, and an empty
+-- buffer is exactly the failure the read is here to rule out.
+harness.wait("the host's text for the granted path to arrive", harness.deadline_ms, function()
+  return harness.text_of(harness.granted_path) == harness.granted_text
+end, function()
+  return vim.inspect(harness.text_of(harness.granted_path))
+end)
+harness.log('the granted path holds', vim.inspect(harness.text_of(harness.granted_path)))
+
+-- The guest writes into it, so the host's copy of a file it never opened becomes something this
+-- window wrote.
+vim.api.nvim_buf_set_lines(granted_buf, -1, -1, true, { harness.markers.guest })
+harness.wait('the guest marker to land in the granted document', harness.deadline_ms, function()
+  return harness.text_of(harness.granted_path)
+    == harness.granted_text .. harness.markers.guest .. '\n'
+end, function()
+  return vim.inspect(harness.text_of(harness.granted_path))
+end)
+harness.record('granted', harness.text_of(harness.granted_path))
+harness.write_file(harness.granted_done_file, 'go')
+harness.log('the granted path reads', vim.inspect(harness.text_of(harness.granted_path)))
+
+-- The host says the marker has landed in its own copy of the file. The guest cannot leave before
+-- it has: this window's edit is a message still on its way to the room, and a process that exits
+-- takes it with it — which is the same reason phase 1 is acked.
+harness.wait_ack('granted', harness.deadline_ms)
+
 if harness.control_file ~= nil then
   harness.wait_for_file(
     'the orchestrator to signal the network blip is over',

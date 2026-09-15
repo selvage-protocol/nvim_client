@@ -46,6 +46,12 @@ function M.setup(role)
   }
   M.joined_file = required('SELVAGE_E2E_JOINED_FILE')
   M.ack_file = required('SELVAGE_E2E_ACK_FILE')
+  -- The granted path is required rather than optional: it is the reason this proof runs, and a
+  -- driver that quietly skipped the phase because an environment variable was missing would
+  -- report a pass for a claim nothing exercised.
+  M.granted_path = required('SELVAGE_E2E_GRANTED_PATH')
+  M.granted_text = required('SELVAGE_E2E_GRANTED_TEXT')
+  M.granted_done_file = required('SELVAGE_E2E_GRANTED_DONE_FILE')
   M.control_file = M.env.optional('SELVAGE_E2E_CONTROL_FILE')
   M.deadline_ms = tonumber(M.env.optional('SELVAGE_E2E_DEADLINE_MS') or '20000')
   M.reconnect_deadline_ms = tonumber(M.env.optional('SELVAGE_E2E_RECONNECT_DEADLINE_MS') or '40000')
@@ -80,9 +86,16 @@ function M.read_file(path)
   return contents
 end
 
---- Records what this instance reached, so the orchestrator can compare the two.
-function M.record(phase, text)
-  M.outcome[phase] = { text = text }
+--- Records what this instance reached, so the orchestrator can compare the two. `extra` is
+--- whatever else the phase has to say — the host's granted phase reports whether it was holding
+--- the file before the guest read it, which is what makes the phase about the host's disk
+--- rather than about an ordinary open.
+function M.record(phase, text, extra)
+  local entry = { text = text }
+  for key, value in pairs(extra or {}) do
+    entry[key] = value
+  end
+  M.outcome[phase] = entry
   M.write_file(M.result_file, vim.json.encode(M.outcome))
 end
 
@@ -134,6 +147,11 @@ end
 --- The text the plugin holds for the shared document, as the room counts it.
 function M.text()
   return require('selvage').text(M.seed_path)
+end
+
+--- The text the plugin holds for any room path, as the room counts it.
+function M.text_of(path)
+  return require('selvage').text(path)
 end
 
 function M.contains(marker)
