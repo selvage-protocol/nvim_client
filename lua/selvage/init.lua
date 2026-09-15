@@ -554,6 +554,41 @@ local function forget_documents()
   state.documents = {}
 end
 
+--- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
+--- is back to nothing shared.
+local function reset()
+  -- A callback left attached would keep sending into a companion that is gone.
+  forget_documents()
+  clear_presence()
+  state.peers = {}
+  state.cursors = {}
+  for _, name in pairs(state.peer_groups) do
+    pcall(api.nvim_set_hl, 0, name, {})
+  end
+  for _, name in pairs(state.peer_fills) do
+    pcall(api.nvim_set_hl, 0, name, {})
+  end
+  state.peer_groups = {}
+  state.peer_fills = {}
+  state.peer_count = 0
+  state.generation = state.generation + 1
+  state.selection_armed = false
+  state.selection_path = nil
+  state.status = 'idle'
+  state.role = nil
+  state.room = nil
+  state.invite = nil
+  state.auto_open = false
+  if state.group ~= nil then
+    api.nvim_del_augroup_by_id(state.group)
+    state.group = nil
+  end
+  if state.presence_group ~= nil then
+    api.nvim_del_augroup_by_id(state.presence_group)
+    state.presence_group = nil
+  end
+end
+
 local function on_status(message)
   state.status = message.state
   state.role = message.role
@@ -610,6 +645,13 @@ local function on_report(report)
     notify(report.kind .. ' on ' .. tostring(report.path), vim.log.levels.WARN)
   elseif report.kind == 'saveFailed' then
     notify('could not write ' .. tostring(report.path), vim.log.levels.WARN)
+  elseif report.kind == 'disconnected' then
+    -- The bridge reconnects on its own until it runs out of attempts, and this is that end:
+    -- the session is over and typing would accumulate in a replica nobody hears. The
+    -- companion process is deliberately left running — `ensure` reuses it on the next host
+    -- or join, and the engine on the other side of it has already finished.
+    notify('the connection ended and could not be re-established; the session is over', vim.log.levels.ERROR)
+    reset()
   end
 end
 
@@ -631,39 +673,6 @@ local function on_message(message)
   end
 end
 
-local function reset()
-  -- The session is over, so every buffer it shared stops reporting: a callback left attached
-  -- would keep sending into a companion that is gone.
-  forget_documents()
-  clear_presence()
-  state.peers = {}
-  state.cursors = {}
-  for _, name in pairs(state.peer_groups) do
-    pcall(api.nvim_set_hl, 0, name, {})
-  end
-  for _, name in pairs(state.peer_fills) do
-    pcall(api.nvim_set_hl, 0, name, {})
-  end
-  state.peer_groups = {}
-  state.peer_fills = {}
-  state.peer_count = 0
-  state.generation = state.generation + 1
-  state.selection_armed = false
-  state.selection_path = nil
-  state.status = 'idle'
-  state.role = nil
-  state.room = nil
-  state.invite = nil
-  state.auto_open = false
-  if state.group ~= nil then
-    api.nvim_del_augroup_by_id(state.group)
-    state.group = nil
-  end
-  if state.presence_group ~= nil then
-    api.nvim_del_augroup_by_id(state.presence_group)
-    state.presence_group = nil
-  end
-end
 
 local function ensure()
   if state.process ~= nil then

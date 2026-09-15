@@ -969,6 +969,25 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('a join re-opens a document the front-end already held', count_type('open'), joined_opens + 1)
 check('  under its room path', last_of('open') and last_of('open').path, path)
 
+-- -- the engine gives up ---------------------------------------------------------
+--
+-- A bounded reconnect that runs out of attempts ends the session, and the bridge says so with
+-- a `disconnected` report. Nothing said anything before this: the status stayed hosting or
+-- joined and the documents stayed attached, so the user went on typing into a replica nobody
+-- would hear.
+
+selvage.leave()
+vim.cmd('edit! ' .. path)
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-drop' })
+check('the buffer is shared before the engine gives up', #selvage.documents(), 1)
+
+local before_drop = errors()
+handlers().on_message({ type = 'report', report = { kind = 'disconnected' } })
+check('a connection the engine gave up on is reported', errors(), before_drop + 1)
+check('  and the session lets its documents go', #selvage.documents(), 0)
+check('  and it is no longer hosting', selvage.session().status, 'idle')
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
