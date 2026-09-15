@@ -20,6 +20,9 @@ local state = {
   invite = nil,
   --- @type table<string, table> room path to document
   documents = {},
+  --- The room paths this session refused to share, so the refusal is said once: a buffer that
+  --- is not UTF-8 is entered and left many times over a session.
+  unshareable = {},
   group = nil,
   -- Presence: the augroup the caret watchers live in, the marks drawn for peers, and the one
   -- scheduled flush that publishes this user's caret.
@@ -425,12 +428,23 @@ local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
     return
   end
+  -- The same text `Document.new` will shadow, read once. The companion decodes its stdin as
+  -- UTF-8, so a buffer whose bytes are not UTF-8 would reach the room as U+FFFD; refusing it
+  -- here keeps the `open` out of the room and every later `change` with it.
+  local text = table.concat(api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n') .. '\n'
+  if not utf16.valid(text) then
+    if state.unshareable[path] == nil then
+      state.unshareable[path] = true
+      notify(path .. ' is not valid UTF-8, so it is not shared', vim.log.levels.ERROR)
+    end
+    return
+  end
   local document = Document.new(bufnr, path, function(message)
     state.process:send(message)
   end)
   state.documents[path] = document
   document:attach()
-  state.process:send({ type = 'open', path = path, text = document:text() })
+  state.process:send({ type = 'open', path = path, text = text })
   -- The document may already have a peer's caret resolved against it, and this buffer's own
   -- caret is worth publishing the moment the room holds it.
   draw_presence(state.cursors)
@@ -546,12 +560,14 @@ end
 --- start clean, holds nothing.
 ---
 --- Detaching is what makes this the end of the document rather than a leak: a `Document` left
---- attached would keep reporting the buffer beside the one the new session makes for it.
+--- attached would keep reporting the buffer beside the one the new session makes for it. A
+--- refusal goes the same way, so the next session looks at the buffer again.
 local function forget_documents()
   for _, document in pairs(state.documents) do
     document:detach()
   end
   state.documents = {}
+  state.unshareable = {}
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end

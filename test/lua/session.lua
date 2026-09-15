@@ -988,6 +988,64 @@ check('a connection the engine gave up on is reported', errors(), before_drop + 
 check('  and the session lets its documents go', #selvage.documents(), 0)
 check('  and it is no longer hosting', selvage.session().status, 'idle')
 
+-- -- a buffer that is not valid UTF-8 -------------------------------------------
+--
+-- A Neovim buffer is bytes, and a file opened as Latin-1 holds bytes that no UTF-8 sequence
+-- can carry. The companion decodes its stdin as UTF-8, so sharing one of those would put
+-- U+FFFD in the room where the file has a character, and the bytes would be lost in silence.
+-- The buffer is refused instead, by name, and the refusal is remembered so entering it again
+-- does not repeat it.
+
+local latin_path = '.tmp/lua-latin1.txt'
+local latin_room = vim.fn.fnamemodify(latin_path, ':.')
+
+local function opens_of(room)
+  local count = 0
+  for _, message in ipairs(sent) do
+    if message.type == 'open' and message.path == room then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+selvage.leave()
+vim.cmd('edit! ' .. vim.fn.fnameescape(latin_path))
+local latin_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(latin_buf, 0, -1, true, { 'caf\xe9' })
+check('the buffer holds the byte, which is the point', vim.api.nvim_buf_get_lines(latin_buf, 0, -1, true)[1]:byte(4), 233)
+
+local before_latin = #notices
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-latin' })
+check('a buffer that is not valid UTF-8 is not shared', opens_of(latin_room), 0)
+
+local refusal = nil
+for index = before_latin + 1, #notices do
+  if notices[index].message:find(latin_room, 1, true) ~= nil then
+    refusal = notices[index]
+  end
+end
+check('  and the refusal names it', refusal ~= nil, true)
+check('  at error level', refusal and refusal.level, vim.log.levels.ERROR)
+
+local refusals = 0
+for _, notice in ipairs(notices) do
+  if notice.message:find(latin_room, 1, true) ~= nil then
+    refusals = refusals + 1
+  end
+end
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = latin_buf })
+check('  said once, however often the buffer is entered', refusals, 1)
+
+-- The refusal is this session's: the next one looks at the buffer again.
+selvage.leave()
+local before_again = #notices
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-latin-again' })
+check('a new session refuses it again', opens_of(latin_room), 0)
+check('  and says so again', said_since(before_again, latin_room) ~= nil, true)
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
