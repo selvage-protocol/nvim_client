@@ -9,11 +9,12 @@
  * The case worth reading closely is the directory link. A link to a *file* is caught by the
  * leaf's own `lstat`, which is the check a suite is tempted to stop at; a link to a *directory*
  * is not, because the leaf behind it is an ordinary file that a `stat` would vouch for. The path
- * travels *through* the link, and no such path was ever listed.
+ * travels *through* the link, and no such path was ever listed. The last case is the same link
+ * one moment later: a directory that is a link by the time the segment after it is resolved.
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -183,6 +184,81 @@ test('a segment that is a file is not walked through', async () => {
   await put('through/not-a-dir.txt');
   const root = join(ROOT, 'through');
   assert.equal(await readGrantedFile(root, 'not-a-dir.txt/file.txt'), undefined);
+});
+
+test('a name that is a link by the time the next segment is resolved serves nothing outside', async (t) => {
+  const scratch = join(ROOT, 'swap');
+  const root = join(scratch, 'root');
+  const outside = join(scratch, 'outside');
+  const parked = join(scratch, 'parked');
+  // Deep enough that the name at the top of the path is resolved once for every segment under
+  // it: one swap lands inside that window rather than after the read has finished.
+  const deep = Array.from({ length: 20 }, (_unused, index) => `d${index}`);
+  const asked = ['race', ...deep, 'f.txt'].join('/');
+  mkdirSync(join(root, 'race', ...deep), { recursive: true });
+  writeFileSync(join(root, 'race', ...deep, 'f.txt'), 'the file the folder holds\n');
+  mkdirSync(join(outside, ...deep), { recursive: true });
+  writeFileSync(join(outside, ...deep, 'f.txt'), 'a file outside the folder\n');
+
+  // The name the path walks through, swapped between the real directory and a link out of the
+  // folder: one `renameSync` and one `symlinkSync` inside a turn of the event loop, so a read
+  // sees either the directory or the link and never a state in between. A read that resolves the
+  // segments one at a time can still be *between* two of them when this lands.
+  let linked = false;
+  const flip = (): void => {
+    if (linked) {
+      rmSync(join(root, 'race'), { force: true });
+      renameSync(parked, join(root, 'race'));
+      linked = false;
+      return;
+    }
+    renameSync(join(root, 'race'), parked);
+    symlinkSync(outside, join(root, 'race'));
+    linked = true;
+  };
+  let flips = 0;
+  const flipping = setInterval(() => {
+    flips += 1;
+    flip();
+  }, 0);
+  t.after(() => {
+    clearInterval(flipping);
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  let reads = 0;
+  let inside = 0;
+  let refused = 0;
+  let leaked: string | undefined;
+  // Bounded by both a count and a deadline: a read is tens of `await`s, and the count is what a
+  // run without the pinning needs to hit one of them (it takes a handful of reads).
+  const deadline = Date.now() + 5000;
+  while (reads < 300 && leaked === undefined && Date.now() < deadline) {
+    reads += 1;
+    const text = await readGrantedFile(root, asked);
+    if (text === 'the file the folder holds\n') {
+      inside += 1;
+      continue;
+    }
+    if (text !== undefined) {
+      leaked = text;
+      break;
+    }
+    refused += 1;
+  }
+
+  assert.equal(
+    leaked,
+    undefined,
+    `${reads} reads while the name was swapped ${flips} times served a file from outside the folder: ${JSON.stringify(leaked)}`,
+  );
+  // Both states have to have been read through, or the reads above say nothing: a name that was
+  // never a link is not the case this test is for, and one that was never a directory is not a
+  // read at all.
+  assert.ok(
+    inside > 0 && refused > 0,
+    `the name was not both a directory and a link under the reads: ${reads} reads, ${flips} swaps, ${inside} inside, ${refused} refused`,
+  );
 });
 
 test('bytes a session cannot carry are refused', async () => {
