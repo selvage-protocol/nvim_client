@@ -6,7 +6,8 @@
 # (`test/lua/grant.lua`), the room's grant listing and `:SelvageOpen` over it
 # (`test/lua/granted.lua`), the guest's mirror of that listing (`test/lua/mirror.lua`), what the
 # commands themselves decide (`test/lua/commands.lua`), the words the two clients share
-# (`test/lua/vocabulary.lua`), and what stopping the process does to it (`test/lua/leave.lua`,
+# (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), and what
+# stopping the process does to it (`test/lua/leave.lua`,
 # against a real job).
 #
 #   scripts/test-lua.sh
@@ -25,4 +26,5 @@ nvim --headless -l test/lua/granted.lua
 nvim --headless -l test/lua/mirror.lua
 nvim --headless -l test/lua/commands.lua
 nvim --headless -l test/lua/vocabulary.lua
+nvim --headless -l test/lua/warnings.lua
 nvim --headless -l test/lua/leave.lua
