@@ -9,11 +9,11 @@ local command = vim.api.nvim_create_user_command
 
 command('SelvageHost', function(args)
   require('selvage').host(args.args)
-end, { nargs = 1, desc = 'Host a session on a Selvage server' })
+end, { nargs = '?', desc = 'Host a session on a Selvage server' })
 
 command('SelvageJoin', function(args)
   require('selvage').join(args.args)
-end, { nargs = 1, desc = 'Join a session from an invite link' })
+end, { nargs = '?', desc = 'Join a session from an invite link' })
 
 command('SelvageCopyInvite', function()
   require('selvage').copy_invite()
