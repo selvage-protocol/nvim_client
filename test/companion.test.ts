@@ -1005,3 +1005,167 @@ test('a refused listing is reported and changes nothing', async (t) => {
   assert.equal(it.engine.disconnected, false, 'a refused listing does not end the session');
 });
 
+// -- the folder watched while hosting --------------------------------------------------
+//
+// The room's grant is a listing of the folder the session shares, and a file created, deleted or
+// renamed under it is a change to that listing. A host watches the folder while it hosts — a guest
+// has no folder to publish — and republishes when it changes, once per burst and only when the
+// listing actually differs. A watcher that outlives its session is as much a defect as a listing
+// that never moves: it would republish the folder of a room nobody is in.
+
+/** The window a burst of changes is gathered in, as `companion/session.ts` sets it. */
+const SETTLE_MS = 250;
+
+/** How long a test waits to say that nothing is owed: longer than any burst could schedule. */
+const QUIET_MS = 3 * SETTLE_MS;
+
+/** A host with a folder of its own, waiting until the initial listing has reached the engine. */
+async function hosting(
+  t: { after: (fn: () => void) => void },
+  files: Record<string, string> = { 'notes.txt': 'a note\n' },
+  options: { grantError?: Error } = {},
+): Promise<{ root: string; it: Harness }> {
+  const root = folder(t);
+  for (const [path, body] of Object.entries(files)) {
+    tree(root, path, body);
+  }
+  const it = harness('host', [], [], options);
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the folder to be published as the session starts',
+    () => it.engine.grants.length > 0,
+    () => it.engine.grants,
+  );
+  return { root, it };
+}
+
+test('a file created under the host root is republished', async (t) => {
+  const { root, it } = await hosting(t);
+
+  tree(root, 'created.txt', 'made while hosting\n');
+
+  await until(
+    'the created path to be published',
+    () => it.engine.grants.at(-1)?.includes('created.txt') === true,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [['notes.txt'], ['created.txt', 'notes.txt']]);
+});
+
+test('a file deleted under the host root is republished', async (t) => {
+  const { root, it } = await hosting(t, { 'notes.txt': 'a note\n', 'gone.txt': 'to be deleted\n' });
+  assert.deepEqual(it.engine.grants, [['gone.txt', 'notes.txt']]);
+
+  rmSync(join(root, 'gone.txt'));
+
+  await until(
+    'the deleted path to leave the listing',
+    () => it.engine.grants.length > 1 && it.engine.grants.at(-1)?.includes('gone.txt') === false,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [['gone.txt', 'notes.txt'], ['notes.txt']]);
+});
+
+test('a burst of changes is one republish', async (t) => {
+  const { root, it } = await hosting(t);
+
+  // A `git checkout` or a build looks like this. The loop is synchronous, so every event it
+  // causes can only fall inside the one window its first event opened: the burst is one walk and
+  // one frame, not one per file.
+  const burst = 40;
+  for (let index = 0; index < burst; index += 1) {
+    tree(root, `burst-${String(index).padStart(2, '0')}.txt`);
+  }
+
+  await until(
+    'the burst to be published',
+    () => it.engine.grants.at(-1)?.includes('burst-39.txt') === true,
+    () => it.engine.grants.length,
+  );
+  assert.equal(it.engine.grants.length, 2, 'the burst was gathered into one listing');
+  assert.equal(it.engine.grants[1]?.length, burst + 1, 'and that listing holds every created path');
+});
+
+test('an unchanged folder is republished to no one', async (t) => {
+  const { root, it } = await hosting(t);
+
+  // Nothing touches the folder, so nothing is owed. Nothing arriving is only evidence once the
+  // window a burst could schedule a republish in has certainly passed, so the change below is
+  // what keeps this from passing because the watcher never worked at all.
+  await delay(QUIET_MS);
+  assert.deepEqual(it.engine.grants, [['notes.txt']], 'a folder that did not change published once');
+
+  tree(root, 'after.txt');
+  await until(
+    'the watcher to still be alive after the quiet window',
+    () => it.engine.grants.length === 2,
+    () => it.engine.grants,
+  );
+});
+
+test('a change that leaves the listing as it was is not republished', async (t) => {
+  const { root, it } = await hosting(t);
+
+  // A file that comes and goes inside one window leaves the listing naming exactly what it named
+  // before, and the room is told nothing: what is compared is the listing, not the event.
+  tree(root, 'transient.txt');
+  rmSync(join(root, 'transient.txt'));
+
+  await delay(QUIET_MS);
+  assert.deepEqual(
+    it.engine.grants,
+    [['notes.txt']],
+    'the listing was unchanged, so there was nothing to publish',
+  );
+});
+
+test('the folder is published again by the next session', async (t) => {
+  const { root, it } = await hosting(t);
+  const first = it.engine;
+
+  await it.companion.handle({ type: 'leave' });
+  tree(root, 'after-leave.txt');
+
+  // The watcher belonged to the session that opened it. A file arriving after it has ended is a
+  // change to a folder nobody is sharing, and publishing it would offer the room a listing the
+  // session that left had no business reading.
+  await delay(QUIET_MS);
+  assert.deepEqual(first.grants, [['notes.txt']], 'a session that ended published nothing further');
+
+  // And a session that starts after it publishes the folder rather than comparing it with the
+  // listing the one before it sent: the folder is back to exactly what it was.
+  rmSync(join(root, 'after-leave.txt'));
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the next session to publish the folder',
+    () => it.engine.grants.length > 0,
+    () => it.engine.grants,
+  );
+  assert.notEqual(it.engine, first, 'a second session is a second room');
+  assert.deepEqual(it.engine.grants, [['notes.txt']]);
+});
+
+test('a guest watches nothing and publishes no listing', async () => {
+  const it = harness('guest');
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  await delay(QUIET_MS);
+  assert.deepEqual(it.engine.grants, [], 'a guest has no folder of its own to publish');
+});
+
+test('a folder that cannot be watched is reported and the session goes on', async (t) => {
+  // A NUL byte is the one folder this platform's real `fs.watch` refuses outright; no
+  // arrangement of directories makes a recursive watch of an existing tree fail here.
+  const root = `${folder(t)}/unwatchable\u0000name`;
+  const it = harness('host');
+
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until('the refusal to be reported', () => refusals(it).length > 0, () => refusals(it));
+
+  assert.match(
+    refusals(it)[0] ?? '',
+    /^could not watch the folder this session shares: /,
+    'the report names the folder and the reason',
+  );
+  assert.equal(it.engine.disconnected, false, 'a folder that cannot be watched does not end the session');
+});
+

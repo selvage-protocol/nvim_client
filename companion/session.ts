@@ -7,6 +7,8 @@
  * message to one method.
  */
 
+import { watch, type FSWatcher } from 'node:fs';
+
 import { SessionBridge } from '../vendor/bridge/index.ts';
 import type { Engine, TextChange } from '../vendor/bridge/index.ts';
 import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engine/index.ts';
@@ -14,6 +16,13 @@ import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engin
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant } from './grant.ts';
 import type { Notification, Request } from './ipc.ts';
+
+/**
+ * How long a burst of file-system events is gathered for before the shared folder is read again.
+ * A `git checkout` or a build produces thousands of events, and one reading per event would be a
+ * thousands-fold walk of the tree; the window bounds a burst to one walk rather than one per file.
+ */
+const GRANT_SETTLE_MS = 250;
 
 /** The engine, plus the members the lifecycle needs and the bridge does not. */
 export interface CompanionEngine extends Engine {
@@ -82,6 +91,12 @@ export class Companion {
   /** Documents the front-end has opened whose text the room has not sent yet — see `open`. */
   private readonly unarrived = new Map<string, Unarrived>();
   private stopListening?: () => void;
+  /** The shared folder, watched while this process is hosting and closed with the session. */
+  private grantWatcher?: FSWatcher;
+  /** The rereading a burst has scheduled, if one is outstanding. */
+  private grantRepublish?: NodeJS.Timeout;
+  /** The listing last handed to the room, so a folder that has not changed publishes nothing. */
+  private grantedListing?: string[];
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
@@ -166,6 +181,7 @@ export class Companion {
     this.bridge = undefined;
     this.stopListening?.();
     this.stopListening = undefined;
+    this.stopWatching();
     this.unarrived.clear();
     const engine = this.engine;
     this.engine = undefined;
@@ -413,7 +429,74 @@ export class Companion {
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
       this.publishGrant(root);
+      this.watchGrant(root);
     }
+  }
+
+  /**
+   * Watches the folder this session shares and republishes its listing when it changes.
+   *
+   * The watcher belongs to the session: it is opened only while hosting — a guest publishes no
+   * grant and so has nothing to watch — and closed when the session ends. One that reports an
+   * error is closed too: a failed watcher has no promise left to keep, and holding one would
+   * leave a host that looks live with a listing that silently stops moving.
+   */
+  private watchGrant(root: string): void {
+    let watcher: FSWatcher;
+    try {
+      watcher = watch(root, { recursive: true });
+    } catch (error: unknown) {
+      this.reportWatchFailure(error);
+      return;
+    }
+    watcher.on('change', () => {
+      this.scheduleGrant(root);
+    });
+    watcher.on('error', (error) => {
+      this.reportWatchFailure(error);
+    });
+    this.grantWatcher = watcher;
+  }
+
+  /**
+   * Says the shared folder has stopped being watched, once; the session goes on with the listing
+   * it holds, because a listing that is not being refreshed is the room it was before any of this.
+   */
+  private reportWatchFailure(error: unknown): void {
+    this.stopWatching();
+    this.send({
+      type: 'report',
+      report: {
+        kind: 'sessionError',
+        code: 'error',
+        message: `could not watch the folder this session shares: ${describe(error)}`,
+      },
+    });
+  }
+
+  /**
+   * Schedules one rereading of the shared folder. The first event of a burst sets the timer and
+   * the ones after it do not move it, so a burst is read once, one window after it began.
+   */
+  private scheduleGrant(root: string): void {
+    if (this.grantRepublish !== undefined) {
+      return;
+    }
+    this.grantRepublish = setTimeout(() => {
+      this.grantRepublish = undefined;
+      this.publishGrant(root);
+    }, GRANT_SETTLE_MS);
+  }
+
+  /** Stops watching the shared folder, and forgets the listing the room was last offered. */
+  private stopWatching(): void {
+    if (this.grantRepublish !== undefined) {
+      clearTimeout(this.grantRepublish);
+      this.grantRepublish = undefined;
+    }
+    this.grantWatcher?.close();
+    this.grantWatcher = undefined;
+    this.grantedListing = undefined;
   }
 
   /**
@@ -433,20 +516,44 @@ export class Companion {
       try {
         paths = await enumerateGrant(root);
       } catch (error: unknown) {
-        this.send({
-          type: 'report',
-          report: {
-            kind: 'sessionError',
-            code: 'error',
-            message: `could not read the folder this session shares: ${describe(error)}`,
-          },
-        });
+        if (this.engine === engine) {
+          this.send({
+            type: 'report',
+            report: {
+              kind: 'sessionError',
+              code: 'error',
+              message: `could not read the folder this session shares: ${describe(error)}`,
+            },
+          });
+        }
         return;
       }
-      await engine.grant(paths).catch((error: unknown) => {
-        if (isProtocolError(error, errCode.unknownMethod)) {
+      // A session that ended while the folder was being read has no room left to be told
+      // anything, and its listing must not become the next session's starting point.
+      if (this.engine !== engine) {
+        return;
+      }
+      // The engine publishes unconditionally, and a listing is a snapshot the room replaces
+      // wholesale: a folder that names exactly what it named last time has nothing to say.
+      const previous = this.grantedListing;
+      if (previous !== undefined && sameListing(previous, paths)) {
+        return;
+      }
+      try {
+        await engine.grant(paths);
+        this.grantedListing = paths;
+      } catch (error: unknown) {
+        if (this.engine !== engine) {
           return;
         }
+        if (isProtocolError(error, errCode.unknownMethod)) {
+          // The server has no grant at all, so nothing was refused: the room keeps its
+          // open-document set, and this folder is what it would grant if it could.
+          this.grantedListing = paths;
+          return;
+        }
+        // A refused listing leaves the room with the grant it had, so it is not remembered as
+        // the one the room holds: the folder's next change offers the new listing all the same.
         this.send({
           type: 'report',
           report: {
@@ -455,9 +562,14 @@ export class Companion {
             message: `the server refused the listing of the folder this session shares: ${describe(error)}`,
           },
         });
-      });
+      }
     })();
   }
+}
+
+/** Whether two listings name the same paths, in the same order. */
+function sameListing(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index]);
 }
 
 /** A failure as a sentence: the message of an Error, or whatever was thrown instead. */
