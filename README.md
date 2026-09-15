@@ -231,9 +231,12 @@ SELVAGE_SELVAGED=/path/to/reference_server/target/debug/selvaged scripts/e2e/run
 
 There is no `busted` and no plugin-test framework. Almost every rule worth testing — what enters
 the replica, which change an editor is asked to apply, when a document is written — lives in the
-companion, and is tested there against a fake editor. What is left on the Lua side is
-translation, the wiring around one session, and one rule of the editor's own: the conversion
-between Neovim's byte positions and the protocol's UTF-16 code units. The first two get
+companion, and is tested there against a fake editor. `test/bridge.test.ts` takes the vendored
+bridge directly — this adapter's `NvimEditorHost` in front of it, a fake replica behind — because
+a guest document the room has not sent the text for is a case the companion's own deferral never
+lets the bridge see, and the copy's rule for it is still worth pinning. What is left on the Lua
+side is translation, the wiring around one session, and one rule of the editor's own: the
+conversion between Neovim's byte positions and the protocol's UTF-16 code units. The first two get
 `test/lua/document.lua` and `test/lua/session.lua`, which run in a real headless Neovim — the
 first against a real buffer and a real `on_bytes`, because a framework mocking those would be
 testing the mock; the second against a stubbed companion, because what it checks is the wiring

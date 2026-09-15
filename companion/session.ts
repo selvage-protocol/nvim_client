@@ -197,6 +197,8 @@ export class Companion {
    */
   private open(path: string, text: string): void {
     const engine = this.engine;
+    // The bridge holds a guest document back by the same rule; this deferral is here too because
+    // the count an edit is offered against is the mirror's, and the mirror is `arrive`'s to make.
     if (engine !== undefined && engine.session().role === 'guest' && !engine.has(path)) {
       this.unarrived.set(path, { text, changes: [] });
       void engine
