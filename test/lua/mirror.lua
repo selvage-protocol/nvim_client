@@ -501,6 +501,24 @@ local entered = #notices
 vim.api.nvim_exec_autocmds('BufEnter', { buffer = open_buffer })
 check('  and entering it again does not refuse it as a file of the moment', said_since(entered, 'is not in the room'), nil)
 
+-- The save that follows is a save of a document the room still holds, into a file that is only
+-- this session's cache of it: the removal took the file's directory away with the file, and the
+-- save is what puts it back. Left as it was, `:w` would answer `E212` and leave the person with
+-- an error and a modified buffer over a file whose text the room already has.
+check(
+  '  and the directory the file emptied went with it',
+  vim.fn.isdirectory(yanked .. '/notes'),
+  0
+)
+local writing = #notices
+vim.api.nvim_set_current_buf(open_buffer)
+vim.cmd('write')
+check('a save in it writes the file back, directory and all', read(open_name), 'what the person was writing\n')
+check('  and the directory is back', vim.fn.isdirectory(yanked .. '/notes'), 1)
+check('  and the buffer is not left modified', vim.bo[open_buffer].modified, false)
+check('  and nobody was told anything was wrong', #notices, writing)
+check('  and the file that came back is not in the room\'s listing', mirror.granted('notes/deep.txt'), false)
+
 -- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
 -- room, which now lists no files at all.
 

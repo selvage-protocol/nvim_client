@@ -335,6 +335,28 @@ function M.buffer_name(path)
   return M.file(path) or ('selvage://' .. path)
 end
 
+--- Gives a file name inside this mirror the directory it has to be written into.
+---
+--- A path that leaves the room's listing loses its file, and the directories that became empty
+--- with it (`unmaterialise`). A buffer the person already has open on it keeps the file's name —
+--- the room still holds the document, and the listing and the room's open-document set are two
+--- facts — so the save that follows would run against a directory that is not there: Neovim
+--- answers `E212`, and the person is left with an error and a modified buffer over a file that is
+--- only this session's cache of the room, whose text the room already has. The save puts the
+--- directory back, exactly as the listing put it there.
+---
+--- A name outside the mirror, or any name when this session has no mirror, is the editor's own
+--- and is left alone.
+---
+--- @param name string a buffer's name
+function M.ensure_parent(name)
+  local path = M.room_path(name)
+  if path == nil then
+    return
+  end
+  ensure_dir(vim.fs.dirname(vim.fs.joinpath(state.root, path)))
+end
+
 --- Materialises the room's listing, taking a mirror directory for this session if it does not
 --- have one yet.
 ---

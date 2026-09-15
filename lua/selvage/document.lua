@@ -166,6 +166,11 @@ end
 --- the room's text once the room's edits have been applied to it. A `selvage://` document has
 --- nowhere to be written; the call is still made, because that is what the companion's save
 --- policy asks for.
+---
+--- A path that left the room's listing keeps the file's name in a buffer the person still has
+--- open, while the removal took the file and the directories that emptied with it. The save is
+--- what puts the directory back: the text is the room's already, the file is only a cache of it,
+--- and a `:w` that answered `E212` would leave the person with an error and a modified buffer.
 function Document:save()
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
     return false
@@ -173,6 +178,7 @@ function Document:save()
   if vim.bo[self.bufnr].buftype ~= '' then
     return true
   end
+  mirror.ensure_parent(api.nvim_buf_get_name(self.bufnr))
   local ok = pcall(function()
     api.nvim_buf_call(self.bufnr, function()
       vim.cmd('silent noautocmd write')
