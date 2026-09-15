@@ -580,7 +580,19 @@ end
 --- Opens one of the room's documents in the current window.
 ---
 --- With no argument and one document, that document; with several, the user is asked which.
+---
+--- A host is refused: the room's documents are the host's own files, already in its buffer list,
+--- and the command means the copy the room holds that a window does not have. Its own set is not
+--- lost — `:SelvagePeers` and `require('selvage').session()` still report it.
 function M.open(path)
+  if not in_session() then
+    notify('no shared documents; join a session first', vim.log.levels.WARN)
+    return
+  end
+  if state.role == 'host' then
+    notify('you are hosting, so the files you open are the ones the room has', vim.log.levels.INFO)
+    return
+  end
   local paths = M.documents()
   if #paths == 0 then
     notify('no shared documents; join a session first', vim.log.levels.WARN)
