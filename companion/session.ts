@@ -80,13 +80,13 @@ export class Companion {
   async handle(request: Request): Promise<void> {
     switch (request.type) {
       case 'host': {
-        await this.connect(() =>
+        await this.connect('host', () =>
           this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
         );
         break;
       }
       case 'join': {
-        await this.connect(() =>
+        await this.connect('join', () =>
           this.engines.join(request.invite, request.displayName ?? this.defaultName),
         );
         break;
@@ -297,8 +297,21 @@ export class Companion {
     this.editor.closed(path);
   }
 
-  private async connect(open: () => Promise<CompanionEngine>): Promise<void> {
-    await this.leave();
+  /**
+   * Opens a session, unless one is live.
+   *
+   * Which session a person gives up, and whether they meant to, is a question only the
+   * front-end can ask — the front-end refuses a second host or join before it sends one. This
+   * process is the engine's host, so a request that arrives anyway is refused and said so,
+   * rather than obeyed: opening a second session would end the first behind the front-end's
+   * back, and the host of a room would lose it to a mistyped address.
+   */
+  private async connect(what: 'host' | 'join', open: () => Promise<CompanionEngine>): Promise<void> {
+    const live = this.engine;
+    if (live !== undefined) {
+      this.send({ type: 'refused', what, roomId: live.session().roomId });
+      return;
+    }
     this.send({ type: 'status', state: 'connecting' });
     let engine: CompanionEngine;
     try {
