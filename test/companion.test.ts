@@ -1069,17 +1069,18 @@ test('a file deleted under the host root is republished', async (t) => {
 test('a burst of changes is one republish', async (t) => {
   const { root, it } = await hosting(t);
 
-  // A `git checkout` or a build looks like this. The loop is synchronous, so every event it
-  // causes can only fall inside the one window its first event opened: the burst is one walk and
-  // one frame, not one per file.
-  const burst = 40;
+  // A `git checkout` or a build looks like this: many changes, spread over a moment. Each write is
+  // given its turn, so the events are delivered as the files land rather than after them — without
+  // the window each of them would be its own walk of the tree and its own frame.
+  const burst = 20;
   for (let index = 0; index < burst; index += 1) {
     tree(root, `burst-${String(index).padStart(2, '0')}.txt`);
+    await delay(1);
   }
 
   await until(
     'the burst to be published',
-    () => it.engine.grants.at(-1)?.includes('burst-39.txt') === true,
+    () => it.engine.grants.at(-1)?.includes('burst-19.txt') === true,
     () => it.engine.grants.length,
   );
   assert.equal(it.engine.grants.length, 2, 'the burst was gathered into one listing');
@@ -1106,10 +1107,10 @@ test('an unchanged folder is republished to no one', async (t) => {
 test('a change that leaves the listing as it was is not republished', async (t) => {
   const { root, it } = await hosting(t);
 
-  // A file that comes and goes inside one window leaves the listing naming exactly what it named
-  // before, and the room is told nothing: what is compared is the listing, not the event.
-  tree(root, 'transient.txt');
-  rmSync(join(root, 'transient.txt'));
+  // Content is not in the listing: writing over a file the listing already names is an event, and
+  // a republish that ran on it would hand the room the listing it already has. What is compared is
+  // the listing, not the event.
+  tree(root, 'notes.txt', 'the same path, different content\n');
 
   await delay(QUIET_MS);
   assert.deepEqual(
@@ -1143,6 +1144,29 @@ test('the folder is published again by the next session', async (t) => {
   );
   assert.notEqual(it.engine, first, 'a second session is a second room');
   assert.deepEqual(it.engine.grants, [['notes.txt']]);
+});
+
+test('a folder a session has left is not published by the next one', async (t) => {
+  const shared = folder(t);
+  tree(shared, 'a.txt');
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: shared });
+  await until('the first folder to be published', () => it.engine.grants.length > 0, () => it.engine.grants);
+
+  await it.companion.handle({ type: 'leave' });
+
+  const second = folder(t);
+  tree(second, 'b.txt');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: second });
+  const session = it.engine;
+  await until('the second folder to be published', () => session.grants.length > 0, () => session.grants);
+  assert.deepEqual(session.grants, [['b.txt']]);
+
+  // The folder the first session shared changes, and nobody is sharing it anymore. A watcher that
+  // outlived its session would read it and publish it into the room the second session is hosting.
+  tree(shared, 'later.txt');
+  await delay(QUIET_MS);
+  assert.deepEqual(session.grants, [['b.txt']], 'a folder a session has left was published');
 });
 
 test('a guest watches nothing and publishes no listing', async () => {
