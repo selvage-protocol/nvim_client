@@ -331,6 +331,47 @@ handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 check('a path that already exists is left as it is', read(root .. '/README.md'), 'a tool was here\n')
 check('  and republishing the listing says nothing about it', #notices, before)
 
+-- -- what a guest refuses to materialise ----------------------------------------------------
+--
+-- The listing is a peer's, and this process makes one file per path in the foreground as the
+-- listing arrives, so the two bounds a listing itself has are applied where the files are made:
+-- the longest path it may carry (the server's) and the most paths one may carry (the host
+-- enumerator's). A conforming room never reaches either, and what is past them is refused and
+-- reported the way a path that cannot be written is.
+
+local LONG = ('a'):rep(4096 + 1) .. '.txt'
+local UNWRITABLE = ('b'):rep(300) .. '.txt'
+before = #notices
+root = join({}, { 'notes/deep.txt', LONG, UNWRITABLE }, 'r-bounded')
+check('a path longer than a listing may carry is not materialised', mirror.granted(LONG), false)
+check(
+  '  and one the filesystem will not take has no file',
+  vim.fn.filereadable(root .. '/' .. UNWRITABLE),
+  0
+)
+check(
+  '  and the person is told about both',
+  said_since(before, "2 of the room's files could not be mirrored") ~= nil,
+  true
+)
+check('  and the paths inside the bound are', vim.fn.filereadable(root .. '/notes/deep.txt'), 1)
+
+local many = {}
+for index = 1, 5000 + 1 do
+  many[index] = ('f%05d.txt'):format(index)
+end
+before = #notices
+root = join({}, many, 'r-many')
+check('a listing stops at the most paths one may carry', vim.fn.filereadable(root .. '/f05000.txt'), 1)
+check('  and what is past it is not materialised', vim.fn.filereadable(root .. '/f05001.txt'), 0)
+check('  and the client does not hold it', mirror.granted('f05001.txt'), false)
+check(
+  '  and the person is told',
+  said_since(before, 'could not be mirrored, starting with f05001.txt') ~= nil,
+  true
+)
+selvage.leave()
+
 -- A name that would leave the root is refused rather than written: the listing comes from a
 -- peer, and `..` in it would put a file outside the mirror, where the person keeps their work.
 --
@@ -754,6 +795,8 @@ check('every mirror this file started was removed', vim.fn.isdirectory(CACHE .. 
 check('  and the room directory with it', vim.fn.isdirectory(CACHE .. '/r-pruned'), 0)
 check('  and the one the traversal test used', vim.fn.isdirectory(CACHE .. '/r-escape'), 0)
 check('  and the one whose listing shrank', vim.fn.isdirectory(CACHE .. '/r-shrunk'), 0)
+check('  and the one whose path was too long', vim.fn.isdirectory(CACHE .. '/r-bounded'), 0)
+check('  and the one with a listing past the bound', vim.fn.isdirectory(CACHE .. '/r-many'), 0)
 
 vim.notify = notify
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))

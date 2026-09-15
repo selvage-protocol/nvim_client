@@ -210,7 +210,11 @@ in-process source.
 
 The **shape** is materialised, the **content** is not. Every path the room's listing names exists in
 the mirror, with the directories on the way to it, so a tree plugin walks the whole room; a path
-whose content has not been fetched is present and empty. Content arrives when something needs it: a
+whose content has not been fetched is present and empty. The listing's own bounds are applied where
+those files are made — the most paths a listing may carry, and the longest name in it, which are the
+host enumerator's bound and the server's — because a guest makes one file per path as the listing
+arrives. A room past either bound is one no host enumerated, and what is past them is refused and
+reported with the paths that cannot be written. Content arrives when something needs it: a
 file opened in the editor, or `:SelvageFetch` — which takes one path, a directory of them or the
 whole listing. A project-wide search is therefore partial until the paths it covers have been
 fetched, and `:SelvageFetch` is the one command that answers that. `require('selvage').session()
