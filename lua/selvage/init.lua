@@ -1066,9 +1066,14 @@ end
 ---
 --- Saving one is the session's to route, not the editor's. `BufWriteCmd` suppresses the write the
 --- editor would have made, and the document's own save gives the file the text this client holds
---- for the room — so a buffer that has drifted from the room cannot put its own text into the
---- cache that ripgrep, ctags and a language server read. A path the room knows nothing about is
---- refused rather than written into a directory the session deletes.
+--- for the room. A path the room knows nothing about is refused rather than written into a
+--- directory the session deletes.
+---
+--- A write of *part* of a buffer reaches none of that: `:[range]write {file}` runs `FileWriteCmd`
+--- and `:write >> {file}` runs `FileAppendCmd`, and both are matched against the file being
+--- written rather than against the buffer. Either one naming a file inside the mirror would put
+--- the buffer's own lines into the room's files with the room hearing nothing, so they are
+--- refused here. A file outside the mirror is the person's own and is left to the editor.
 local function watch_mirror()
   local root = mirror.root()
   if root == nil then
@@ -1108,6 +1113,24 @@ local function watch_mirror()
       end
     end,
   })
+  -- A partial write or an append, to a file this session's mirror holds: the pattern is the file
+  -- being written, so a target outside the mirror never reaches this.
+  for _, name in ipairs({ 'FileWriteCmd', 'FileAppendCmd' }) do
+    api.nvim_create_autocmd(name, {
+      group = state.mirror_group,
+      pattern = root .. '/*',
+      callback = function(event)
+        local target = event.file or ''
+        if target:sub(1, #root + 1) == root .. '/' then
+          target = target:sub(#root + 2)
+        end
+        notify(
+          ('%s is inside the mirror, which holds the room\'s files, so it is not written; write outside the mirror to keep it'):format(target),
+          vim.log.levels.WARN
+        )
+      end,
+    })
+  end
   api.nvim_create_autocmd('BufWipeout', {
     group = state.mirror_group,
     callback = document_wiped,

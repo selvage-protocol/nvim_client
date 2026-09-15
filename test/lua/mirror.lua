@@ -492,6 +492,65 @@ check('  and the person is told why', said_since(before, 'save it outside the mi
 check('  and the buffer is left with the edit, unsaved', vim.bo.modified, true)
 check('  and the room was never told about it', selvage.text('stray.txt'), nil)
 
+-- -- a write that is not the whole buffer ---------------------------------------------------
+--
+-- A whole `:w` is routed, and so is a `:w {file}` naming a file outside the mirror, which the
+-- editor writes because it is nobody else's. `:[range]write {file}` and `:write >> {file}` reach
+-- neither: Neovim matches `FileWriteCmd` and `FileAppendCmd` against the file being *written*,
+-- and they are the events for a write that is not the whole buffer. Naming a file inside the
+-- mirror with one of them would put the buffer's own lines into a file the room's directory
+-- holds, with the room hearing nothing, so both are refused and said so.
+
+root = join({}, GRANT)
+selvage.open('notes/deep.txt')
+local partial = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(partial, 0, -1, false, { 'a line nobody else has', 'and the one after it' })
+
+local own = root .. '/notes/deep.txt'
+before = #notices
+vim.cmd('write >> ' .. vim.fn.fnameescape(own))
+check('an append into a file in the mirror is not made', read(own), '')
+check(
+  '  and the person is told why',
+  said_since(before, 'is inside the mirror, which holds the room\'s files') ~= nil,
+  true
+)
+check('  and the buffer keeps the edit', vim.bo[partial].modified, true)
+
+-- A range that is not the whole buffer is the other write that reaches neither: line 1 of two
+-- is written to a file in the mirror by `FileWriteCmd`.
+local listed = root .. '/src/main.rs'
+before = #notices
+vim.cmd('1write! ' .. vim.fn.fnameescape(listed))
+check('a partial write into a file in the mirror is not made', read(listed), '')
+check(
+  '  and the person is told why',
+  said_since(before, 'is inside the mirror, which holds the room\'s files') ~= nil,
+  true
+)
+
+-- The person's own file is the editor's to write, by the whole-buffer form and by the append.
+local own_file = vim.fn.getcwd() .. '/.tmp/lua-mirror-write.txt'
+vim.fn.delete(own_file)
+before = #notices
+vim.cmd('write ' .. vim.fn.fnameescape(own_file))
+check(
+  'a whole write to a file outside the mirror is written',
+  read(own_file),
+  'a line nobody else has\nand the one after it\n'
+)
+check('  and the mirror is not mentioned', said_since(before, 'is inside the mirror') ~= nil, false)
+vim.fn.writefile({ 'there' }, own_file)
+before = #notices
+vim.cmd('write >> ' .. vim.fn.fnameescape(own_file))
+check(
+  'an append to a file outside the mirror is written',
+  read(own_file),
+  'there\na line nobody else has\nand the one after it\n'
+)
+check('  and the mirror is not mentioned', said_since(before, 'is inside the mirror') ~= nil, false)
+vim.fn.delete(own_file)
+
 -- -- :SelvageFetch ------------------------------------------------------------------------
 --
 -- The one answer to a partial project-wide search: fetch a file, a directory of them, or the
