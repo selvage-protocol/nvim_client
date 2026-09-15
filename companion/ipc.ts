@@ -23,6 +23,12 @@ export type Request =
   | { type: 'join'; invite: string; displayName?: string }
   /** Leave the session and drop the connection. The process stays up. */
   | { type: 'leave' }
+  /**
+   * Change the name this connection is known by, mid-session. It is this peer's own name, so
+   * the request names no document; the room is told with `peer.renamed`, which the engine
+   * applies to the cursors the front-end already draws.
+   */
+  | { type: 'rename'; displayName: string }
   /** A buffer is now shared under `path`, and holds `text`. */
   | { type: 'open'; path: string; text: string }
   /** The buffer is no longer shared; this client stops holding the path open. */
