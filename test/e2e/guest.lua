@@ -316,6 +316,34 @@ harness.record('mirror', harness.file_text(mirrored_granted), {
 harness.write_file(harness.mirror_done_file, 'go')
 harness.wait_ack('mirror', harness.deadline_ms)
 
+-- -- a document held open while the host deletes it ------------------------------------------
+--
+-- Delete-while-open needs two live editors: the guest holds the path the host is about to
+-- delete, with its text arrived, and signals the host to delete it. What is proved is badge,
+-- don't prune — the buffer stays with its text — rather than the room yanking it away.
+selvage.open(harness.removed_path)
+harness.wait('the path the host will delete to open', harness.deadline_ms, function()
+  return vim.fn.bufname('%') == harness.buffer_name(harness.removed_path)
+end, function()
+  return 'the window holds ' .. vim.inspect(vim.fn.bufname('%'))
+end)
+harness.wait("the host's text for the path it will delete to arrive", harness.deadline_ms, function()
+  return harness.text_of(harness.removed_path) == harness.removed_text
+end, function()
+  return vim.inspect(harness.text_of(harness.removed_path))
+end)
+-- The save is what puts the text into the mirror's file: signalling on the text alone would let
+-- the host delete while the save is still on its way, and the save arriving after the listing
+-- shrank would write the file the removal just deleted back again.
+harness.wait('the save to write the path it will delete into the mirror', harness.deadline_ms, function()
+  return harness.file_text(mirror .. '/' .. harness.removed_path) == harness.removed_text
+end, function()
+  return vim.inspect(harness.file_text(mirror .. '/' .. harness.removed_path))
+end)
+local delete_open_buf = vim.api.nvim_get_current_buf()
+harness.write_file(harness.delete_open_ready_file, 'go')
+harness.log('holding', harness.removed_path, 'open while the host deletes it')
+
 -- -- the room's listing changes under the session ------------------------------------------
 --
 -- The host creates a file under the folder it shares and deletes another. Both are changes to
@@ -368,6 +396,9 @@ harness.record('watch', harness.text_of(harness.created_path), {
   listingNamesCreated = vim.tbl_contains(selvage.fetchable(), harness.created_path),
   mirrorHoldsRemoved = harness.file_text(mirrored_removed) ~= nil,
   listingNamesRemoved = vim.tbl_contains(selvage.fetchable(), harness.removed_path),
+  deleteOpenBufferValid = vim.api.nvim_buf_is_valid(delete_open_buf),
+  deleteOpenTextKept = harness.text_of(harness.removed_path) == harness.removed_text,
+  deleteOpenStillOffered = vim.tbl_contains(selvage.offered(), harness.removed_path),
 })
 harness.write_file(harness.watch_done_file, 'go')
 harness.wait_ack('watch', harness.deadline_ms)

@@ -187,6 +187,9 @@ interface InstanceOutcome {
     listingNamesRemoved?: boolean;
     createdFileIs?: string;
     removedFileGone?: boolean;
+    deleteOpenBufferValid?: boolean;
+    deleteOpenTextKept?: boolean;
+    deleteOpenStillOffered?: boolean;
   };
   error?: string;
 }
@@ -297,6 +300,7 @@ async function main(): Promise<void> {
   const grantedDoneFile = resolve(RUN_DIR, 'granted-done.txt');
   const mirrorDoneFile = resolve(RUN_DIR, 'mirror-done.txt');
   const watchDoneFile = resolve(RUN_DIR, 'watch-done.txt');
+  const deleteOpenReadyFile = resolve(RUN_DIR, 'delete-open-ready.txt');
   const controlFile = RECONNECT ? resolve(RUN_DIR, 'blip-done.txt') : undefined;
   const hostResultFile = resolve(RUN_DIR, 'host-result.json');
   const guestResultFile = resolve(RUN_DIR, 'guest-result.json');
@@ -322,6 +326,8 @@ async function main(): Promise<void> {
     SELVAGE_E2E_CREATED_PATH: CREATED_PATH,
     SELVAGE_E2E_CREATED_TEXT: CREATED_TEXT,
     SELVAGE_E2E_REMOVED_PATH: REMOVED_PATH,
+    SELVAGE_E2E_REMOVED_TEXT: REMOVED_TEXT,
+    SELVAGE_E2E_DELETE_OPEN_READY_FILE: deleteOpenReadyFile,
     SELVAGE_E2E_WATCH_DONE_FILE: watchDoneFile,
     ...(controlFile === undefined ? {} : { SELVAGE_E2E_CONTROL_FILE: controlFile }),
   };
@@ -499,7 +505,10 @@ async function main(): Promise<void> {
         guestOutcome?.watch?.listingNamesRemoved === false &&
         guestOutcome?.watch?.mirrorHoldsRemoved === false &&
         hostOutcome?.watch?.createdFileIs === CREATED_TEXT &&
-        hostOutcome?.watch?.removedFileGone === true,
+        hostOutcome?.watch?.removedFileGone === true &&
+        guestOutcome?.watch?.deleteOpenBufferValid === true &&
+        guestOutcome?.watch?.deleteOpenTextKept === true &&
+        guestOutcome?.watch?.deleteOpenStillOffered === true,
       guestText: guestOutcome?.watch?.text,
       guestListingNamesCreated: guestOutcome?.watch?.listingNamesCreated,
       guestMirrorHoldsCreated: guestOutcome?.watch?.mirrorHoldsCreated,
@@ -507,6 +516,9 @@ async function main(): Promise<void> {
       guestMirrorHoldsRemoved: guestOutcome?.watch?.mirrorHoldsRemoved,
       hostCreatedFile: hostOutcome?.watch?.createdFileIs,
       hostRemovedFileGone: hostOutcome?.watch?.removedFileGone,
+      deleteOpenBufferValid: guestOutcome?.watch?.deleteOpenBufferValid,
+      deleteOpenTextKept: guestOutcome?.watch?.deleteOpenTextKept,
+      deleteOpenStillOffered: guestOutcome?.watch?.deleteOpenStillOffered,
     },
     exitCodes: { host: hostCode, guest: guestCode },
   };

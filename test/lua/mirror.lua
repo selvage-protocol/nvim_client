@@ -519,6 +519,43 @@ check('  and the buffer is not left modified', vim.bo[open_buffer].modified, fal
 check('  and nobody was told anything was wrong', #notices, writing)
 check('  and the file that came back is not in the room\'s listing', mirror.granted('notes/deep.txt'), false)
 
+-- -- a fresh open of a path the host deleted ------------------------------------------------
+--
+-- A guest opening from a stale listing shares an empty buffer the room never answers. When the
+-- listing catches up and leaves the path, the empty buffer is not content still loading: the
+-- guest is told the host no longer has it. A buffer holding text is not this — content that
+-- arrived, or the person's own keystrokes, stays without a word — and no open buffer is taken
+-- away either way.
+
+responder = nil
+local gone_root = join({}, { 'gone.txt', 'stays.txt' }, 'r-gone')
+selvage.open('gone.txt')
+local gone_buf = vim.api.nvim_get_current_buf()
+local gone_before = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check(
+  'a fresh open the listing leaves says the host no longer has it',
+  said_since(gone_before, 'gone.txt is no longer in the room; the host no longer has it') ~= nil,
+  true
+)
+check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(gone_buf), true)
+check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'gone.txt'), true)
+
+responder = room_holding({ ['kept.txt'] = 'kept\n' })
+local kept_root = join({}, { 'kept.txt' }, 'r-kept')
+selvage.open('kept.txt')
+local kept_buf = vim.api.nvim_get_current_buf()
+local kept_before = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = {} } })
+check(
+  'a held document with content says nothing about being gone',
+  said_since(kept_before, 'kept.txt is no longer') ~= nil,
+  false
+)
+check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(kept_buf), true)
+check('  and it keeps its text', buffer_text(kept_buf), 'kept\n')
+responder = nil
+
 -- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
 -- room, which now lists no files at all.
 

@@ -1410,6 +1410,10 @@ local function on_report(report)
     -- hundred files has nothing worth interrupting a person for; what a *guest* does with it is
     -- materialise it, and the one sentence that says where is said over the session's first
     -- listing rather than over every republish.
+    local previous = {}
+    for _, path in ipairs(state.grant) do
+      previous[path] = true
+    end
     state.grant = report.paths or {}
     if state.role == 'guest' then
       local root, blocked, created = mirror.setup(state.room, state.grant)
@@ -1430,6 +1434,16 @@ local function on_report(report)
           )
         end
         remirror_documents()
+        for path, document in pairs(state.documents) do
+          if
+            previous[path]
+            and not mirror.granted(path)
+            and not mirror.written(path)
+            and document:text() == '\n'
+          then
+            notice_gone(path)
+          end
+        end
       end
     end
   elseif report.kind == 'peers' then
