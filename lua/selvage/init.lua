@@ -1074,8 +1074,9 @@ end
 ---
 --- Reading one is how a person or a plugin opens the room's file, and it goes through the same
 --- share `:SelvageOpen` uses: the room is what has the content, and the host reads its working
---- copy when this client asks for it. A name under the mirror that the room's listing does not
---- name is a file on this disk and nothing else, and is said so once.
+--- copy when this client asks for it. A name under the mirror that is neither in the room's listing
+--- nor a document this session holds is a file on this disk and nothing else, and is said so once:
+--- a path that left the listing while its buffer stayed open is still the room's document.
 ---
 --- Saving one is the session's to route, not the editor's. `BufWriteCmd` suppresses the write the
 --- editor would have made, and the document's own save gives the file the text this client holds
@@ -1101,7 +1102,9 @@ local function watch_mirror()
       if path == nil then
         return
       end
-      if mirror.granted(path) then
+      -- A document this session holds is the room's whether or not the listing still names it:
+      -- the listing is what it mirrors, and the open-document set is a fact of its own.
+      if mirror.granted(path) or state.documents[path] ~= nil then
         share(event.buf, path)
       else
         refuse_unlisted(path)
