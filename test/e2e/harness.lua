@@ -43,9 +43,14 @@ function M.setup(role)
     guest = required('SELVAGE_E2E_MARKER_GUEST'),
     host2 = required('SELVAGE_E2E_MARKER_HOST_2'),
     guest2 = required('SELVAGE_E2E_MARKER_GUEST_2'),
+    mirror = required('SELVAGE_E2E_MARKER_MIRROR'),
   }
   M.joined_file = required('SELVAGE_E2E_JOINED_FILE')
   M.ack_file = required('SELVAGE_E2E_ACK_FILE')
+  -- The guest writes this once the mirror's own phases are done, and the host waits for it before
+  -- it reads its own file for the marker: an edit saved in the mirror is a message still on its
+  -- way to the room until the host has it.
+  M.mirror_done_file = required('SELVAGE_E2E_MIRROR_DONE_FILE')
   -- The granted path is required rather than optional: it is the reason this proof runs, and a
   -- driver that quietly skipped the phase because an environment variable was missing would
   -- report a pass for a claim nothing exercised.
@@ -147,6 +152,37 @@ end
 --- The text the plugin holds for the shared document, as the room counts it.
 function M.text()
   return require('selvage').text(M.seed_path)
+end
+
+--- The directory this session mirrors the room into, or nil when it has none. The guest's half of
+--- this proof is about what a program outside this editor can read, and this is where it reads it.
+function M.mirror()
+  return require('selvage').session().mirror
+end
+
+--- The name the buffer for a room path carries: the file the mirror holds it at, or a
+--- `selvage://` name for a path the room's listing does not name. A driver waits for a buffer by
+--- name, so it has to wait for what the buffer is actually called.
+function M.buffer_name(path)
+  local root = M.mirror()
+  if root == nil then
+    return 'selvage://' .. path
+  end
+  return root .. '/' .. path
+end
+
+--- A file's bytes, or nil when there is no file at all. Unlike `read_file`, an empty file reads as
+--- an empty string — a mirrored path whose content has not been fetched is exactly that, and a
+--- driver has to tell it apart from a path that is not there — and a file that is one newline
+--- reads as one byte, which a line-wise read cannot say.
+function M.file_text(path)
+  local handle = io.open(path, 'rb')
+  if handle == nil then
+    return nil
+  end
+  local contents = handle:read('*a')
+  handle:close()
+  return contents
 end
 
 --- The text the plugin holds for any room path, as the room counts it.
