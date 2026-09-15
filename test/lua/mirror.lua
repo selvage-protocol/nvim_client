@@ -494,6 +494,13 @@ check('  and the document is still the room\'s', selvage.text('notes/deep.txt'),
 check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), true)
 check('  and it is not fetchable, because the listing no longer names it', vim.tbl_contains(selvage.fetchable(), 'notes/deep.txt'), false)
 
+-- Entering it again — which is what a person or a plugin does — is not the mirror saying the file
+-- is not the room's: this session still holds the document, and the sentence is for a name that is
+-- neither listed nor held.
+local entered = #notices
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = open_buffer })
+check('  and entering it again does not refuse it as a file of the moment', said_since(entered, 'is not in the room'), nil)
+
 -- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
 -- room, which now lists no files at all.
 
