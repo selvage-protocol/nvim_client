@@ -1041,6 +1041,22 @@ check('a connection the engine gave up on is reported', errors(), before_drop + 
 check('  and the session lets its documents go', #selvage.documents(), 0)
 check('  and it is no longer hosting', selvage.session().status, 'idle')
 
+-- The companion process outlives the session, so it is not what a leave is about: the session it
+-- held is gone, and a later `:SelvageLeave` says there is nothing to leave rather than claiming to
+-- have left it.
+local before_late_leave = #notices
+selvage.leave()
+check(
+  'a leave after the engine gave up says there is no session',
+  said_since(before_late_leave, 'not in a session') ~= nil,
+  true
+)
+check(
+  '  and does not claim to have left one',
+  said_since(before_late_leave, 'left the session') == nil,
+  true
+)
+
 -- -- the room's own comings and goings --------------------------------------------
 --
 -- Two more things the room says about itself: the host is back after a blip, and the room is
