@@ -56,6 +56,15 @@ const SEED_LINE = SEED_TEXT.trimEnd();
 // text can only have arrived because the host read its own working copy on the guest's request.
 const GRANTED_PATH = 'granted/never-opened.txt';
 const GRANTED_TEXT = 'a file the host never opens in its own window\n';
+// The listing's own phase. The host creates `watched/created.txt` and deletes `removed/gone.txt`
+// while the session is hosted, and the guest has to follow both: the created path reaches its
+// listing and its mirror and opens with the host's text, and the deleted path leaves them. The
+// directory the created file lands in exists before the run, and the deleted file is there from
+// the start, so what changes is a file rather than the shape of the tree.
+const CREATED_PATH = 'watched/created.txt';
+const CREATED_TEXT = 'a file the host created while the session was hosted\n';
+const REMOVED_PATH = 'removed/gone.txt';
+const REMOVED_TEXT = 'a file the host deletes while the session is hosted\n';
 
 const RECONNECT = process.env['SELVAGE_E2E_RECONNECT'] !== '0';
 const DEADLINE_MS = Number(process.env['SELVAGE_E2E_DEADLINE_MS'] ?? '20000');
@@ -166,6 +175,19 @@ interface InstanceOutcome {
    * with `rgFound` saying whether ripgrep read it; on the host it is the working copy's own file.
    */
   mirror?: { text: string; root?: string; rgFound?: boolean };
+  /**
+   * The listing's own phase: what the path the host created holds in each editor, and what the
+   * guest's listing and mirror did with the path that appeared and the path that went.
+   */
+  watch?: {
+    text: string;
+    mirrorHoldsCreated?: boolean;
+    listingNamesCreated?: boolean;
+    mirrorHoldsRemoved?: boolean;
+    listingNamesRemoved?: boolean;
+    createdFileIs?: string;
+    removedFileGone?: boolean;
+  };
   error?: string;
 }
 
@@ -265,12 +287,16 @@ async function main(): Promise<void> {
   writeFileSync(join(hostWorkspace, SEED_PATH), SEED_TEXT);
   mkdirSync(join(hostWorkspace, dirname(GRANTED_PATH)), { recursive: true });
   writeFileSync(join(hostWorkspace, GRANTED_PATH), GRANTED_TEXT);
+  mkdirSync(join(hostWorkspace, dirname(CREATED_PATH)), { recursive: true });
+  mkdirSync(join(hostWorkspace, dirname(REMOVED_PATH)), { recursive: true });
+  writeFileSync(join(hostWorkspace, REMOVED_PATH), REMOVED_TEXT);
 
   const inviteFile = resolve(RUN_DIR, 'invite.txt');
   const joinedFile = resolve(RUN_DIR, 'joined.txt');
   const ackFile = resolve(RUN_DIR, 'ack');
   const grantedDoneFile = resolve(RUN_DIR, 'granted-done.txt');
   const mirrorDoneFile = resolve(RUN_DIR, 'mirror-done.txt');
+  const watchDoneFile = resolve(RUN_DIR, 'watch-done.txt');
   const controlFile = RECONNECT ? resolve(RUN_DIR, 'blip-done.txt') : undefined;
   const hostResultFile = resolve(RUN_DIR, 'host-result.json');
   const guestResultFile = resolve(RUN_DIR, 'guest-result.json');
@@ -293,6 +319,10 @@ async function main(): Promise<void> {
     SELVAGE_E2E_GRANTED_PATH: GRANTED_PATH,
     SELVAGE_E2E_GRANTED_TEXT: GRANTED_TEXT,
     SELVAGE_E2E_GRANTED_DONE_FILE: grantedDoneFile,
+    SELVAGE_E2E_CREATED_PATH: CREATED_PATH,
+    SELVAGE_E2E_CREATED_TEXT: CREATED_TEXT,
+    SELVAGE_E2E_REMOVED_PATH: REMOVED_PATH,
+    SELVAGE_E2E_WATCH_DONE_FILE: watchDoneFile,
     ...(controlFile === undefined ? {} : { SELVAGE_E2E_CONTROL_FILE: controlFile }),
   };
 
@@ -375,6 +405,19 @@ async function main(): Promise<void> {
   });
   log('the guest\'s mirror held the room, ripgrep read it, and its save reached the host');
 
+  // The listing's own phase: the host creates one file under its folder and deletes another, and
+  // the guest follows both. The host's ack is written once the guest has reported it saw both, so
+  // this is also what keeps the blip below from landing in the middle of the phase.
+  await pollFor(
+    "the guest to follow the host's folder changing",
+    () => (existsSync(ackFile + '.watch') ? true : undefined),
+    DEADLINE_MS + 20_000,
+  ).catch(async (error: unknown) => {
+    await Promise.race([Promise.all([hostRun, guestRun]), delay(5000)]);
+    throw error;
+  });
+  log('the host created and deleted a path under its folder, and the guest followed it');
+
   if (RECONNECT && controlFile !== undefined) {
     log('cutting the guest relay (a real TCP close)');
     guestRelay.dropAll();
@@ -444,6 +487,27 @@ async function main(): Promise<void> {
       guestRgFound: guestOutcome?.mirror?.rgFound,
       hostFile: hostOutcome?.mirror?.text,
     },
+    watch: {
+      // The room's listing is a reading of the host's folder, and not the reading taken at the
+      // join: a path created while the session is hosted reaches the guest's listing and its
+      // mirror and opens with the host's own text in it, and a path the host deletes leaves the
+      // listing and the mirror and takes the directory that became empty with it.
+      converged:
+        guestOutcome?.watch?.text === CREATED_TEXT &&
+        guestOutcome?.watch?.listingNamesCreated === true &&
+        guestOutcome?.watch?.mirrorHoldsCreated === true &&
+        guestOutcome?.watch?.listingNamesRemoved === false &&
+        guestOutcome?.watch?.mirrorHoldsRemoved === false &&
+        hostOutcome?.watch?.createdFileIs === CREATED_TEXT &&
+        hostOutcome?.watch?.removedFileGone === true,
+      guestText: guestOutcome?.watch?.text,
+      guestListingNamesCreated: guestOutcome?.watch?.listingNamesCreated,
+      guestMirrorHoldsCreated: guestOutcome?.watch?.mirrorHoldsCreated,
+      guestListingNamesRemoved: guestOutcome?.watch?.listingNamesRemoved,
+      guestMirrorHoldsRemoved: guestOutcome?.watch?.mirrorHoldsRemoved,
+      hostCreatedFile: hostOutcome?.watch?.createdFileIs,
+      hostRemovedFileGone: hostOutcome?.watch?.removedFileGone,
+    },
     exitCodes: { host: hostCode, guest: guestCode },
   };
   writeFileSync(resolve(RUN_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
@@ -465,6 +529,13 @@ async function main(): Promise<void> {
         'read by ripgrep, or saved back to the host',
     );
   }
+  if (!summary.watch.converged) {
+    throw new Error(
+      "the guest did not follow the host's folder changing: a path created while hosting did not " +
+        'reach its listing and its mirror with the host\'s text, or a path the host deleted did not ' +
+        'leave them',
+    );
+  }
   if (RECONNECT && summary.phase2?.converged !== true) {
     throw new Error('the reconnect phase did not converge after the simulated network blip');
   }
@@ -473,7 +544,8 @@ async function main(): Promise<void> {
   }
   log(
     'PASSED: two real Neovim instances converged on the shared document, a guest read a granted path the host never opened, ' +
-      'and a save in the guest\'s mirror of that grant reached the host' +
+      'a save in the guest\'s mirror of that grant reached the host, and the guest followed the ' +
+      'host\'s folder gaining a path and losing one' +
       (RECONNECT ? ', and again after a simulated network blip' : ''),
   );
 }

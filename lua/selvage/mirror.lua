@@ -211,6 +211,63 @@ local function materialise(root, paths, blocked)
   end
 end
 
+--- Whether every directory between `root` and `path` is a real directory of the mirror.
+---
+--- A tool can put a link in the mirror where a directory of the room's should be, and a removal
+--- that resolved the path through it would delete a file outside the mirror, where the person
+--- keeps their own work. Each step is read with `fs_lstat`, which reports the link itself rather
+--- than what it points at, so a path that reaches through one is refused. The name is resolved
+--- once more by the removal that follows, so a link put there in between is still followed; that
+--- window takes a concurrent local writer, which already has this host's own file access.
+---
+--- @param root string
+--- @param path string
+--- @return boolean
+local function plain_directories(root, path)
+  local dir = root
+  local parts = vim.split(path, '/', { plain = true })
+  for index = 1, #parts - 1 do
+    dir = vim.fs.joinpath(dir, parts[index])
+    local info = uv.fs_lstat(dir)
+    if info == nil or info.type ~= 'directory' then
+      return false
+    end
+  end
+  return true
+end
+
+--- Removes the file a path that has left the listing was materialised at, and the directories that
+--- become empty with it.
+---
+--- Only a path the previous listing named is removed: a file a tool put in the mirror was never the
+--- room's, and the listing is not a statement about it. A directory standing where the file was is
+--- left alone — this session materialised no directory there — and a directory is removed only
+--- while it is empty, so anything else inside it keeps it. Nothing above `root` is touched, and
+--- `root` itself stays: the session still mirrors the room, which now lists one path less.
+---
+--- @param root string
+--- @param path string
+local function unmaterialise(root, path)
+  if not plain_directories(root, path) then
+    return
+  end
+  local file = vim.fs.joinpath(root, path)
+  local info = uv.fs_lstat(file)
+  if info ~= nil and info.type ~= 'directory' then
+    -- A symbolic link is removed rather than followed: what the listing named is the link, and
+    -- what is behind it is not this session's.
+    uv.fs_unlink(file)
+  end
+  local inside = root .. '/'
+  local dir = vim.fs.dirname(file)
+  while dir ~= root and dir:sub(1, #inside) == inside do
+    if uv.fs_rmdir(dir) == nil then
+      break
+    end
+    dir = vim.fs.dirname(dir)
+  end
+end
+
 --- Where the mirror for `room` lives, and the directory this session's own mirror sits in.
 ---
 --- @param room string
@@ -278,12 +335,35 @@ function M.buffer_name(path)
   return M.file(path) or ('selvage://' .. path)
 end
 
+--- Gives a file name inside this mirror the directory it has to be written into.
+---
+--- A path that leaves the room's listing loses its file, and the directories that became empty
+--- with it (`unmaterialise`). A buffer the person already has open on it keeps the file's name —
+--- the room still holds the document, and the listing and the room's open-document set are two
+--- facts — so the save that follows would run against a directory that is not there: Neovim
+--- answers `E212`, and the person is left with an error and a modified buffer over a file that is
+--- only this session's cache of the room, whose text the room already has. The save puts the
+--- directory back, exactly as the listing put it there.
+---
+--- A name outside the mirror, or any name when this session has no mirror, is the editor's own
+--- and is left alone.
+---
+--- @param name string a buffer's name
+function M.ensure_parent(name)
+  local path = M.room_path(name)
+  if path == nil then
+    return
+  end
+  ensure_dir(vim.fs.dirname(vim.fs.joinpath(state.root, path)))
+end
+
 --- Materialises the room's listing, taking a mirror directory for this session if it does not
 --- have one yet.
 ---
 --- Called on every listing the room publishes, which replaces the one before it. The first
---- meaningful listing takes the directory; a later one adds its paths to it, and never throws
---- away content that has already been fetched into it.
+--- meaningful listing takes the directory; a later one adds its paths and removes the files of the
+--- paths that have left it, and never throws away content that has already been fetched into the
+--- paths that stay.
 ---
 --- @param room string|nil the room id, as the status named it
 --- @param paths string[] the listing, in the order the room carries it
@@ -294,11 +374,13 @@ function M.setup(room, paths)
   end
   local blocked = {}
   local wanted = {}
+  local listed = {}
   for _, path in ipairs(paths or {}) do
     if #wanted >= MAX_LISTED then
       blocked[#blocked + 1] = tostring(path)
     elseif writable(path) then
       wanted[#wanted + 1] = path
+      listed[path] = true
     else
       blocked[#blocked + 1] = tostring(path)
     end
@@ -321,10 +403,29 @@ function M.setup(room, paths)
     state.written = {}
     created = true
   end
-  state.listed = {}
-  for _, path in ipairs(wanted) do
-    state.listed[path] = true
+  -- The listing is the room's whole answer about which paths it holds as files, so a path it no
+  -- longer names loses the file this session made for it. What is compared is the listing the room
+  -- last published *as this client mirrored it* — the room's own listing within the bounds above.
+  -- A path the room still names past `MAX_LISTED` is one this client makes no file for, so the file
+  -- it had while the path was inside the bound goes with the rest; a conforming room never reaches
+  -- that, because the host enumerator stops at the same number of paths. A file a tool created in
+  -- the mirror was never the room's and is left where it is. The room's open-document set is a
+  -- different fact (`PROTOCOL.md` §5, §6), and an already-open buffer is not this module's to
+  -- close.
+  for path in pairs(state.listed) do
+    if listed[path] == nil then
+      unmaterialise(state.root, path)
+      state.written[path] = nil
+    end
   end
+  -- A listing that renames `Notes` to `notes` on a case-insensitive filesystem — the default on
+  -- macOS and Windows — is two room paths for the one file: the removal above unlinks it and the
+  -- materialise below makes it again, empty, so the content fetched into it is lost and has to be
+  -- fetched again. Left as it is. The two names are two paths to the room and to a case-sensitive
+  -- filesystem, which is what this one is, so the exception would have to be found by probing the
+  -- mirror's own filesystem for a rule that nothing else here needs; and what is lost is a cache
+  -- of a text the room still holds.
+  state.listed = listed
   materialise(state.root, wanted, blocked)
   return state.root, blocked, created
 end

@@ -451,6 +451,106 @@ check('  and the document is still held', table.concat(selvage.documents(), ',')
 check('  and what the buffer held is still there', buffer_text(late), 'typed before the listing\n')
 check('  and the file holds it, because this client holds it for the room', read(root .. '/notes/deep.txt'), 'typed before the listing\n')
 
+
+-- -- a listing that loses a path ------------------------------------------------------
+--
+-- The room's listing and its open-document set are two facts (`PROTOCOL.md` §5, §6): a listing
+-- that stops naming a path loses the mirror's file for it and says nothing about what is held
+-- open. Only a path the previous listing named is removed — a file a tool put in the mirror was
+-- never the room's — and a directory goes only when the removal leaves it empty.
+
+local shrinking = join({}, { 'only/deep.txt', 'notes/deep.txt', 'src/main.rs' }, 'r-shrunk-path')
+local shrinking_root = selvage.session().mirror
+vim.fn.writefile({ 'not the room\'s' }, shrinking_root .. '/notes/tool.txt')
+selvage.open('src/main.rs')
+
+handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
+
+check('a path that leaves the listing loses its file', vim.fn.filereadable(shrinking_root .. '/only/deep.txt'), 0)
+check('  and the directory that becomes empty goes with it', vim.fn.isdirectory(shrinking_root .. '/only'), 0)
+check('  and a path still listed keeps its file', vim.fn.filereadable(shrinking_root .. '/src/main.rs'), 1)
+check('  and a directory a tool\'s file keeps is not removed', vim.fn.isdirectory(shrinking_root .. '/notes'), 1)
+check('  and that file is left where it is', read(shrinking_root .. '/notes/tool.txt'), 'not the room\'s\n')
+check('  and the root stays, because the session still mirrors the room', vim.fn.isdirectory(shrinking_root), 1)
+check('  and the client no longer holds the path', mirror.granted('notes/deep.txt'), false)
+
+-- A path the person has open is not taken away with its file: the room still holds the
+-- document — the listing is not the open-document set — so the buffer keeps its text and its
+-- name, and the session goes on sharing it under the same path.
+
+local yanked = join({}, { 'notes/deep.txt', 'src/main.rs' }, 'r-yanked')
+selvage.open('notes/deep.txt')
+local open_buffer = vim.api.nvim_get_current_buf()
+local open_name = vim.api.nvim_buf_get_name(open_buffer)
+vim.api.nvim_buf_set_lines(open_buffer, 0, -1, false, { 'what the person was writing' })
+
+handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
+
+check('a path that leaves the listing loses its file', vim.fn.filereadable(yanked .. '/notes/deep.txt'), 0)
+check('  and the buffer the person has open is not taken away', vim.api.nvim_buf_is_valid(open_buffer), true)
+check('  and it keeps its text', buffer_text(open_buffer), 'what the person was writing\n')
+check('  and its name', vim.api.nvim_buf_get_name(open_buffer), open_name)
+check('  and the document is still the room\'s', selvage.text('notes/deep.txt'), 'what the person was writing\n')
+check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), true)
+check('  and it is not fetchable, because the listing no longer names it', vim.tbl_contains(selvage.fetchable(), 'notes/deep.txt'), false)
+
+-- Entering it again — which is what a person or a plugin does — is not the mirror saying the file
+-- is not the room's: this session still holds the document, and the sentence is for a name that is
+-- neither listed nor held.
+local entered = #notices
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = open_buffer })
+check('  and entering it again does not refuse it as a file of the moment', said_since(entered, 'is not in the room'), nil)
+
+-- The save that follows is a save of a document the room still holds, into a file that is only
+-- this session's cache of it: the removal took the file's directory away with the file, and the
+-- save is what puts it back. Left as it was, `:w` would answer `E212` and leave the person with
+-- an error and a modified buffer over a file whose text the room already has.
+check(
+  '  and the directory the file emptied went with it',
+  vim.fn.isdirectory(yanked .. '/notes'),
+  0
+)
+local writing = #notices
+vim.api.nvim_set_current_buf(open_buffer)
+vim.cmd('write')
+check('a save in it writes the file back, directory and all', read(open_name), 'what the person was writing\n')
+check('  and the directory is back', vim.fn.isdirectory(yanked .. '/notes'), 1)
+check('  and the buffer is not left modified', vim.bo[open_buffer].modified, false)
+check('  and nobody was told anything was wrong', #notices, writing)
+check('  and the file that came back is not in the room\'s listing', mirror.granted('notes/deep.txt'), false)
+
+-- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
+-- room, which now lists no files at all.
+
+local emptied = join({}, { 'a.txt' }, 'r-shrunk-to-nothing')
+handle({ type = 'report', report = { kind = 'grant', paths = {} } })
+check('a listing that shrinks to nothing loses its last file', vim.fn.filereadable(emptied .. '/a.txt'), 0)
+check('  and the mirror is still this session\'s', selvage.session().mirror, emptied)
+check('  and it is still a directory', vim.fn.isdirectory(emptied), 1)
+selvage.leave()
+-- A directory in the mirror that is a link out of it is not resolved: the listing names a path
+-- under it, and a removal that followed the link would delete a file outside the mirror, where
+-- the person keeps their own work. The listing is a peer's, and the link is the shape a tool's
+-- own file tree can put in the way of a guess.
+
+local outside = vim.fn.getcwd() .. '/.tmp/lua-mirror-outside'
+vim.fn.delete(outside, 'rf')
+vim.fn.mkdir(outside, 'p')
+vim.fn.writefile({ 'the person keeps this' }, outside .. '/deep.txt')
+
+local linked = join({}, { 'notes/deep.txt' }, 'r-symlinked')
+local escape = linked .. '/escape'
+uv.fs_symlink(outside, escape)
+handle({ type = 'report', report = { kind = 'grant', paths = { 'notes/deep.txt', 'escape/deep.txt' } } })
+check('a listing may name a path under a directory that is a link', mirror.granted('escape/deep.txt'), true)
+
+handle({ type = 'report', report = { kind = 'grant', paths = { 'notes/deep.txt' } } })
+check('  and removing it does not follow the link out of the mirror', read(outside .. '/deep.txt'), 'the person keeps this\n')
+check('  and the link is where it was', uv.fs_lstat(escape).type, 'link')
+check('  and the path is no longer held', mirror.granted('escape/deep.txt'), false)
+selvage.leave()
+vim.fn.delete(outside, 'rf')
+
 -- -- content reaches the file ------------------------------------------------------------
 --
 -- A document the room changed is written by the save policy that already exists: the companion
@@ -795,6 +895,10 @@ check('every mirror this file started was removed', vim.fn.isdirectory(CACHE .. 
 check('  and the room directory with it', vim.fn.isdirectory(CACHE .. '/r-pruned'), 0)
 check('  and the one the traversal test used', vim.fn.isdirectory(CACHE .. '/r-escape'), 0)
 check('  and the one whose listing shrank', vim.fn.isdirectory(CACHE .. '/r-shrunk'), 0)
+check('  and the one whose listing lost a path', vim.fn.isdirectory(CACHE .. '/r-shrunk-path'), 0)
+check('  and the one whose path left with a buffer open on it', vim.fn.isdirectory(CACHE .. '/r-yanked'), 0)
+check('  and the one whose path reached through a link', vim.fn.isdirectory(CACHE .. '/r-symlinked'), 0)
+check('  and the one whose listing lost everything', vim.fn.isdirectory(CACHE .. '/r-shrunk-to-nothing'), 0)
 check('  and the one whose path was too long', vim.fn.isdirectory(CACHE .. '/r-bounded'), 0)
 check('  and the one with a listing past the bound', vim.fn.isdirectory(CACHE .. '/r-many'), 0)
 

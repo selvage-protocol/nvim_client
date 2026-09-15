@@ -7,6 +7,8 @@
  * message to one method.
  */
 
+import { watch, type FSWatcher } from 'node:fs';
+
 import { SessionBridge } from '../vendor/bridge/index.ts';
 import type { Engine, TextChange } from '../vendor/bridge/index.ts';
 import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engine/index.ts';
@@ -14,6 +16,13 @@ import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engin
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant } from './grant.ts';
 import type { Notification, Request } from './ipc.ts';
+
+/**
+ * How long a burst of file-system events is gathered for before the shared folder is read again.
+ * A `git checkout` or a build produces thousands of events, and one reading per event would be a
+ * thousands-fold walk of the tree; the window bounds a burst to one walk rather than one per file.
+ */
+const GRANT_SETTLE_MS = 250;
 
 /** The engine, plus the members the lifecycle needs and the bridge does not. */
 export interface CompanionEngine extends Engine {
@@ -62,6 +71,12 @@ export interface CompanionOptions {
    */
   editor?: NvimEditorHost;
   engines?: EngineFactory;
+  /**
+   * How the shared folder is read. `enumerateGrant` in a real session; a test supplies one whose
+   * completion it decides, because a walk that outlasts the window a burst is gathered in is the
+   * only way to see two of them in flight at once.
+   */
+  enumerate?: (root: string) => Promise<string[]>;
   displayName?: string;
   /**
    * Whether a document the room changed is written, for a `host`/`join` that does not say.
@@ -74,6 +89,7 @@ export interface CompanionOptions {
 export class Companion {
   private readonly send: (notification: Notification) => void;
   private readonly engines: EngineFactory;
+  private readonly enumerate: (root: string) => Promise<string[]>;
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
   private readonly autoSave: boolean;
@@ -82,11 +98,23 @@ export class Companion {
   /** Documents the front-end has opened whose text the room has not sent yet — see `open`. */
   private readonly unarrived = new Map<string, Unarrived>();
   private stopListening?: () => void;
+  /** The shared folder, watched while this process is hosting and closed with the session. */
+  private grantWatcher?: FSWatcher;
+  /** The rereading a burst has scheduled, if one is outstanding. */
+  private grantRepublish?: NodeJS.Timeout;
+  /** The listing last handed to the room, so a folder that has not changed publishes nothing. */
+  private grantedListing?: string[];
+  /**
+   * How many readings of the shared folder have been started. A reading that is not the last one
+   * started has nothing to say: it read the folder before a later one did.
+   */
+  private grantReadings = 0;
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
     this.editor = options.editor ?? new NvimEditorHost({ send: this.send });
     this.engines = options.engines ?? realEngines;
+    this.enumerate = options.enumerate ?? enumerateGrant;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
   }
@@ -166,6 +194,7 @@ export class Companion {
     this.bridge = undefined;
     this.stopListening?.();
     this.stopListening = undefined;
+    this.stopWatching();
     this.unarrived.clear();
     const engine = this.engine;
     this.engine = undefined;
@@ -407,13 +436,82 @@ export class Companion {
       report: { kind: 'documents', documents: session.documents },
     });
     this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
-    // The room's shape is the host's to publish, and it is read off the working copy once, when
-    // the session starts: the folder the session was started in is the grant, and a later change
-    // to which buffers are open is not a statement about the folder.
+    // The room's shape is the host's to publish: the folder the session was started in is the
+    // grant, read off the working copy as the session starts and read again whenever the folder
+    // changes under it — a later change to which buffers are open is not a statement about the
+    // folder, and neither is anything outside it.
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
       this.publishGrant(root);
+      this.watchGrant(root);
     }
+  }
+
+  /**
+   * Watches the folder this session shares and republishes its listing when it changes.
+   *
+   * The watcher belongs to the session: it is opened only while hosting — a guest publishes no
+   * grant and so has nothing to watch — and closed when the session ends. One that reports an
+   * error is closed too: a failed watcher has no promise left to keep, and holding one would
+   * leave a host that looks live with a listing that silently stops moving.
+   */
+  private watchGrant(root: string): void {
+    let watcher: FSWatcher;
+    try {
+      watcher = watch(root, { recursive: true });
+    } catch (error: unknown) {
+      this.reportWatchFailure(error);
+      return;
+    }
+    watcher.on('change', () => {
+      this.scheduleGrant(root);
+    });
+    watcher.on('error', (error) => {
+      this.reportWatchFailure(error);
+    });
+    this.grantWatcher = watcher;
+  }
+
+  /**
+   * Says the shared folder has stopped being watched, once; the session goes on with the listing
+   * it holds, because a listing that is not being refreshed is the room it was before any of this.
+   */
+  private reportWatchFailure(error: unknown): void {
+    this.stopWatching();
+    this.send({
+      type: 'report',
+      report: {
+        kind: 'sessionError',
+        code: 'error',
+        message: `could not watch the folder this session shares: ${describe(error)}`,
+      },
+    });
+  }
+
+  /**
+   * Schedules one rereading of the shared folder. The first event of a burst sets the timer and
+   * the ones after it do not move it, so a burst is read once per window rather than once per
+   * event: a window does not wait for the burst to end.
+   */
+  private scheduleGrant(root: string): void {
+    if (this.grantRepublish !== undefined) {
+      return;
+    }
+    this.grantRepublish = setTimeout(() => {
+      this.grantRepublish = undefined;
+      this.publishGrant(root);
+    }, GRANT_SETTLE_MS);
+  }
+
+  /** Stops watching the shared folder, and forgets the listing the room was last offered. */
+  private stopWatching(): void {
+    if (this.grantRepublish !== undefined) {
+      clearTimeout(this.grantRepublish);
+      this.grantRepublish = undefined;
+    }
+    this.grantWatcher?.close();
+    this.grantWatcher = undefined;
+    this.grantedListing = undefined;
   }
 
   /**
@@ -428,25 +526,61 @@ export class Companion {
     if (engine === undefined) {
       return;
     }
+    // Which reading this is. A walk of a large tree outlasts the window a burst is gathered in —
+    // the 20 000-node bound measured ~390 ms against a 250 ms window — so an event during a walk
+    // starts a second one, and the two can finish in the order opposite to the one they started
+    // in. The last reading started is the only one whose answer is the folder's current shape.
+    const reading = ++this.grantReadings;
     void (async () => {
       let paths: string[];
       try {
-        paths = await enumerateGrant(root);
+        paths = await this.enumerate(root);
       } catch (error: unknown) {
-        this.send({
-          type: 'report',
-          report: {
-            kind: 'sessionError',
-            code: 'error',
-            message: `could not read the folder this session shares: ${describe(error)}`,
-          },
-        });
+        if (this.engine === engine) {
+          this.send({
+            type: 'report',
+            report: {
+              kind: 'sessionError',
+              code: 'error',
+              message: `could not read the folder this session shares: ${describe(error)}`,
+            },
+          });
+        }
         return;
       }
-      await engine.grant(paths).catch((error: unknown) => {
-        if (isProtocolError(error, errCode.unknownMethod)) {
+      // A reading that started before a later one has nothing to say, however it finished first:
+      // the folder it read was replaced while the two were in flight, and publishing it would put
+      // the room back on a listing the reading after it had already replaced. The next change to
+      // the folder is what would put it right, and a room that is not changing is left wrong.
+      if (reading !== this.grantReadings) {
+        return;
+      }
+      // A session that ended while the folder was being read has no room left to be told
+      // anything, and its listing must not become the next session's starting point.
+      if (this.engine !== engine) {
+        return;
+      }
+      // The engine publishes unconditionally, and a listing is a snapshot the room replaces
+      // wholesale: a folder that names exactly what it named last time has nothing to say.
+      const previous = this.grantedListing;
+      if (previous !== undefined && sameListing(previous, paths)) {
+        return;
+      }
+      try {
+        await engine.grant(paths);
+        this.grantedListing = paths;
+      } catch (error: unknown) {
+        if (this.engine !== engine) {
           return;
         }
+        if (isProtocolError(error, errCode.unknownMethod)) {
+          // The server has no grant at all, so nothing was refused: the room keeps its
+          // open-document set, and this folder is what it would grant if it could.
+          this.grantedListing = paths;
+          return;
+        }
+        // A refused listing leaves the room with the grant it had, so it is not remembered as
+        // the one the room holds: the folder's next change offers the new listing all the same.
         this.send({
           type: 'report',
           report: {
@@ -455,9 +589,14 @@ export class Companion {
             message: `the server refused the listing of the folder this session shares: ${describe(error)}`,
           },
         });
-      });
+      }
     })();
   }
+}
+
+/** Whether two listings name the same paths, in the same order. */
+function sameListing(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index]);
 }
 
 /** A failure as a sentence: the message of an Error, or whatever was thrown instead. */

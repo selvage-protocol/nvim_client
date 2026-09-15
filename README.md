@@ -36,7 +36,7 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 
 | Plugin → companion | |
 |---|---|
-| `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the host publishes its listing to the room, and serves a path from it when a peer asks. |
+| `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the host publishes its listing to the room, republishes it when the folder changes, and serves a path from it when a peer asks. |
 | `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
 | `leave {}` | End the session; the process stays up. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
@@ -192,13 +192,24 @@ window to show the root the way the other client does.
 
 That listing is the room's **grant** (`DESIGN.md` §4.2, `PROTOCOL.md` §5). It is a list of files
 and never content, a candidate rather than a promise, and the room replaces it wholesale: a host
-reads its own working copy once, when the session starts, and writes the files it holds — no
+reads its own working copy when the session starts and writes the files it holds — no
 directories, ascending by UTF-16 code unit, with the dependency and build trees and the
-environment files left out. A guest keeps the listing beside the documents it holds, so
-`:SelvageOpen` completes over a path nobody has opened yet and opens it through the same hold as
-any other document. Opening it is what makes the **host** read that one file out of its working
-copy, and the host refuses anything that is not a readable text file inside its root rather than
-sharing an empty document; a refusal is reported.
+environment files left out. It reads the folder again while it hosts: the companion watches the
+folder the session shares, and a file created, deleted or renamed under it reaches the room as the
+new listing. A burst of changes — a `git checkout`, a build — is gathered into a quarter of a
+second: one reading per window, not one per event, and a folder that still names what the last
+accepted listing named is not sent again. A listing the server refused is not remembered, so
+the folder's next change offers the listing again. Every event is worth that reading, and not only the ones that look like a
+listing change: the enumerator leaves out a file larger than the 1 MiB a listing will carry
+(`MAX_GRANT_FILE_BYTES`), so a write that crosses that bound adds or removes a path, and an event
+says nothing about which it was. The comparison saves the frame and not the reading, which is 11 ms
+over 640 files, 77 ms over 5 000 and 388 ms at the 20 000 entries the enumerator stops at: cheap,
+but not free, and the price of a listing that cannot be wrong about a file's size. The watcher
+belongs to the session and is closed with it. A guest keeps the listing beside the documents it
+holds, so `:SelvageOpen` completes over a path nobody has opened yet and opens it through the same
+hold as any other document. Opening it is what makes the **host** read that one file out of its
+working copy, and the host refuses anything that is not a readable text file inside its root rather
+than sharing an empty document; a refusal is reported.
 
 ## The mirror
 
@@ -210,7 +221,11 @@ in-process source.
 
 The **shape** is materialised, the **content** is not. Every path the room's listing names exists in
 the mirror, with the directories on the way to it, so a tree plugin walks the whole room; a path
-whose content has not been fetched is present and empty. The listing's own bounds are applied where
+whose content has not been fetched is present and empty. A listing replaces the one before it, so
+a path it no longer names loses its file, and the directories that become empty with it go too: a
+shape that only ever grew would keep files the room does not have. Only a path the previous
+listing named is removed — a file a tool put in the mirror was never the room's, and nothing
+outside the mirror is touched. The listing's own bounds are applied where
 those files are made — the most paths a listing may carry, and the longest name in it, which are the
 host enumerator's bound and the server's — because a guest makes one file per path as the listing
 arrives. A room past either bound is one no host enumerated, and what is past them is refused and
@@ -231,6 +246,17 @@ A document the room holds and its listing does not name — a listing can be tru
 own bounds — keeps the `selvage://` buffer it had before the mirror existed, which is the fallback
 for everything the mirror cannot name. A listing that arrives after the room has already named a
 document moves that document's buffer to the file the listing names for it; its text comes with it.
+A path that **leaves** the listing loses its mirror file too, and a buffer already open on it is not
+taken away: the listing and the room's open-document set are two facts (`PROTOCOL.md` §5, §6), so
+the document stays open in the same buffer, with the same text and the same name. A save in it
+writes the file back, and makes the file's directory again when the removal took it with the file:
+the room already has the text — a guest's edits travel as they are typed — and the file is only this
+session's cache of it, so a `:w` is a save and not `E212` over a buffer left modified. The file that
+comes back is not in the room's listing, because the room does not name the path any more.
+Entering the name again is not the mirror saying the file is not the room's: while the session still
+holds the document, a name for it routes to the buffer that already holds it and nothing is said.
+Once it does not — the buffer was wiped, or the session is over — a fresh buffer for the path is
+refused like any other file in the mirror the room does not list, once per path.
 
 The directory is a **cache of the room and never a source of truth**. It lives under
 `stdpath('cache')/selvage/<room>/` — never a temporary directory (`/tmp` is RAM-backed on some
@@ -273,11 +299,13 @@ Three things the mirror does not do, all deliberately:
   refused, with the buffer left holding the edit, because the mirror is removed when the session
   ends and a file written into it would go with it.
 
-**Create, rename and delete are not implemented**, in the mirror or in the room: the protocol has
-no frame for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
+**Create, rename and delete are not implemented as document operations**: the protocol has no frame
+for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
 shared; a file deleted or renamed in it does not reach the room, and the room's copy comes back the
-next time the path is fetched. The mirror is where a person reads and edits what the room holds, not
-where they restructure a project.
+next time the path is fetched. What does follow a host's folder is its **listing**: a file the host
+creates, deletes or renames under the folder it shares is republished as the room's grant, and a
+guest's mirror gains a file for a path that appeared and loses one for a path that went. The mirror
+is where a person reads and edits what the room holds, not where they restructure a project.
 
 The mirror is a Neovim answer to a Neovim problem, which is why `:SelvageFetch` has no counterpart
 in the VS Code client: there the room is a `FileSystemProvider`, a read fetches a document on
@@ -366,7 +394,8 @@ for, refuse and never do. `test/lua/granted.lua` is the room's grant on the fron
 what the room offers, the completion and the chooser over it, and opening a path nobody has
 opened without counting it as held. `test/lua/mirror.lua` is the mirror, against a stub companion
 that answers holds the way the room does: where the directory is and how long it lives, what a
-listing materialises and what it refuses to, which buffer a room path is opened in, how content
+listing materialises and what it refuses to, what a listing that loses a path removes, keeps and
+leaves open, which buffer a room path is opened in, how content
 reaches the file, what a save does and what a write the room knows nothing about does, and
 `:SelvageFetch` over one path, a directory and the whole listing. `test/lua/vocabulary.lua` pins the
 words rather than the behaviour, as
@@ -396,7 +425,10 @@ fetched, the guest's mirror holds the shape of the room's listing — the grante
 and is empty — and after the guest opens it the file holds the room's text, with `rg` run over the
 directory finding it from outside Neovim. The document the guest was already editing when the
 listing arrived is a file in the mirror too, holding what the two windows converged on. The guest
-then saves an edit in that file and the host's own working copy ends up holding it.
+then saves an edit in that file and the host's own working copy ends up holding it. The host then
+creates a file under the folder it shares and deletes another while the session is hosted, and the
+guest follows both: the created path reaches its listing and its mirror and opens with the host's
+text in it, and the deleted path — materialised since the join — leaves both.
 
 ## Licence
 
@@ -428,7 +460,8 @@ then saves an edit in that file and the host's own working copy ends up holding 
   `rg`, ctags and a tree plugin see. What it does not hold is content nobody has fetched: a file
   whose path has not been opened or fetched is empty, so a search over the mirror is partial until
   the paths it covers have been (`DESIGN.md` §4.2). A file a tool creates in the mirror is not part
-  of the room, and create, rename and delete do not reach the room at all.
+  of the room, and a mutation made in the mirror — create, rename, delete — still reaches the room
+  nowhere; what does reach it is the host's own folder, through the listing above.
 - A host wiping a shared buffer releases the path in the room; a guest wiping one does too, but a
   guest keeps a path the room stops naming, because this client's document set only grows within a
   session.
