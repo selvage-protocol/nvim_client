@@ -101,7 +101,7 @@ export type Report =
   | { kind: 'sessionError'; code: string; message: string }
   /** `applyEdit` refused every attempt: the buffer and the room are apart, and stay apart. */
   | { kind: 'applyRefused'; path: string }
-  /** The buffer and the replica differ after the edit meant to bring them together. */
+  /** The buffer and the replica were apart, and the room's copy is what the buffer is brought to. */
   | { kind: 'divergence'; path: string }
   /** The document could not be written; the file on disk is stale. */
   | { kind: 'saveFailed'; path: string; message?: string }
@@ -190,7 +190,7 @@ export class SessionBridge {
   /** One entry per document with an apply in flight: what it should leave, and from where. */
   private readonly inFlight = new Map<
     string,
-    { expected: string; replica: string; before: string | undefined }
+    { expected: string; replica: string; before: string | undefined; moved: boolean }
   >();
   /** Documents with a reconcile wanted once the apply in flight settles. */
   private readonly pending = new Set<string>();
@@ -295,7 +295,12 @@ export class SessionBridge {
     if (matchesReplica(text, replica)) {
       return;
     }
-    if (this.inFlight.has(path)) {
+    const flight = this.inFlight.get(path);
+    if (flight !== undefined) {
+      // The buffer moved while the apply was in flight. The text it holds now may not survive
+      // the apply — a rebased change can land the merge back on the pre-apply text — so the
+      // flight records the movement itself, not just the text it started from.
+      flight.moved = true;
       this.pending.add(path);
       return;
     }
@@ -609,6 +614,7 @@ export class SessionBridge {
       expected,
       replica: this.engine.text(path),
       before: this.host.text(path),
+      moved: false,
     });
     void this.host
       .applyChange(path, change)
@@ -632,7 +638,7 @@ export class SessionBridge {
     const flight = this.inFlight.get(path);
     this.inFlight.delete(path);
     if (!applied) {
-      this.refuse(path);
+      this.refuse(path, flight?.moved ?? false);
       return;
     }
     this.attempts.delete(path);
@@ -642,11 +648,14 @@ export class SessionBridge {
       if (flight !== undefined && replica === flight.replica) {
         // The buffer moved while the edit was in flight — the user typed into the window.
         // It now holds the user's text with the change landed on it, and the replica has not
-        // moved since: the difference is the user's, so it goes to the room. A buffer still
-        // holding what it held when the edit was issued was not moved by the user at all —
-        // the editor reported the change landed without it landing — and publishing that is
-        // how a guest's own text overwrites the room.
-        if (actual !== flight.before) {
+        // moved since: the difference is the user's, so it goes to the room. A buffer that held
+        // what it held when the edit was issued was not moved by the user at all — the editor
+        // reported the change landed without it landing — and publishing that is how a guest's
+        // own text overwrites the room. The two states are told apart by `moved`, not by the
+        // text alone: a change the editor refused and the adapter rebuilt through the local
+        // edit behind it lands the merge exactly on the pre-apply text when the peer's change
+        // and the user's edit are inverses.
+        if (actual !== flight.before || flight.moved) {
           this.publish(path, actual, replica);
         }
       } else {
@@ -667,11 +676,20 @@ export class SessionBridge {
    * buffer's current text, but only a bounded number of times: the retry cannot fix a
    * document that will refuse every range, and an unbounded one spins the extension host
    * with nothing on screen.
+   *
+   * `moved` is whether the buffer changed while that apply was in flight. When it did, the
+   * reconcile below diffs the buffer against the replica and works the change out again from
+   * the buffer's own text, which is the room's text without the local edit — the reconcile is
+   * what deletes that edit. The first refusal of an episode is where it is still there to
+   * report, so the person is told the room's copy is what the buffer is about to hold.
    */
-  private refuse(path: string): void {
+  private refuse(path: string, moved: boolean): void {
     const attempts = (this.attempts.get(path) ?? 0) + 1;
     this.attempts.set(path, attempts);
     if (attempts < this.maxApplyAttempts) {
+      if (moved && attempts === 1) {
+        this.host.report({ kind: 'divergence', path });
+      }
       this.reconcile(path);
       return;
     }
