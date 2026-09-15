@@ -83,17 +83,24 @@ end
 --- Replaces the shadow's rows `[first, last]` (0-based, inclusive) with `replacement`.
 function Document:reshadow(first, last, replacement)
   local lines, len16 = {}, {}
+  local count = #self.lines
+  local added = #replacement
   for index = 1, first do
     lines[index] = self.lines[index]
     len16[index] = self.len16[index]
   end
-  for index = 1, #replacement do
-    lines[#lines + 1] = replacement[index]
-    len16[#len16 + 1] = utf16.len(replacement[index])
+  -- The replacement and the tail have different lengths, so one destination index counts the
+  -- rows written so far: a `#` on the list being written is a search per row.
+  local at = first
+  for index = 1, added do
+    at = at + 1
+    lines[at] = replacement[index]
+    len16[at] = utf16.len(replacement[index])
   end
-  for index = last + 2, #self.lines do
-    lines[#lines + 1] = self.lines[index]
-    len16[#len16 + 1] = self.len16[index]
+  for index = last + 2, count do
+    at = at + 1
+    lines[at] = self.lines[index]
+    len16[at] = self.len16[index]
   end
   self.lines, self.len16 = lines, len16
 end
