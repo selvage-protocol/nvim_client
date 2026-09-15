@@ -34,6 +34,10 @@ local state = {
   unwritable = {},
   --- The paths inside the mirror that are not the room's, which a read of one has already named.
   unlisted = {},
+  --- The mirror paths a file mutation was refused for, so the refusal is said once per path.
+  unmutated = {},
+  --- The held paths a fresh open never received, which a listing leaving them named once per path.
+  gone = {},
   --- The folder this session's grant is rooted at, as it stood when the session started. The
   --- working directory can move under it at any moment (`:cd`, `:lcd`, `:tcd`) and the grant
   --- does not: it is the folder the invite was offered from (`DESIGN.md` §4.2), not wherever
@@ -46,6 +50,9 @@ local state = {
   --- The augroup the guest's mirror is watched with: reading one of its files shares it with the
   --- room, and saving one is the session's to route rather than the editor's to write.
   mirror_group = nil,
+  -- While the guest's buffer is named for its mirror file, `nvim_buf_set_name` fires
+  -- `BufFilePost` like a rename would; the rename refusal skips while this is set.
+  suppress_rename = false,
   -- Presence: the augroup the caret watchers live in, the marks drawn for peers, and the one
   -- scheduled flush that publishes this user's caret.
   presence_group = nil,
@@ -652,12 +659,22 @@ local function guest_buffer(path)
   end
   if name == 'selvage://' .. path then
     local bufnr = api.nvim_create_buf(true, true)
-    api.nvim_buf_set_name(bufnr, name)
+    state.suppress_rename = true
+    local ok, err = pcall(api.nvim_buf_set_name, bufnr, name)
+    state.suppress_rename = false
+    if not ok then
+      error(err)
+    end
     vim.bo[bufnr].modifiable = true
     return bufnr
   end
   local bufnr = api.nvim_create_buf(true, false)
-  api.nvim_buf_set_name(bufnr, name)
+  state.suppress_rename = true
+  local named, name_err = pcall(api.nvim_buf_set_name, bufnr, name)
+  state.suppress_rename = false
+  if not named then
+    error(name_err)
+  end
   api.nvim_buf_call(bufnr, function()
     vim.cmd('silent noautocmd edit!')
   end)
@@ -693,6 +710,35 @@ local function refuse_mirror_write(path)
   state.unwritable[path] = true
   notify(
     ('%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it'):format(path),
+    vim.log.levels.WARN
+  )
+end
+
+--- Says, once per path, that the room has no frame for a file mutation: create, rename and
+--- delete stay out of v1, so the file is refused where the editor names it.
+---
+--- @param path string the room path as the mirror's file names it
+local function refuse_mutation(path)
+  if state.unmutated[path] ~= nil then
+    return
+  end
+  state.unmutated[path] = true
+  notify('the room carries no file mutations yet', vim.log.levels.WARN)
+end
+
+--- Says, once per path, that a freshly opened document never arrived because the listing left
+--- it: the host no longer has the file, so the empty buffer is not content still loading.
+--- The buffer stays — an open buffer is never taken away — and a document holding text is not
+--- this: content that arrived, or the person's own keystrokes, is still the room's to keep.
+---
+--- @param path string the room path
+local function notice_gone(path)
+  if state.gone[path] ~= nil then
+    return
+  end
+  state.gone[path] = true
+  notify(
+    ('%s is no longer in the room; the host no longer has it'):format(path),
     vim.log.levels.WARN
   )
 end
@@ -1103,7 +1149,11 @@ local function watch_mirror()
       -- the listing is what it mirrors, and the open-document set is a fact of its own.
       if mirror.granted(path) or state.documents[path] ~= nil then
         share(event.buf, path)
-      else
+        local file = mirror.file(path)
+        if file ~= nil and mirror.granted(path) and vim.fn.filereadable(file) == 0 then
+          refuse_mutation(path)
+        end
+      elseif state.unmutated[path] == nil then
         refuse_unlisted(path)
       end
     end,
@@ -1144,6 +1194,32 @@ local function watch_mirror()
       end,
     })
   end
+  -- A file mutation has no frame, so it is refused where the editor names it: a new file,
+  -- and a buffer renamed onto a mirror name, each say so once per path. A file outside the
+  -- mirror is the person's own and is left alone.
+  api.nvim_create_autocmd('BufNewFile', {
+    group = state.mirror_group,
+    pattern = root .. '/*',
+    callback = function(event)
+      local path = mirror.room_path(api.nvim_buf_get_name(event.buf))
+      if path ~= nil then
+        refuse_mutation(path)
+      end
+    end,
+  })
+  api.nvim_create_autocmd('BufFilePost', {
+    group = state.mirror_group,
+    pattern = root .. '/*',
+    callback = function(event)
+      if state.suppress_rename then
+        return
+      end
+      local path = mirror.room_path(api.nvim_buf_get_name(event.buf))
+      if path ~= nil then
+        refuse_mutation(path)
+      end
+    end,
+  })
   api.nvim_create_autocmd('BufWipeout', {
     group = state.mirror_group,
     callback = document_wiped,
@@ -1225,6 +1301,8 @@ local function reset()
   state.grant = {}
   state.unlisted = {}
   state.unwritable = {}
+  state.unmutated = {}
+  state.gone = {}
   mirror.teardown()
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)

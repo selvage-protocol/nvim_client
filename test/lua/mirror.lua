@@ -648,6 +648,49 @@ check('  and the person is told why', said_since(before, 'save it outside the mi
 check('  and the buffer is left with the edit, unsaved', vim.bo.modified, true)
 check('  and the room was never told about it', selvage.text('stray.txt'), nil)
 
+-- -- a file mutation has no frame -----------------------------------------------------------
+--
+-- Create, rename and delete stay out of v1, so the mirror refuses each where the editor names
+-- it, once per path, with the one sentence both clients share.
+
+root = join({}, GRANT)
+vim.cmd('silent! bufdo bwipeout!')
+before = #notices
+vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/created-by-hand.txt'))
+check(
+  'creating a file in the mirror says the room has no frame for it',
+  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  true
+)
+local created_repeated = #notices
+vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/created-by-hand.txt'))
+check('  and says so once per path', #notices, created_repeated)
+vim.cmd('bwipeout!')
+
+before = #notices
+vim.cmd('enew')
+vim.cmd('file ' .. vim.fn.fnameescape(root .. '/renamed-by-hand.txt'))
+check(
+  'renaming a buffer onto a mirror name says the room has no frame for it',
+  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  true
+)
+vim.cmd('bwipeout!')
+
+selvage.open('notes/deep.txt')
+local listed_buf = vim.api.nvim_get_current_buf()
+local listed_file = root .. '/notes/deep.txt'
+vim.fn.delete(listed_file)
+before = #notices
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = listed_buf })
+check(
+  'deleting a listed file says the room has no frame for it',
+  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  true
+)
+check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(listed_buf), true)
+vim.cmd('bwipeout!')
+
 -- -- a write that is not the whole buffer ---------------------------------------------------
 --
 -- A whole `:w` is routed, and so is a `:w {file}` naming a file outside the mirror, which the

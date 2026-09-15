@@ -159,6 +159,8 @@ local MESSAGES = {
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s" },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends" },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it' },
+  { 'WARN', 'the room carries no file mutations yet' },
+  { 'WARN', '%s is no longer in the room; the host no longer has it' },
   { 'WARN', "%s is inside the mirror, which holds the room's files, so it is not written; write outside the mirror to keep it" },
   { 'ERROR', '%s could not be written into the mirror' },
   { 'INFO', 'you are hosting, so the files a mirror would hold are already on your disk' },
