@@ -980,14 +980,21 @@ function M.copy_invite()
 end
 
 --- Leaves the session and stops the companion.
+---
+--- The guard is the session, not the process: a companion outlives the session it held — a
+--- connection the engine gave up on and a room that goes both leave it running for the next host
+--- or join — so a process alone would say there was something left to leave.
 function M.leave()
-  if state.process == nil then
+  if not in_session() then
+    notify('not in a session', vim.log.levels.WARN)
     return
   end
   local process = state.process
   state.process = nil
-  process:send({ type = 'leave' })
-  process:stop()
+  if process ~= nil then
+    process:send({ type = 'leave' })
+    process:stop()
+  end
   reset()
   notify('left the session')
 end
