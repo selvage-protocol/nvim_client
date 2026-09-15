@@ -35,7 +35,7 @@ function harness(
   role: 'host' | 'guest' = 'host',
   documents: string[] = [],
   peers: PeerInfo[] = [],
-  options: { defaultAutoSave?: boolean; granted?: string[] } = {},
+  options: { defaultAutoSave?: boolean; granted?: string[]; grantError?: Error } = {},
 ): Harness {
   const sent: Notification[] = [];
   const hosts: string[] = [];
@@ -44,6 +44,7 @@ function harness(
   const open = (): FakeEngine => {
     const engine = new FakeEngine(role, documents, peers);
     engine.granted = [...(options.granted ?? [])];
+    engine.grantError = options.grantError;
     engines.push(engine);
     return engine;
   };
@@ -866,3 +867,71 @@ test('a path through a directory link is refused and reported', async (t) => {
     'the room asked for escape/secret.txt, which is not a readable file in the folder this window shares; nothing was shared for it',
   ]);
 });
+test('a host publishes the listing of the folder the session started in', async (t) => {
+  const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
+  tree(root, 'src/main.rs', 'fn main() {}\n');
+  tree(root, '.env', 'TOKEN=1\n');
+  tree(root, 'node_modules/left-pad/index.js', 'module.exports = 1;\n');
+
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the listing to reach the engine',
+    () => it.engine.grants.length > 0,
+    () => it.engine.grants,
+  );
+
+  assert.deepEqual(it.engine.grants, [['notes.txt', 'src/main.rs']]);
+});
+
+test('a host with no folder publishes nothing at all', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await settle();
+
+  assert.deepEqual(it.engine.grants, [], 'a front-end that named no folder has no listing');
+  assert.deepEqual(refusals(it), [], 'and nothing to say about one');
+});
+
+test('a server that does not know doc.grant is a room with no grant, not a fault', async (t) => {
+  const root = folder(t);
+  const it = harness('host', [], [], {
+    grantError: new ProtocolError('unknown_method', 'doc.grant is not a method here'),
+  });
+
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the listing to reach the engine',
+    () => it.engine.grants.length > 0,
+    () => it.engine.grants,
+  );
+
+  assert.equal(it.engine.grants.length, 1, 'the listing was sent');
+  assert.deepEqual(refusals(it), [], 'and the answer ended there');
+  assert.equal(it.engine.disconnected, false, 'the session goes on');
+});
+
+test('a refused listing is reported and changes nothing', async (t) => {
+  const root = folder(t);
+  const it = harness('host', [], [], {
+    grantError: new ProtocolError('bad_params', 'the listing is too long'),
+  });
+
+  await it.companion.handle({
+    type: 'host',
+    serverUrl: 'ws://127.0.0.1:0',
+    root,
+  });
+  await until(
+    'the refusal to be reported',
+    () => refusals(it).length > 0,
+    () => refusals(it),
+  );
+
+  assert.deepEqual(refusals(it), [
+    'the server refused the listing of the folder this session shares: the listing is too long',
+  ]);
+  assert.equal(it.engine.disconnected, false, 'a refused listing does not end the session');
+});
+

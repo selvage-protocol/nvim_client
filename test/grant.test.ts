@@ -1,5 +1,6 @@
 /**
- * The host's half of the grant: how far a path a peer named is allowed to reach.
+ * The host's half of the grant: what a listing is read off a working copy, and how far a path a
+ * peer named is allowed to reach.
  *
  * Everything here is exercised on a real directory tree under this checkout's `.tmp/`, never on
  * the host's own: the point of the boundary is that a path from the other end of the session is
@@ -17,8 +18,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 
-import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
-import { readGrantedFile } from '../companion/grant.ts';
+import { MAX_GRANT_FILE_BYTES, MAX_GRANT_PATHS } from '../vendor/bridge/index.ts';
+import { enumerateGrant, readGrantedFile } from '../companion/grant.ts';
 
 const SCRATCH = resolve(import.meta.dirname, '..', '.tmp');
 const ROOT = join(SCRATCH, 'grant-unit');
@@ -37,6 +38,75 @@ before(() => {
 
 after(() => {
   rmSync(ROOT, { recursive: true, force: true });
+});
+
+test('a listing carries the files, never the directories', async () => {
+  await put('listing/b.txt');
+  await put('listing/a/deep.txt');
+  await put('listing/c.txt');
+  assert.deepEqual(await enumerateGrant(join(ROOT, 'listing')), [
+    'a/deep.txt',
+    'b.txt',
+    'c.txt',
+  ]);
+});
+
+test('a listing is written ascending by UTF-16 code unit', async () => {
+  // U+1F9F5 is a surrogate pair (D83E DD75) and U+E000 is a single unit (E000). By code point —
+  // and so by UTF-8 byte, which is what Neovim's own `table.sort` compares — the astral name
+  // sorts *after* U+E000; by UTF-16 code unit it sorts before it, and that is the order the
+  // protocol fixes for a listing (`PROTOCOL.md` §5, vector 022).
+  await put('order/\u{1f9f5}.txt');
+  await put('order/\u{e000}.txt');
+  await put('order/z.txt');
+  assert.deepEqual(await enumerateGrant(join(ROOT, 'order')), [
+    'z.txt',
+    '\u{1f9f5}.txt',
+    '\u{e000}.txt',
+  ]);
+});
+
+test('a listing leaves out what the grant excludes', async () => {
+  await put('excluded/.git/config', '[core]\n');
+  await put('excluded/.env', 'TOKEN=1\n');
+  await put('excluded/.env.local', 'TOKEN=1\n');
+  await put('excluded/node_modules/left-pad/index.js');
+  await put('excluded/target/debug/build');
+  await put('excluded/dist/bundle.js');
+  await put('excluded/.hg/store');
+  await put('excluded/kept.txt');
+  assert.deepEqual(await enumerateGrant(join(ROOT, 'excluded')), ['kept.txt']);
+});
+
+test('a listing stops at the count it will carry', async () => {
+  const many = join(ROOT, 'many');
+  mkdirSync(many, { recursive: true });
+  const names = Array.from({ length: MAX_GRANT_PATHS + 1 }, (_unused, index) =>
+    String(index).padStart(5, '0'),
+  );
+  for (const name of names) {
+    writeFileSync(join(many, `${name}.txt`), 'x\n');
+  }
+  const paths = await enumerateGrant(many);
+  assert.equal(paths.length, MAX_GRANT_PATHS);
+  // Which names survive the truncation follows the same order the listing is written in, so the
+  // first of them is the first name and the tail is what is missing — not whatever the file
+  // system happened to hand back first.
+  assert.equal(paths[0], '00000.txt');
+  assert.equal(paths.at(-1), '04999.txt');
+  assert.ok(!paths.includes('05000.txt'));
+});
+
+test('a listing carries no symbolic link', async () => {
+  const outside = join(ROOT, 'outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'the host never shared this\n');
+  const linked = join(ROOT, 'linked');
+  mkdirSync(linked, { recursive: true });
+  writeFileSync(join(linked, 'here.txt'), 'this one is in the folder\n');
+  symlinkSync(join(outside, 'secret.txt'), join(linked, 'file-link.txt'));
+  symlinkSync(outside, join(linked, 'escape'));
+  assert.deepEqual(await enumerateGrant(linked), ['here.txt']);
 });
 
 test('a plain file in the folder is served as its text', async () => {
@@ -104,6 +174,8 @@ test('a path through a directory link is not served', async () => {
   for (const path of ['escape/secret.txt', 'escape/inner/deeper.txt']) {
     assert.equal(await readGrantedFile(root, path), undefined, `${path} was served through a link`);
   }
+  // And nothing behind the link is listed, so it is not a path the grant ever named.
+  assert.deepEqual(await enumerateGrant(root), []);
 });
 
 test('a segment that is a file is not walked through', async () => {
