@@ -540,6 +540,10 @@ check(
 )
 check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(gone_buf), true)
 check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'gone.txt'), true)
+local gone_repeated = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'gone.txt', 'stays.txt' } } })
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check('  and says so once per path', #notices, gone_repeated)
 
 responder = room_holding({ ['kept.txt'] = 'kept\n' })
 local kept_root = join({}, { 'kept.txt' }, 'r-kept')
