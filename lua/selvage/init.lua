@@ -52,6 +52,10 @@ local state = {
   -- Whether the next document the room names is still the one to put in front of the user.
   -- Set when a guest joins; cleared by the first document shown.
   auto_open = false,
+  -- Whether the join has been said out loud yet. The sentence names the room, and what the
+  -- landing did with the room's documents, which is only known once they are named — so it is
+  -- said over the first `documents` report rather than when the handshake arrives.
+  join_said = false,
 }
 
 --- Whether a session is live. The companion process is not the thing to ask: it outlives the
@@ -374,7 +378,7 @@ function M.list_peers()
   end
   local peers = M.peers()
   if #peers == 0 then
-    notify('no other participants to name; a session names them as they arrive', vim.log.levels.WARN)
+    notify('no other participants yet', vim.log.levels.WARN)
     return
   end
   local chunks = {}
@@ -554,7 +558,7 @@ local function share(bufnr, path)
   if not utf16.valid(text) then
     if state.unshareable[path] == nil then
       state.unshareable[path] = true
-      notify(path .. ' is not valid UTF-8, so it is not shared', vim.log.levels.ERROR)
+      notify(('%s is not valid UTF-8, so it is not shared'):format(path), vim.log.levels.ERROR)
     end
     return
   end
@@ -639,7 +643,7 @@ end
 --- lost — `:SelvagePeers` and `require('selvage').session()` still report it.
 function M.open(path)
   if not in_session() then
-    notify('no shared documents; join a session first', vim.log.levels.WARN)
+    notify('join a session first', vim.log.levels.WARN)
     return
   end
   if state.role == 'host' then
@@ -648,7 +652,7 @@ function M.open(path)
   end
   local paths = M.documents()
   if #paths == 0 then
-    notify('no shared documents; join a session first', vim.log.levels.WARN)
+    notify('the room has no open documents yet', vim.log.levels.INFO)
     return
   end
   local wanted = vim.trim(path or '')
@@ -663,9 +667,15 @@ function M.open(path)
   local resolved, candidates = resolve(wanted)
   if resolved == nil then
     if #candidates > 1 then
-      notify('"' .. wanted .. '" matches several: ' .. table.concat(candidates, ', '), vim.log.levels.WARN)
+      notify(
+        ('"%s" matches several: %s'):format(wanted, table.concat(candidates, ', ')),
+        vim.log.levels.WARN
+      )
     else
-      notify('no shared document matches "' .. wanted .. '"; :SelvageOpen alone offers them', vim.log.levels.WARN)
+      notify(
+        ('no shared document matches "%s"; :SelvageOpen alone offers them'):format(wanted),
+        vim.log.levels.WARN
+      )
     end
     return
   end
@@ -755,6 +765,7 @@ local function reset()
   state.room = nil
   state.invite = nil
   state.auto_open = false
+  state.join_said = false
   -- The grant belongs to the session, and a session that has ended grants nothing.
   state.root = nil
   if state.group ~= nil then
@@ -791,13 +802,19 @@ local function on_status(message)
     -- which has already let the engine go.
     reset()
   elseif message.state == 'hosting' then
-    notify('hosting ' .. tostring(message.roomId) .. '; :SelvageCopyInvite to share it')
+    notify(
+      ('room %s is open; copy the invite link to let someone join (:SelvageCopyInvite)'):format(
+        tostring(message.roomId)
+      )
+    )
     share_current()
     watch_buffers()
     watch_presence()
   elseif message.state == 'joined' then
-    notify('joined ' .. tostring(message.roomId))
+    -- The join is said over the `documents` report that follows this one: the sentence carries
+    -- what the landing did with the room's documents, and that is the report's news.
     state.auto_open = true
+    state.join_said = false
     watch_presence()
   elseif message.state == 'error' then
     notify(tostring(message.message), vim.log.levels.ERROR)
@@ -813,18 +830,37 @@ local function on_report(report)
         first = first or bufnr
         share(bufnr, path)
       end
-      -- Once, for the report that follows the join: the room's document set is what the user
-      -- who just ran `:SelvageJoin` asked to be shown. A document the host opens later gets a
-      -- buffer and waits for `:SelvageOpen` — stealing the window then would interrupt
-      -- whatever the guest is already editing.
+      -- The join is said here, where the room's document set is known, rather than when the
+      -- handshake named the room: the sentence carries the landing, and a room with nothing in
+      -- it is a join with a sentence of its own. The landing is the first document the room
+      -- names after the join — a later one gets a buffer and waits for `:SelvageOpen`, because
+      -- taking the window then would interrupt what the guest is already editing — so a room
+      -- that was empty at the join still lands the first document that fills it.
+      local lands = vim.g.selvage_open_on_join ~= false
       if state.auto_open and first ~= nil then
         state.auto_open = false
-        if vim.g.selvage_open_on_join ~= false then
+        if lands then
           show(first)
-          if #report.documents > 1 then
-            notify(('opened %s; %d more, :SelvageOpen to choose'):format(report.documents[1], #report.documents - 1))
+        end
+        if not state.join_said then
+          state.join_said = true
+          if not lands then
+            notify(('joined room %s'):format(tostring(state.room)))
+          elseif #report.documents > 1 then
+            notify(
+              ('joined room %s; opening %s; %d more, :SelvageOpen to choose'):format(
+                tostring(state.room),
+                report.documents[1],
+                #report.documents - 1
+              )
+            )
+          else
+            notify(('joined room %s; opening %s'):format(tostring(state.room), report.documents[1]))
           end
         end
+      elseif state.auto_open and not state.join_said then
+        state.join_said = true
+        notify(('joined room %s; the room has no open documents yet'):format(tostring(state.room)))
       end
     end
   elseif report.kind == 'peers' then
@@ -834,7 +870,7 @@ local function on_report(report)
   elseif report.kind == 'roomGone' then
     -- The room is over and the companion has let the engine go, so the session here ends with
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
-    notify('the room is gone: ' .. tostring(report.reason), vim.log.levels.WARN)
+    notify(('the room is gone (%s)'):format(tostring(report.reason)), vim.log.levels.WARN)
     reset()
   elseif report.kind == 'hostDetached' then
     notify(
@@ -842,9 +878,9 @@ local function on_report(report)
       vim.log.levels.WARN
     )
   elseif report.kind == 'hostAttached' then
-    notify(tostring((report.peer or {}).display_name or 'the host') .. ' is hosting again')
+    notify(('%s is hosting again'):format(tostring((report.peer or {}).display_name or 'the host')))
   elseif report.kind == 'sessionError' then
-    notify(tostring(report.code) .. ': ' .. tostring(report.message), vim.log.levels.ERROR)
+    notify(('%s (%s)'):format(tostring(report.message), tostring(report.code)), vim.log.levels.ERROR)
   elseif report.kind == 'applyRefused' then
     notify(
       ('the editor would not apply the room\'s change to %s; the file may be read-only'):format(
@@ -875,7 +911,7 @@ local function on_report(report)
     -- the session is over and typing would accumulate in a replica nobody hears. The
     -- companion process is deliberately left running — `ensure` reuses it on the next host
     -- or join, and the engine on the other side of it has already finished.
-    notify('the connection ended and could not be re-established; the session is over', vim.log.levels.ERROR)
+    notify('the connection ended and the session is over; it could not be re-established', vim.log.levels.ERROR)
     reset()
   end
 end
@@ -933,7 +969,7 @@ local function ensure()
       state.process = nil
       reset()
       if code ~= 0 then
-        notify('the companion exited with ' .. code, vim.log.levels.ERROR)
+        notify(('the companion exited with %s'):format(tostring(code)), vim.log.levels.ERROR)
       end
     end,
   })
@@ -953,7 +989,7 @@ local MAX_DISPLAY_NAME = 32
 --- How long `name` is beside the limit, as a refusal says it. `#value` would count bytes and
 --- `vim.fn.strchars` characters; neither is the unit the room counts.
 local function over_long(name)
-  return ('%d UTF-16 code units and the room allows %d'):format(utf16.len(name), MAX_DISPLAY_NAME)
+  return ('%d UTF-16 code units and the limit is %d'):format(utf16.len(name), MAX_DISPLAY_NAME)
 end
 
 --- Whether a name with nobody to re-ask fits the limit, saying so and naming `source` when it
@@ -963,7 +999,11 @@ local function acceptable(name, source, did)
     return true
   end
   notify(
-    ('%s is %s, so %s: a name is never shortened; set a shorter one'):format(source, over_long(name), did),
+    ('this name is %s; a name is refused rather than shortened (from %s, so %s; set a shorter one)'):format(
+      over_long(name),
+      source,
+      did
+    ),
     vim.log.levels.ERROR
   )
   return false
@@ -1038,7 +1078,10 @@ local function resolve_display_name(callback)
         return
       end
       if utf16.len(name) > MAX_DISPLAY_NAME then
-        notify(('the display name is %s; say a shorter one'):format(over_long(name)), vim.log.levels.WARN)
+        notify(
+          ('this name is %s; a name is refused rather than shortened'):format(over_long(name)),
+          vim.log.levels.ERROR
+        )
         ask()
         return
       end
@@ -1135,6 +1178,18 @@ local function resolve_invite(callback)
   end)
 end
 
+--- Puts this session's invite on the clipboard and the unnamed register, or answers false when
+--- there is none to put there. Two moments reach for the invite — hosting again, and
+--- `:SelvageCopyInvite` — and each has its own sentence about it.
+local function take_invite()
+  if state.invite == nil then
+    return false
+  end
+  vim.fn.setreg('"', state.invite)
+  pcall(vim.fn.setreg, '+', state.invite)
+  return true
+end
+
 --- Mints a room and shares the current buffer.
 ---
 --- Hosting while hosting is reaching for the invite, not asking for a room: a second room would
@@ -1143,14 +1198,21 @@ end
 function M.host(url)
   local wanted = vim.trim(url or '')
   if state.status == 'hosting' then
-    M.copy_invite()
+    if take_invite() then
+      notify(
+        ('you are already hosting room %s; the invite link is on the clipboard'):format(
+          tostring(state.room)
+        )
+      )
+    end
     return
   end
   if in_session() then
-    local question = ('you are in room %s; hosting a session means leaving it first'):format(
-      tostring(state.room)
+    local can_leave = confirm_leave(
+      ('you are in room %s; hosting a session means leaving it first'):format(tostring(state.room)),
+      'Leave and host'
     )
-    if not confirm_leave(question, 'Leave and host') then
+    if not can_leave then
       return
     end
     end_session()
@@ -1184,17 +1246,21 @@ end
 function M.join(invite)
   local wanted = vim.trim(invite or '')
   if in_session() then
-    local question
+    local can_leave
     if state.role == 'host' then
-      question = ('you are hosting room %s; joining another session ends this room for everyone'):format(
-        tostring(state.room)
+      can_leave = confirm_leave(
+        ('you are hosting room %s; joining another session ends this room for everyone'):format(
+          tostring(state.room)
+        ),
+        'Leave and join'
       )
     else
-      question = ('you are in room %s; joining another session leaves it'):format(
-        tostring(state.room)
+      can_leave = confirm_leave(
+        ('you are in room %s; joining another session leaves it'):format(tostring(state.room)),
+        'Leave and join'
       )
     end
-    if not confirm_leave(question, 'Leave and join') then
+    if not can_leave then
       return
     end
     end_session()
@@ -1220,15 +1286,13 @@ function M.join(invite)
   resolve_invite(with_invite)
 end
 
---- Puts the invite on the clipboard and the unnamed register.
+--- Puts the invite on the clipboard and the unnamed register, and says where it is.
 function M.copy_invite()
-  if state.invite == nil then
-    notify('there is no invite: this session is not hosting one', vim.log.levels.WARN)
+  if not take_invite() then
+    notify('there is no invite link: only the connection that opened the room has one', vim.log.levels.WARN)
     return
   end
-  vim.fn.setreg('"', state.invite)
-  pcall(vim.fn.setreg, '+', state.invite)
-  notify(state.invite)
+  notify('the invite link is on the clipboard')
 end
 
 --- Leaves the session and stops the companion.
@@ -1285,7 +1349,7 @@ function M.set_display_name(name)
     return
   end
   if utf16.len(wanted) > MAX_DISPLAY_NAME then
-    notify(('the display name is %s; give a shorter one'):format(over_long(wanted)), vim.log.levels.ERROR)
+    notify(('this name is %s; a name is refused rather than shortened'):format(over_long(wanted)), vim.log.levels.ERROR)
     return
   end
   vim.g.selvage_display_name = wanted

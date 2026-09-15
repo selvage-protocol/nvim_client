@@ -141,6 +141,7 @@ vim.cmd('edit! ' .. path)
 selvage.join('ws://127.0.0.1:1/room#tok')
 check('joining sends the command', sent[#sent].type, 'join')
 
+local before_join = #notices
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-guest' })
 handlers().on_message({
   type = 'report',
@@ -148,6 +149,11 @@ handlers().on_message({
 })
 check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage://workspace/README.md')
 check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
+check(
+  '  and the join says the room and the landing',
+  said_since(before_join, 'joined room r-guest; opening workspace/README.md') ~= nil,
+  true
+)
 
 -- A document the host opens afterwards gets a buffer but does not take the window: the guest
 -- may be editing the first one.
@@ -195,22 +201,33 @@ handlers().on_message({
   report = { kind = 'documents', documents = { 'a/one.lua', 'a/two.lua' } },
 })
 check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
+check(
+  '  and said so, pointing at the others',
+  said_since(before, 'joined room r-two; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
+  true
+)
 local pointed = false
 for index = before + 1, #notices do
   pointed = pointed or notices[index].message:find(':SelvageOpen', 1, true) ~= nil
 end
 check('  and the rest are pointed at', pointed, true)
 
--- A room with no documents yet shows the room's first document when it arrives: that is what a
--- person who just joined asked to see, and a room that was empty at the join fills. Nothing says
--- so, either — the buffer appearing is the signal.
+-- A room with no documents yet has a join sentence of its own, and shows the room's first
+-- document when it arrives: that is what a person who just joined asked to see, and a room that
+-- was empty at the join fills. Nothing says so, either — the buffer appearing is the signal.
 selvage.leave()
 vim.cmd('edit! ' .. path)
 local unrelated = vim.fn.bufname('%')
 selvage.join('ws://127.0.0.1:1/room#tok')
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-empty' })
+local before_empty = #notices
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = {} } })
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
+check(
+  '  and the join says the room has nothing in it yet',
+  said_since(before_empty, 'joined room r-empty; the room has no open documents yet') ~= nil,
+  true
+)
 local before_late = #notices
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { 'late.md' } } })
 check('  and the first document to arrive is shown', vim.fn.bufname('%'), 'selvage://late.md')
@@ -221,6 +238,7 @@ selvage.leave()
 vim.g.selvage_open_on_join = false
 selvage.join('ws://127.0.0.1:1/room#tok')
 vim.cmd('edit! ' .. path)
+local before_off = #notices
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-off' })
 handlers().on_message({
   type = 'report',
@@ -228,6 +246,11 @@ handlers().on_message({
 })
 check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated)
 check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
+check(
+  '  and the join claims no landing',
+  said_since(before_off, 'joined room r-off') ~= nil,
+  true
+)
 vim.g.selvage_open_on_join = nil
 
 -- -- presence: the caret out, the peers' carets in ------------------------------
@@ -923,10 +946,14 @@ vim.cmd('SelvageDisplayName ' .. string.rep('b', 33))
 check('a name of 33 units is refused', vim.g.selvage_display_name, at_limit)
 check(
   '  with the count and the limit',
-  said_since(before_long, '33 UTF-16 code units and the room allows 32') ~= nil,
+  said_since(before_long, 'this name is 33 UTF-16 code units and the limit is 32') ~= nil,
   true
 )
-check('  and it says what to do', said_since(before_long, 'give a shorter one') ~= nil, true)
+check(
+  '  and that it is refused rather than shortened',
+  said_since(before_long, 'a name is refused rather than shortened') ~= nil,
+  true
+)
 
 -- An astral character costs two units, so 30 of them plus one is exactly 32 units — 34 bytes
 -- and 31 characters. A byte count would refuse this name and a character count would let 31
@@ -957,7 +984,7 @@ selvage.host('ws://127.0.0.1:1')
 check('a 33-unit answer at the prompt is asked for again', asked, 2)
 check(
   '  with the count and the limit',
-  said_since(before_prompt, '33 UTF-16 code units and the room allows 32') ~= nil,
+  said_since(before_prompt, 'this name is 33 UTF-16 code units and the limit is 32') ~= nil,
   true
 )
 check('  and the shorter answer names the session', last_of('host') and last_of('host').displayName, 'Cara')
@@ -974,7 +1001,11 @@ selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('an over-long SELVAGE_DISPLAY_NAME starts nothing', count_type('host'), hosts_before_env)
 check('  and is not asked about', asked, 0)
-check('  and the refusal names the variable', said_since(before_env, 'SELVAGE_DISPLAY_NAME is 33') ~= nil, true)
+check(
+  '  and the refusal is the shared one, naming the variable',
+  said_since(before_env, 'a name is refused rather than shortened (from SELVAGE_DISPLAY_NAME') ~= nil,
+  true
+)
 check('  and says the session was not started', said_since(before_env, 'the session was not started') ~= nil, true)
 
 -- A script can set the global without going through the command; the check is at the point
@@ -986,7 +1017,11 @@ local before_global = #notices
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('an over-long global a script set starts nothing', count_type('host'), hosts_before_global)
-check('  and the refusal names the global', said_since(before_global, 'vim.g.selvage_display_name is 33') ~= nil, true)
+check(
+  '  and the refusal names the global',
+  said_since(before_global, 'from vim.g.selvage_display_name') ~= nil,
+  true
+)
 
 -- Reporting it rather than joining under it: with no argument the command says the name in
 -- force would not start a session, because the name in force is not one the room would take.
@@ -1127,7 +1162,7 @@ local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
 check(
   'the room going is reported with its reason',
-  said_since(before_gone, 'the room is gone: host did not return') ~= nil,
+  said_since(before_gone, 'the room is gone (host did not return)') ~= nil,
   true
 )
 check('  and the session ends with it', selvage.session().status, 'idle')
