@@ -269,6 +269,41 @@ test('a remote change is not written when the front-end says not to', async () =
   assert.equal(it.engine.text('notes.txt'), 'hello, world\n', 'the room still reached the replica');
 });
 
+test('a room that is gone ends the session', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+  const before = it.sent.length;
+
+  it.engine.emit({ type: 'roomGone', reason: 'host did not return' });
+
+  await until('the session to be given up', () =>
+    it.sent.some((notification) => notification.type === 'status' && notification.state === 'idle'),
+  );
+  assert.deepEqual(
+    it.sent.slice(before),
+    [
+      { type: 'report', report: { kind: 'roomGone', reason: 'host did not return' } },
+      { type: 'status', state: 'idle' },
+    ],
+    'the reason reaches the front-end, and then the session is over rather than only reported',
+  );
+  assert.equal(it.engine.disconnected, true, 'the engine goes with the room');
+});
+
+test('a connection the engine gave up on leaves the next session free', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+
+  it.engine.emit({ type: 'disconnected' });
+
+  await until('the session to be given up', () =>
+    it.sent.some((notification) => notification.type === 'status' && notification.state === 'idle'),
+  );
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  assert.deepEqual(it.hosts.length, 2, 'a session the engine ended is not one to refuse the next for');
+});
+
 /**
  * Waits for `check` with a deadline, reporting the wait when it expires. A test that sampled an
  * asynchronous effect instead would pass or fail on how the scheduler ran that day.
