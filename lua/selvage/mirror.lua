@@ -404,10 +404,14 @@ function M.setup(room, paths)
     created = true
   end
   -- The listing is the room's whole answer about which paths it holds as files, so a path it no
-  -- longer names loses the file this session made for it. What is removed is what the previous
-  -- listing named: a file a tool created in the mirror was never the room's, and the listing says
-  -- nothing about it. The room's open-document set is a different fact (`PROTOCOL.md` §5, §6), and
-  -- an already-open buffer is not this module's to close.
+  -- longer names loses the file this session made for it. What is compared is the listing the room
+  -- last published *as this client mirrored it* — the room's own listing within the bounds above.
+  -- A path the room still names past `MAX_LISTED` is one this client makes no file for, so the file
+  -- it had while the path was inside the bound goes with the rest; a conforming room never reaches
+  -- that, because the host enumerator stops at the same number of paths. A file a tool created in
+  -- the mirror was never the room's and is left where it is. The room's open-document set is a
+  -- different fact (`PROTOCOL.md` §5, §6), and an already-open buffer is not this module's to
+  -- close.
   for path in pairs(state.listed) do
     if listed[path] == nil then
       unmaterialise(state.root, path)
