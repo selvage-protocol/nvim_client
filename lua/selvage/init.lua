@@ -1414,6 +1414,13 @@ local function on_report(report)
     for _, path in ipairs(state.grant) do
       previous[path] = true
     end
+    -- `mirror.setup` drops the file and the written mark of a path the listing no longer names,
+    -- so the removal check below reads the pre-update mark: an empty document the session already
+    -- wrote is fetched, not gone.
+    local written_before = {}
+    for path in pairs(state.documents) do
+      written_before[path] = mirror.written(path)
+    end
     state.grant = report.paths or {}
     if state.role == 'guest' then
       local root, blocked, created = mirror.setup(state.room, state.grant)
@@ -1438,7 +1445,7 @@ local function on_report(report)
           if
             previous[path]
             and not mirror.granted(path)
-            and not mirror.written(path)
+            and not written_before[path]
             and document:text() == '\n'
           then
             notice_gone(path)

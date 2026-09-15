@@ -558,6 +558,26 @@ check(
 )
 check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(kept_buf), true)
 check('  and it keeps its text', buffer_text(kept_buf), 'kept\n')
+
+-- An empty document the session already wrote is not a fresh open without an answer: the save
+-- marked it written even though its text is still empty, so the listing leaving it stays silent.
+-- The removal takes the file and its written mark with it; the grant handler reads the pre-update
+-- mark, which is what makes this the written half rather than the gone one above.
+responder = room_holding({ ['saved.txt'] = '\n' })
+join({}, { 'saved.txt', 'stays.txt' }, 'r-gone-written')
+selvage.open('saved.txt')
+local saved_buf = vim.api.nvim_get_current_buf()
+check('an empty document the room answered is still empty', buffer_text(saved_buf), '\n')
+check('  and the save marked it written', mirror.written('saved.txt'), true)
+local saved_before = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check(
+  'an empty document already written says nothing about being gone',
+  said_since(saved_before, 'saved.txt is no longer') ~= nil,
+  false
+)
+check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(saved_buf), true)
+check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'saved.txt'), true)
 responder = nil
 
 -- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
