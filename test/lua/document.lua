@@ -62,6 +62,21 @@ vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'tail' })
 check('a line appended past the final newline', change(sent[3]), '12..12 "tail\\n"')
 check('the shadow tracks the buffer', shared:text(), buffer_text(bufnr))
 
+-- -- a whole-buffer clear ------------------------------------------------------
+--
+-- Clearing the whole buffer through the API reports the row past the last line as the end of the
+-- change, and a buffer cannot lose its final newline. Publishing the removal lands the room on a
+-- text the buffer cannot hold, so the deleted text ends before that newline instead.
+local cleared, cleared_buf, cleared_sent = document({ 'one', 'two', 'three' })
+vim.api.nvim_buf_set_lines(cleared_buf, 0, -1, true, {})
+check('a clear keeps the buffer and the shadow together', cleared:text(), buffer_text(cleared_buf))
+check('  both being one empty line', cleared:text(), '\n')
+check(
+  '  and the published change stops before the final newline',
+  change(cleared_sent[#cleared_sent]),
+  '0..13 ""'
+)
+
 local pair, pair_buf, pair_sent = document({ 'a😀b' })
 vim.api.nvim_buf_set_text(pair_buf, 0, 6, 0, 6, { '!' })
 check('a character outside the BMP counts two', change(pair_sent[1]), '4..4 "!"')
