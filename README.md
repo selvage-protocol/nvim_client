@@ -196,13 +196,13 @@ reads its own working copy when the session starts and writes the files it holds
 directories, ascending by UTF-16 code unit, with the dependency and build trees and the
 environment files left out. It reads the folder again while it hosts: the companion watches the
 folder the session shares, and a file created, deleted or renamed under it reaches the room as the
-new listing. A burst of changes — a `git checkout`, a build — is gathered for a quarter of a
-second and read once, and a folder that still names what it named last time is not sent at all.
-The watcher belongs to the session and is closed with it. A guest keeps the listing beside the
-documents it holds, so `:SelvageOpen` completes over a path nobody has opened yet and opens it
-through the same hold as any other document. Opening it is what makes the **host** read that one
-file out of its working copy, and the host refuses anything that is not a readable text file
-inside its root rather than sharing an empty document; a refusal is reported.
+new listing. A burst of changes — a `git checkout`, a build — is gathered into a quarter of a
+second: one reading per window, not one per event, and a folder that still names what it named last
+time is not sent at all. The watcher belongs to the session and is closed with it. A guest keeps
+the listing beside the documents it holds, so `:SelvageOpen` completes over a path nobody has
+opened yet and opens it through the same hold as any other document. Opening it is what makes the
+**host** read that one file out of its working copy, and the host refuses anything that is not a
+readable text file inside its root rather than sharing an empty document; a refusal is reported.
 
 ## The mirror
 

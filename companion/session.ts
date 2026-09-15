@@ -490,7 +490,8 @@ export class Companion {
 
   /**
    * Schedules one rereading of the shared folder. The first event of a burst sets the timer and
-   * the ones after it do not move it, so a burst is read once, one window after it began.
+   * the ones after it do not move it, so a burst is read once per window rather than once per
+   * event: a window does not wait for the burst to end.
    */
   private scheduleGrant(root: string): void {
     if (this.grantRepublish !== undefined) {
