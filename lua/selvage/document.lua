@@ -82,15 +82,20 @@ end
 
 --- Replaces the shadow's rows `[first, last]` (0-based, inclusive) with `replacement`.
 function Document:reshadow(first, last, replacement)
-  local removed = last - first + 1
-  for _ = 1, removed do
-    table.remove(self.lines, first + 1)
-    table.remove(self.len16, first + 1)
+  local lines, len16 = {}, {}
+  for index = 1, first do
+    lines[index] = self.lines[index]
+    len16[index] = self.len16[index]
   end
-  for index = #replacement, 1, -1 do
-    table.insert(self.lines, first + 1, replacement[index])
-    table.insert(self.len16, first + 1, utf16.len(replacement[index]))
+  for index = 1, #replacement do
+    lines[#lines + 1] = replacement[index]
+    len16[#len16 + 1] = utf16.len(replacement[index])
   end
+  for index = last + 2, #self.lines do
+    lines[#lines + 1] = self.lines[index]
+    len16[#len16 + 1] = self.len16[index]
+  end
+  self.lines, self.len16 = lines, len16
 end
 
 --- Applies a remote edit. Returns whether the buffer now holds it.
