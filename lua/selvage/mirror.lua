@@ -89,16 +89,67 @@ local function ensure_dir(path)
   return pcall(vim.fn.mkdir, path, 'p')
 end
 
+--- The kind of a directory entry, which a scan does not have to report.
+---
+--- @param path string
+--- @return string|nil
+local function kind_of(path)
+  local info = uv.fs_lstat(path)
+  return info ~= nil and info.type or nil
+end
+
+--- Removes a directory and everything in it, naming every entry literally.
+---
+--- Not `vim.fs.rm`: it enumerates with `vim.fs.dir`, which normalises the path it is given and
+--- expands a defined variable in it, and then removes by the literal name. The listing this
+--- client mirrors comes from a peer, and `$HOME` is an ordinary directory name on this platform —
+--- so the directory that was created and the one the removal enumerates are not the same name,
+--- the removal throws, and the mirror is left on disk with nothing left to remove it. The `uv`
+--- layer neither normalises nor expands, which is what makes the two ends agree.
+---
+--- @param path string
+--- @return boolean removed, whether nothing of it is left behind
+local function remove_tree(path)
+  local info = uv.fs_lstat(path)
+  if info == nil then
+    return true
+  end
+  if info.type ~= 'directory' then
+    -- A symlink is removed, not followed: what a listing names is not something to walk into.
+    return uv.fs_unlink(path) ~= nil
+  end
+  local scan = uv.fs_scandir(path)
+  if scan ~= nil then
+    while true do
+      local name = uv.fs_scandir_next(scan)
+      if name == nil then
+        break
+      end
+      remove_tree(vim.fs.joinpath(path, name))
+    end
+  end
+  return uv.fs_rmdir(path) ~= nil
+end
+
 --- Removes the mirror directories no live process owns, so that a session that crashed does not
 --- leave a directory a later session could take for the room. Only this client's own naming is
 --- touched: anything else under the room's directory is left where it is.
 ---
 --- @param dir string
 local function prune(dir)
-  for name, kind in vim.fs.dir(dir) do
+  local scan = uv.fs_scandir(dir)
+  if scan == nil then
+    return
+  end
+  while true do
+    local name = uv.fs_scandir_next(scan)
+    if name == nil then
+      break
+    end
     local pid = tonumber(name:match('^(%d+)-'))
-    if kind == 'directory' and pid ~= nil and not running(pid) then
-      vim.fs.rm(vim.fs.joinpath(dir, name), { recursive = true, force = true })
+    local entry = vim.fs.joinpath(dir, name)
+    if pid ~= nil and not running(pid) and kind_of(entry) == 'directory' then
+      remove_tree(entry)
     end
   end
 end
@@ -268,7 +319,14 @@ function M.teardown()
   if root == nil then
     return
   end
-  vim.fs.rm(root, { recursive = true, force = true })
+  if not remove_tree(root) then
+    -- The directory could not be emptied; say so, because a mirror nobody can remove is a cache
+    -- nobody can reason about, and a silent one would look like a mirror that is still in use.
+    vim.notify(
+      ('selvage: could not remove the mirror at %s; leaving it for a later session to prune'):format(root),
+      vim.log.levels.WARN
+    )
+  end
   if room ~= nil then
     -- The room's directory is not recursively removed: a second Neovim mirroring the same room
     -- owns its own directory inside it, and removing that one would delete a live session's
