@@ -2,8 +2,9 @@
 --
 -- The two clients are different editors, not different products: the same intent is the same
 -- English sentence in both, and only the presentation around it — the `selvage: ` prefix, the
--- gutter, the confirm dialog — is the editor's own business (`AGENTS.md` §4, `DESIGN.md` §4.3).
--- A sentence that drifts on one side and not the other is what this file exists to stop.
+-- gutter, the way a question is drawn — is the editor's own business (`AGENTS.md` §4,
+-- `DESIGN.md` §4.3). A sentence that drifts on one side and not the other is what this file
+-- exists to stop.
 --
 -- Pinned here is the vocabulary itself: the phrase Neovim reports for each `:Command`, and
 -- every sentence this front-end shows a user — the literals it notifies, each with the level it
@@ -12,14 +13,19 @@
 -- Which sentence is said at *which* moment is `test/lua/session.lua`'s and
 -- `test/lua/commands.lua`'s, which drive the plugin; this file is the words alone.
 --
--- What is not here, so that this header does not claim more than it covers: the wording a
--- question is asked with (`vim.ui.input`, the picker's `vim.ui.select`) and the layout of the
--- peers list are presentation and are the editor's; the companion's own failure messages
--- (`lua/selvage/companion.lua`) reach `notify` as a variable rather than a literal of this file,
--- and are counted but not pinned; and `%s` in a pinned sentence is a hole, so the pin is on the
--- words around it rather than on the expression that fills it. Three messages are variables —
--- the connect failure, the companion's failure to start, and the question said where there is
--- nobody to answer it — and their number is pinned, so a fourth cannot arrive unnoticed.
+-- What is not here, so that this header does not claim more than it covers:
+--
+-- - The wording a question is asked with (`vim.ui.input`, the picker's `vim.ui.select`), the
+--   layout of the peers list and the buttons the confirm dialog offers are presentation, and the
+--   editor's. `test/lua/commands.lua` pins the buttons with the commands they belong to.
+-- - The companion's own failure messages (`lua/selvage/companion.lua`) reach `notify` as a
+--   variable rather than as a literal of this file: counted, not pinned.
+-- - The expression that fills a hole: `%s` in a pinned sentence is that hole, so the pin is on
+--   the words around it.
+--
+-- Three messages are variables — the connect failure, the companion's failure to start, and the
+-- question said where there is nobody to answer it — and their number is pinned, so a fourth
+-- cannot arrive unnoticed.
 --
 --   nvim --headless -l test/lua/vocabulary.lua      (or scripts/test-lua.sh)
 
@@ -147,9 +153,6 @@ local MESSAGES = {
 --- the question a live session is asked, which is what `confirm_leave` puts to the person.
 local CALLS = { notify = true, confirm_leave = true }
 
---- The level a call carries when it names none.
-local DEFAULT_LEVEL = { notify = 'INFO', confirm_leave = 'WARN' }
-
 --- The source as tokens, with comments and whitespace left out: words, punctuation and string
 --- literals. A sentence quoted in a comment is documentation, and nothing can show it to a user.
 local function tokens(source)
@@ -267,13 +270,13 @@ local function sentence_of(arg)
   return nil
 end
 
---- The level a call names, as written.
+--- The level a `notify` call names, or the information it is at when it names none.
 local function level_of(call)
-  if call.name == 'notify' and call.args[2] ~= nil then
-    local text = written(call.args[2])
-    return text:match('(%u+)$') or text
+  if call.args[2] == nil then
+    return 'INFO'
   end
-  return DEFAULT_LEVEL[call.name]
+  local text = written(call.args[2])
+  return text:match('(%u+)$') or text
 end
 
 -- -- the phrase each command is described by --------------------------------------------
@@ -308,14 +311,29 @@ check_lines('every command is described by the phrase both clients use', describ
 local source = table.concat(vim.fn.readfile('lua/selvage/init.lua'), '\n')
 check('the front-end is where this test reads it', #source > 0, true)
 
+local scanned = calls(tokens(source), CALLS)
+
+-- The level a question carries when it is notified instead of drawn: the one call that says a
+-- question where there is nobody to answer it is in the same file, and reading its level here is
+-- what keeps the questions' own level checked rather than asserted by this file.
+local question_level = nil
+for _, call in ipairs(scanned) do
+  local named = call.name == 'notify' and sentence_of(call.args[1] or {}) == nil
+  if named and written(call.args[1] or {}) == 'question' then
+    question_level = level_of(call)
+  end
+end
+check('the question said where there is nobody to answer it is notified', question_level ~= nil, true)
+
 local found = {}
 local variables = 0
-for _, call in ipairs(calls(tokens(source), CALLS)) do
+for _, call in ipairs(scanned) do
   local sentence = sentence_of(call.args[1] or {})
   if sentence == nil then
     variables = variables + 1
   else
-    found[('%s %s'):format(level_of(call), sentence)] = true
+    local level = call.name == 'confirm_leave' and question_level or level_of(call)
+    found[('%s %s'):format(level, sentence)] = true
   end
 end
 
