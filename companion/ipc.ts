@@ -20,8 +20,15 @@ export type Request =
   /**
    * Mint a room on this server and become its host. Refused while a session is live: see
    * `refused`.
+   *
+   * `root` is the folder this session shares — the one the front-end stood in when the session
+   * started — and it is what the grant is read off. It is the front-end's to say because only
+   * the editor knows where its user is, and the companion's own working directory is the plugin
+   * checkout it was started from. A `host` without one publishes no grant and serves no path a
+   * peer asks for: a front-end that cannot name a folder shares nothing beyond the buffers it
+   * sends.
    */
-  | { type: 'host'; serverUrl: string; displayName?: string; autoSave?: boolean }
+  | { type: 'host'; serverUrl: string; displayName?: string; autoSave?: boolean; root?: string }
   /** Join the room an invite link names. Refused while a session is live: see `refused`. */
   | { type: 'join'; invite: string; displayName?: string; autoSave?: boolean }
   /** Leave the session and drop the connection. The process stays up. */

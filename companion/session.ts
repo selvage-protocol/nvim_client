@@ -88,6 +88,7 @@ export class Companion {
           'host',
           () => this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
           request.autoSave,
+          request.root,
         );
         break;
       }
@@ -318,6 +319,7 @@ export class Companion {
     what: 'host' | 'join',
     open: () => Promise<CompanionEngine>,
     autoSave?: boolean,
+    root?: string,
   ): Promise<void> {
     const live = this.engine;
     if (live !== undefined) {
@@ -380,5 +382,11 @@ export class Companion {
       report: { kind: 'documents', documents: session.documents },
     });
     this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
+    // The folder this session shares is what the room's paths are read off, and it is the
+    // front-end that knows it: only a host has one, and a later change to where its user is
+    // looking is not a statement about the folder the session started in.
+    if (session.role === 'host' && root !== undefined && root !== '') {
+      this.editor.sharedFolder(root);
+    }
   }
 }
