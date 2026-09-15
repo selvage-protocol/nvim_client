@@ -49,7 +49,11 @@ export interface CompanionOptions {
   send: (notification: Notification) => void;
   engines?: EngineFactory;
   displayName?: string;
-  /** Passed to the bridge; a test turns it off to keep the save policy out of the way. */
+  /**
+   * Whether a document the room changed is written, for a `host`/`join` that does not say.
+   * The front-end's own setting rides in the request, as it does in the other client; this is
+   * what that leaves for a front-end that says nothing.
+   */
   autoSave?: boolean;
 }
 
@@ -80,14 +84,18 @@ export class Companion {
   async handle(request: Request): Promise<void> {
     switch (request.type) {
       case 'host': {
-        await this.connect('host', () =>
-          this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
+        await this.connect(
+          'host',
+          () => this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
+          request.autoSave,
         );
         break;
       }
       case 'join': {
-        await this.connect('join', () =>
-          this.engines.join(request.invite, request.displayName ?? this.defaultName),
+        await this.connect(
+          'join',
+          () => this.engines.join(request.invite, request.displayName ?? this.defaultName),
+          request.autoSave,
         );
         break;
       }
@@ -306,7 +314,11 @@ export class Companion {
    * rather than obeyed: opening a second session would end the first behind the front-end's
    * back, and the host of a room would lose it to a mistyped address.
    */
-  private async connect(what: 'host' | 'join', open: () => Promise<CompanionEngine>): Promise<void> {
+  private async connect(
+    what: 'host' | 'join',
+    open: () => Promise<CompanionEngine>,
+    autoSave?: boolean,
+  ): Promise<void> {
     const live = this.engine;
     if (live !== undefined) {
       this.send({ type: 'refused', what, roomId: live.session().roomId });
@@ -328,7 +340,7 @@ export class Companion {
     this.bridge = new SessionBridge({
       engine,
       host: this.editor,
-      autoSave: this.autoSave,
+      autoSave: autoSave ?? this.autoSave,
     });
     // The event that brings a document's text is the moment a document opened before it can be
     // reconciled against it. A document opened that way has no buffer yet — `arrive` is what
