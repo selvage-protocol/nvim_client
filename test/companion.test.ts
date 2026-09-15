@@ -911,7 +911,7 @@ test('a path outside the folder is refused and reported, not seeded empty', asyn
 
   assert.equal(it.engine.text('../outside/secret.txt'), '', 'nothing was shared for it');
   assert.deepEqual(refusals(it), [
-    'the room asked for ../outside/secret.txt, which is not a readable file in the folder this window shares; nothing was shared for it',
+    'could not share ../outside/secret.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
   ]);
 });
 
@@ -935,7 +935,7 @@ test('a path through a directory link is refused and reported', async (t) => {
 
   assert.equal(it.engine.text('escape/secret.txt'), '', 'nothing was shared for it');
   assert.deepEqual(refusals(it), [
-    'the room asked for escape/secret.txt, which is not a readable file in the folder this window shares; nothing was shared for it',
+    'could not share escape/secret.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
   ]);
 });
 test('a host publishes the listing of the folder the session started in', async (t) => {
