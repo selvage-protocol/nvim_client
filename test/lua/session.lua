@@ -97,6 +97,16 @@ local function errors()
   return count
 end
 
+--- The notice, if any, a command added since `from`.
+local function said_since(from, needle)
+  for index = from + 1, #notices do
+    if notices[index].message:find(needle, 1, true) ~= nil then
+      return notices[index].message
+    end
+  end
+  return nil
+end
+
 selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 
@@ -669,6 +679,50 @@ check(
   true
 )
 
+-- The room names everyone in it, and the list is the room's: a peer whose caret this client
+-- cannot draw — one whose document nobody here holds — is someone to name all the same. The two
+-- cells and the colour are this session's own rendering of a peer, so those are carried only
+-- where the gutter drew them.
+handlers().on_message({
+  type = 'report',
+  report = {
+    kind = 'peers',
+    peers = {
+      { peer_id = 'p-long', display_name = 'thisismylongusername', role = 'guest' },
+      { peer_id = 'p-ann', display_name = 'Ann', role = 'host' },
+    },
+  },
+})
+peers = selvage.peers()
+check('the room names every peer, drawn or not', #peers, 2)
+check('  the one the gutter drew comes first', peers[1] and peers[1].label, 'thisismylongusername')
+check('    with its sign', peers[1] and peers[1].sign, 'th')
+check('  and the one it cannot draw is named too', peers[2] and peers[2].label, 'Ann')
+check('    with no sign to explain', peers[2] and peers[2].sign, nil)
+check('    and no colour of its own', peers[2] and peers[2].highlight, nil)
+check('    and the role the room gave it', peers[2] and peers[2].role, 'host')
+
+echoed = nil
+vim.api.nvim_echo = function(chunks)
+  echoed = chunks
+end
+vim.cmd('SelvagePeers')
+vim.api.nvim_echo = echo
+-- A row is the sign and the text for a peer the gutter drew, and the text alone for one it did
+-- not: two rows, one separator, so four chunks, and the signless row is the last of them.
+check('  and :SelvagePeers prints a row for each', echoed ~= nil and #echoed, 4)
+check('    the drawn one still behind its sign', echoed and echoed[1] and echoed[1][1], 'th')
+check(
+  '    and the undrawn one by name alone',
+  echoed and echoed[4] and echoed[4][1]:find('Ann', 1, true) ~= nil,
+  true
+)
+check(
+  '    saying which document it is not in',
+  echoed and echoed[4] and echoed[4][1]:find('no shared document open', 1, true) ~= nil,
+  true
+)
+
 -- End of the session: every mark goes with it, whatever buffer it was on.
 marks = draw({
   {
@@ -688,22 +742,22 @@ check('leaving the session clears every mark', #vim.api.nvim_buf_get_extmarks(pr
 check('  and draws nothing over the document', overlay_windows(), 0)
 check('  and the list with them', #selvage.peers(), 0)
 
+-- With no session there is no room to name, and that is not the same answer as a room with
+-- nobody in it.
+local before_no_session = #notices
+vim.cmd('SelvagePeers')
+check(
+  'with no session the list says there is none',
+  said_since(before_no_session, 'join a session first') ~= nil,
+  true
+)
+
 -- -- the name the room sees -----------------------------------------------------
 --
 -- The name travels in the `host`/`join` handshake, and a change made while a session is live is
 -- sent as `session.rename`. Every source of it is exercised here: the plugin's global,
 -- `SELVAGE_DISPLAY_NAME`, the prompt, and the login name as a last resort. A configured name is
 -- never asked about, and a process with no one to ask falls back rather than block.
-
---- The notice, if any, a command added since `from`.
-local function said_since(from, needle)
-  for index = from + 1, #notices do
-    if notices[index].message:find(needle, 1, true) ~= nil then
-      return notices[index].message
-    end
-  end
-  return nil
-end
 
 local saved_input = vim.ui.input
 local prompted = 0

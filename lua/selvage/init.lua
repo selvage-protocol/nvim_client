@@ -35,6 +35,9 @@ local state = {
   cursors = {},
   -- The peers the last presence report drew, as rows for `:SelvagePeers` to print.
   peers = {},
+  -- The peers the room itself named, which is everyone in it and not only the ones this client
+  -- holds a document for (`report.kind == 'peers'`).
+  room_peers = {},
   selection_armed = false,
   selection_path = nil,
   generation = 0,
@@ -42,6 +45,16 @@ local state = {
   -- Set when a guest joins; cleared by the first document shown.
   auto_open = false,
 }
+
+--- Whether a session is live. The companion process is not the thing to ask: it outlives the
+--- session it held — a connection that ends and a room that goes both leave it running for the
+--- next host or join — so a process with no room is not a session.
+---
+--- Opening a session is left out, as it is in the other client: what `:SelvageLeave` gives up is
+--- a session there is one of.
+local function in_session()
+  return state.status == 'hosting' or state.status == 'joined'
+end
 
 --- The room paths this session holds, ordered so that completion and a prompt agree.
 function M.documents()
@@ -287,24 +300,64 @@ local function draw_presence(cursors)
   end
 end
 
---- The peers the last presence report drew, each with the whole display name the gutter
---- abbreviates and the colour the caret is drawn in. `sign` is what the gutter shows, so a
---- reader holding the two cells has one lookup to make; `highlight` is the very group the caret
---- and the sign are drawn with, because a list that explains the gutter has to agree with it
---- cell for cell. A peer whose caret is not drawn — one whose document this client does not
---- hold — has no gutter sign to explain and is not listed.
-function M.peers()
-  local peers = {}
+--- The peers the last presence report drew, keyed by peer id: the ones whose caret this client
+--- can draw, and so the ones the gutter has a sign and a colour for.
+local function drawn_by_id()
+  local drawn = {}
   for _, peer in ipairs(state.peers) do
-    peers[#peers + 1] = vim.deepcopy(peer)
+    drawn[peer.peerId] = peer
+  end
+  return drawn
+end
+
+--- The room's participants: every peer the room names, each with what this session knows about
+--- it. A peer the room names whose document this client does not hold is listed all the same: the
+--- list is the room's, and someone looking for a person here should find them whether or not their
+--- caret is on screen. That row carries no `sign`, `highlight` or `colour`, because those are the
+--- two cells and the colour the gutter draws — a list that explains the gutter has to agree with
+--- it cell for cell, and a peer the gutter drew nothing for has nothing there to explain.
+---
+--- `label` is the whole display name the two cells abbreviate, or the peer id when the room left
+--- the name blank; `path` is the document the peer is in as the room's presence said. `sign` is
+--- what the gutter shows, so a reader holding the two cells has one lookup to make, and
+--- `highlight` is the very group the caret and the sign are drawn with.
+function M.peers()
+  local drawn = drawn_by_id()
+  local peers = {}
+  local named = {}
+  for _, peer in ipairs(state.room_peers) do
+    local name = tostring(peer.display_name or '')
+    local mine = drawn[peer.peer_id]
+    named[peer.peer_id] = true
+    peers[#peers + 1] = {
+      peerId = peer.peer_id,
+      label = name ~= '' and name or tostring(peer.peer_id),
+      role = peer.role,
+      path = mine and mine.path or nil,
+      sign = mine and mine.sign or nil,
+      colour = mine and mine.colour or nil,
+      highlight = mine and mine.highlight or nil,
+    }
+  end
+  -- A peer the last presence report drew and the room has not named: there is no session report
+  -- to list them from, and the caret on screen is still someone.
+  for _, peer in ipairs(state.peers) do
+    if not named[peer.peerId] then
+      peers[#peers + 1] = vim.deepcopy(peer)
+    end
   end
   return peers
 end
 
 --- Lists the session's participants: each sign beside the whole name it stands for, in the
 --- colour both are drawn in. Echoed rather than notified, because a notification provider may
---- render a message as plain text and the colour is the point.
+--- render a message as plain text and the colour is the point. A peer this client holds no
+--- document for has no sign and no colour, and is listed by name and role alone.
 function M.list_peers()
+  if not in_session() then
+    notify('join a session first', vim.log.levels.WARN)
+    return
+  end
   local peers = M.peers()
   if #peers == 0 then
     notify('no other participants to name; a session names them as they arrive', vim.log.levels.WARN)
@@ -315,9 +368,15 @@ function M.list_peers()
     if #chunks > 0 then
       chunks[#chunks + 1] = { '\n' }
     end
-    chunks[#chunks + 1] = { peer.sign, peer.highlight }
+    if peer.sign ~= nil then
+      chunks[#chunks + 1] = { peer.sign, peer.highlight }
+    end
     chunks[#chunks + 1] = {
-      ('  %s  (%s, %s)'):format(peer.label, tostring(peer.role or 'peer'), tostring(peer.path)),
+      ('  %s  (%s, %s)'):format(
+        peer.label,
+        tostring(peer.role or 'peer'),
+        tostring(peer.path or 'no shared document open')
+      ),
     }
   end
   api.nvim_echo(chunks, true, {})
@@ -603,6 +662,7 @@ local function reset()
   forget_documents()
   clear_presence()
   state.peers = {}
+  state.room_peers = {}
   state.cursors = {}
   for _, name in pairs(state.peer_groups) do
     pcall(api.nvim_set_hl, 0, name, {})
@@ -677,6 +737,10 @@ local function on_report(report)
         end
       end
     end
+  elseif report.kind == 'peers' then
+    -- The room's own list of who is in it: everyone, not only the peers this client holds a
+    -- document for and can draw a caret for.
+    state.room_peers = report.peers or {}
   elseif report.kind == 'roomGone' then
     notify('the room is gone: ' .. tostring(report.reason), vim.log.levels.WARN)
   elseif report.kind == 'hostDetached' then
