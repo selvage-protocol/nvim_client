@@ -724,21 +724,21 @@ responder = room_holding({
 before = #notices
 selvage.fetch('deep.txt')
 check('a fetch of one path writes its file', read(root .. '/notes/deep.txt'), 'deep\n')
-check('  and says what it did', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('  and says what it did', said_since(before, 'fetched the files') ~= nil, true)
 
 before = #notices
 selvage.fetch('src')
 check('a fetch of a directory writes every file of it', read(root .. '/src/main.rs'), 'fn main() {}\n')
 check('  and the other one too', read(root .. '/src/util.rs'), 'fn util() {}\n')
-check('  and says how many', said_since(before, 'fetched 2 of 2 files') ~= nil, true)
+check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
 
 before = #notices
 selvage.fetch()
 check('a fetch of nothing fetches the whole listing', read(root .. '/README.md'), 'readme\n')
-check('  and says how many', said_since(before, 'fetched 4 of 4 files') ~= nil, true)
+check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
 check('  and every file it names is held in the room', #selvage.documents(), 4)
 local opened_at = notice_at(before, 'opens them in the room, so every peer receives them')
-local fetched_at = notice_at(before, 'fetched 4 of 4 files')
+local fetched_at = notice_at(before, 'fetched the files')
 check(
   '  and said it would open them in the room before it did',
   opened_at ~= nil and fetched_at ~= nil and opened_at < fetched_at,
@@ -754,7 +754,7 @@ local already = root .. '/README.md'
 uv.fs_utime(already, 1000, 1000)
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('README.md')
-check('a path fetched already answers without waiting', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('a path fetched already answers without waiting', said_since(before, 'fetched the files') ~= nil, true)
 check('  and is not written again', uv.fs_stat(already).mtime.sec, 1000)
 check(
   '  and says nothing about opening what the room already holds',
@@ -777,14 +777,14 @@ end
 before = #notices
 selvage.fetch('late.txt')
 check('a fetch waits for the room to answer', read(root .. '/late.txt'), 'answered late\n')
-check('  and says what arrived', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('  and says what arrived', said_since(before, 'fetched the files') ~= nil, true)
 
 responder = nil
 root = join({}, { 'quiet.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('quiet.txt')
-check('a fetch the room never answers reports what arrived', said_since(before, 'fetched 0 of 1 files; 1 had not arrived within 0s: quiet.txt') ~= nil, true)
+check('a fetch the room never answers reports what arrived', said_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
 check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
 
 -- The room answering late is not a lost fetch: the document is still held, so the text arriving
@@ -793,7 +793,7 @@ room_text('quiet.txt', 'at last\n', 0)
 check('  and content that arrives after the deadline is written all the same', read(root .. '/quiet.txt'), 'at last\n')
 before = #notices
 selvage.fetch('quiet.txt')
-check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched 1 of 1 files') ~= nil, true)
+check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched the files') ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
 
 -- A word that names nothing is refused rather than fetched as nothing.

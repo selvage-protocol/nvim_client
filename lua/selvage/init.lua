@@ -960,7 +960,7 @@ function M.fetch(path)
     -- receives it and, with a mirror, materialises it. Said before it happens, because a fetch of
     -- a whole listing is a whole project published and the sentence after it is too late to be a
     -- choice (`DESIGN.md` §4.2).
-    notify(('fetching %d files opens them in the room, so every peer receives them'):format(opening))
+    notify('fetching opens them in the room, so every peer receives them')
   end
   for _, target in ipairs(targets) do
     pending[target] = true
@@ -983,14 +983,11 @@ function M.fetch(path)
   end
   local left = unfetched(pending)
   if #left == 0 then
-    notify(('fetched %d of %d files'):format(#targets, #targets))
+    notify('fetched the files')
     return
   end
   notify(
-    ('fetched %d of %d files; %d had not arrived within %ds: %s'):format(
-      #targets - #left,
-      #targets,
-      #left,
+    ('fetched the files; these had not arrived within %ds: %s'):format(
       seconds(timeout),
       table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
     ),
@@ -1342,10 +1339,7 @@ local function on_report(report)
         if created then
           watch_mirror()
           notify(
-            ('the room\'s %d files are mirrored at %s; :SelvageFetch fetches their content'):format(
-              #state.grant - #blocked,
-              root
-            )
+            ('the room\'s files are mirrored at %s; :SelvageFetch fetches their content'):format(root)
           )
         end
         if #blocked > 0 then
