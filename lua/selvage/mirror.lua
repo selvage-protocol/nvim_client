@@ -418,6 +418,13 @@ function M.setup(room, paths)
       state.written[path] = nil
     end
   end
+  -- A listing that renames `Notes` to `notes` on a case-insensitive filesystem — the default on
+  -- macOS and Windows — is two room paths for the one file: the removal above unlinks it and the
+  -- materialise below makes it again, empty, so the content fetched into it is lost and has to be
+  -- fetched again. Left as it is. The two names are two paths to the room and to a case-sensitive
+  -- filesystem, which is what this one is, so the exception would have to be found by probing the
+  -- mirror's own filesystem for a rule that nothing else here needs; and what is lost is a cache
+  -- of a text the room still holds.
   state.listed = listed
   materialise(state.root, wanted, blocked)
   return state.root, blocked, created
