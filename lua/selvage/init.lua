@@ -84,6 +84,12 @@ local function notify(message, level)
   vim.notify('selvage: ' .. message, level or vim.log.levels.INFO)
 end
 
+--- A duration as a person reads it: whole seconds, rounded, which is the unit the room's
+--- deadlines are named in and the one the other client shows.
+local function seconds(ms)
+  return math.max(0, math.floor((tonumber(ms) or 0) / 1000 + 0.5))
+end
+
 --- How long after the first caret event a selection reaches the companion.
 ---
 --- A caret moves on every keystroke — the buffer's own text moves it again when a line is
@@ -699,7 +705,10 @@ local function on_status(message)
     state.invite = message.invite
   end
   if message.state == 'idle' then
-    forget_documents()
+    -- The session is over, whoever ended it: `:SelvageLeave` has reset before it hears this, and
+    -- a room that goes or a connection the engine gave up on reaches here from the companion,
+    -- which has already let the engine go.
+    reset()
   elseif message.state == 'hosting' then
     notify('hosting ' .. tostring(message.roomId) .. '; :SelvageCopyInvite to share it')
     share_current()
@@ -742,9 +751,17 @@ local function on_report(report)
     -- document for and can draw a caret for.
     state.room_peers = report.peers or {}
   elseif report.kind == 'roomGone' then
+    -- The room is over and the companion has let the engine go, so the session here ends with
+    -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
     notify('the room is gone: ' .. tostring(report.reason), vim.log.levels.WARN)
+    reset()
   elseif report.kind == 'hostDetached' then
-    notify('the host disconnected; the room lasts ' .. tostring(report.graceMs) .. 'ms', vim.log.levels.WARN)
+    notify(
+      ('the host left the room; it closes in %ds unless they come back'):format(seconds(report.graceMs)),
+      vim.log.levels.WARN
+    )
+  elseif report.kind == 'hostAttached' then
+    notify(tostring((report.peer or {}).display_name or 'the host') .. ' is hosting again')
   elseif report.kind == 'sessionError' then
     notify(tostring(report.code) .. ': ' .. tostring(report.message), vim.log.levels.ERROR)
   elseif report.kind == 'applyRefused' or report.kind == 'divergence' then
