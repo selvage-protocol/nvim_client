@@ -933,6 +933,42 @@ check('  naming it', said_since(before_fallback, 'the login name ($USER)') ~= ni
 vim.env.USER = saved_user
 vim.g.selvage_display_name = nil
 
+-- -- a session that ends without leaving ------------------------------------------
+--
+-- The companion starts every session clean: `connect()` leaves the one before it, which is a
+-- `status idle` before `connecting`/`hosting`/`joined`. The front-end has to start clean with
+-- it, or the paths the session that ended shared still count as its own: `share` returns
+-- early for every one of them, no `open` puts them in the new room, and the plugin keeps
+-- listing them while the room has never heard of them.
+
+selvage.leave()
+vim.cmd('edit! ' .. path)
+local session_buf = vim.api.nvim_get_current_buf()
+
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-first' })
+local hosted_opens = count_type('open')
+
+-- A second host starts from the companion's own `idle`, and the buffer the first one shared is
+-- shared again under the same path.
+handlers().on_message({ type = 'status', state = 'idle' })
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-second' })
+check('a second host re-opens the buffer the first one shared', count_type('open'), hosted_opens + 1)
+check('  under the same path', last_of('open') and last_of('open').path, path)
+check('  and lists it once', #selvage.documents(), 1)
+local hosted_changes = count_type('change')
+vim.api.nvim_buf_set_lines(session_buf, -1, -1, true, { 'four' })
+check('  and reports a later edit exactly once', count_type('change'), hosted_changes + 1)
+
+-- The same end reached by a join: the room's document set re-opens a path the front-end
+-- already held.
+local joined_opens = count_type('open')
+handlers().on_message({ type = 'status', state = 'idle' })
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-guest' })
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { path } } })
+check('a join re-opens a document the front-end already held', count_type('open'), joined_opens + 1)
+check('  under its room path', last_of('open') and last_of('open').path, path)
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
