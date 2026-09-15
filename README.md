@@ -141,9 +141,10 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 | | |
 |---|---|
 | `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
-| `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window; any others become `selvage://<path>` buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
+| `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
+| `:SelvageFetch [path]` | Fetch the room's content into the mirror: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. A host is refused: the room's files are already on its disk. |
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
@@ -178,9 +179,10 @@ to re-ask, so the session is not started and the refusal names the setting to ch
 opening the room's documents as buffers `:SelvageOpen` reaches.
 `vim.g.selvage_auto_save = false` keeps the room's changes out of the files on disk: a host
 writes a document the room changed by default, as the other client's `selvage.autoSave` does, and
-a guest's buffers have nowhere to write either way. Both are read when a session starts, so a
-change to either applies to the next host or join. `vim.g.selvage_server_url` is the address
-`:SelvageHost` does not have to ask for.
+a guest's mirror is not refreshed either way — a save in it is refused, and the file keeps what it
+last held. Both are read when a session starts, so a change to either applies to the next host or
+join. `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, and
+`vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
 The folder a session was started in is its root: a host publishes the listing of the files under
 it to the room, and nothing outside it is ever served. The root is fixed for the session — a
@@ -196,8 +198,66 @@ environment files left out. A guest keeps the listing beside the documents it ho
 `:SelvageOpen` completes over a path nobody has opened yet and opens it through the same hold as
 any other document. Opening it is what makes the **host** read that one file out of its working
 copy, and the host refuses anything that is not a readable text file inside its root rather than
-sharing an empty document; a refusal is reported. A guest's buffers are the room's, not files
-here — they have nowhere on disk to be written.
+sharing an empty document; a refusal is reported.
+
+## The mirror
+
+A guest does not only keep the room's documents: it materialises the room as a real directory, so
+that the tools a person already uses — fzf and Telescope, ripgrep, ctags, a language server, a tree
+plugin, `fd`, `:find` — see the room as a project rather than as a set of buffers. Those programs
+are separate processes; they read the filesystem and cannot see a buffer name, a URI scheme or an
+in-process source.
+
+The **shape** is materialised, the **content** is not. Every path the room's listing names exists in
+the mirror, with the directories on the way to it, so a tree plugin walks the whole room; a path
+whose content has not been fetched is present and empty. Content arrives when something needs it: a
+file opened in the editor, or `:SelvageFetch` — which takes one path, a directory of them or the
+whole listing. A project-wide search is therefore partial until the paths it covers have been
+fetched, and `:SelvageFetch` is the one command that answers that. `require('selvage').session()
+.mirror` is where the directory is, for a plugin that has to be pointed at it.
+
+A **listed path's buffer is the mirror's file** — a real path on disk — rather than a `selvage://`
+buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being edited.
+A document the room holds and its listing does not name — a listing can be truncated by the host's
+own bounds — keeps the `selvage://` buffer it had before the mirror existed, which is the fallback
+for everything the mirror cannot name. A listing that arrives after the room has already named a
+document moves that document's buffer to the file the listing names for it; its text comes with it.
+
+The directory is a **cache of the room and never a source of truth**. It lives under
+`stdpath('cache')/selvage/<room>/` — never a temporary directory (`/tmp` is RAM-backed on some
+hosts), never inside the person's project — one directory per session inside the room's, named for
+the process that owns it. The session that made it removes it on the way out, and a directory a
+crashed session left behind is pruned by the next one: only a directory whose process is gone is
+removed, so a second Neovim mirroring the same room keeps its own.
+
+A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not run
+Neovim's write path, and the file is given what this client holds for the room — which is the room's
+text, because a guest's changes travel to the room as they are typed. The room's own change to a
+document is written into the mirror the same way, once the room settles. A buffer that has drifted
+from the room therefore cannot put its own text into the cache that a language server or ripgrep
+reads.
+
+Two things the mirror does not do, both deliberately:
+
+- **A tool that writes to a mirror file behind the client's back.** The room's copy replaces it the
+  next time the path is fetched or opened, and a fetch of a path this session already holds writes
+  the file from what the client holds. There is no second source of truth to reconcile: the mirror
+  is a cache, and a cache that disagrees with the room is corrected, not merged.
+- **A file in the mirror the room does not list.** A tool that creates one has made a file on this
+  disk and nothing else. Opening it says so — once per path — and it is not shared; saving it is
+  refused, with the buffer left holding the edit, because the mirror is removed when the session
+  ends and a file written into it would go with it.
+
+**Create, rename and delete are not implemented**, in the mirror or in the room: the protocol has
+no frame for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
+shared; a file deleted or renamed in it does not reach the room, and the room's copy comes back the
+next time the path is fetched. The mirror is where a person reads and edits what the room holds, not
+where they restructure a project.
+
+The mirror is a Neovim answer to a Neovim problem, which is why `:SelvageFetch` has no counterpart
+in the VS Code client: there the room is a `FileSystemProvider`, a read fetches a document on
+demand, and no extension can be pointed at a provider — there is nothing to fill in. Here the room
+is a directory that ripgrep and a language server read for themselves, so it has to be filled.
 
 ## Requirements
 
@@ -238,7 +298,7 @@ nix flake check             # the same three suites, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
-`nix flake check` runs `typecheck`, the companion suite and the five files under `test/lua/` —
+`nix flake check` runs `typecheck`, the companion suite and the eight files under `test/lua/` —
 each in its own Neovim — with no network and no editor session. The two-instance proof is not
 one of them: it needs a `selvaged` from the sibling `reference_server` checkout, which a
 sandboxed build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof
@@ -279,8 +339,12 @@ that a caret is published and a peer's caret and selection are drawn at the peer
 than the Lua functions behind them: what `:SelvageHost`, `:SelvageJoin` and `:SelvageOpen` ask
 for, refuse and never do. `test/lua/granted.lua` is the room's grant on the front-end's side:
 what the room offers, the completion and the chooser over it, and opening a path nobody has
-opened without counting it as held. `test/lua/vocabulary.lua` pins the words rather than the
-behaviour, as
+opened without counting it as held. `test/lua/mirror.lua` is the mirror, against a stub companion
+that answers holds the way the room does: where the directory is and how long it lives, what a
+listing materialises and what it refuses to, which buffer a room path is opened in, how content
+reaches the file, what a save does and what a write the room knows nothing about does, and
+`:SelvageFetch` over one path, a directory and the whole listing. `test/lua/vocabulary.lua` pins the
+words rather than the behaviour, as
 the other client's `test/vocabulary.test.ts` does: the phrase each command is described by, and
 every sentence the front-end notifies, with the level it notifies it at. Both clients say the
 same sentence at a moment and keep only the presentation around it to themselves, so a reworded
@@ -301,6 +365,13 @@ can cut, and that holds the guest's own bytes back by `SELVAGE_E2E_LAG_MS` (300 
 loopback the window between the handshake naming the room's documents and their text arriving is
 about a millisecond, and the guest's driver makes a keystroke in that window every run — which it
 can only do if the relay is what widens it.
+
+It also proves the mirror, which is what a tool outside this editor reads. Before anything is
+fetched, the guest's mirror holds the shape of the room's listing — the granted path exists there
+and is empty — and after the guest opens it the file holds the room's text, with `rg` run over the
+directory finding it from outside Neovim. The document the guest was already editing when the
+listing arrived is a file in the mirror too, holding what the two windows converged on. The guest
+then saves an edit in that file and the host's own working copy ends up holding it.
 
 ## Licence
 
@@ -328,11 +399,11 @@ can only do if the relay is what widens it.
 - A peer's selection is the colour blended with the editor's background rather than a real
   translucent fill: a buffer highlight has no alpha, and a float would cost per-window
   bookkeeping on every scroll and edit for less than the block cursor gives at the same place.
-- A guest's `selvage://` buffers are all a granted path is here. Nothing materialises the room's
-  shape into a real directory on disk, so a language server, `rg`, ctags or a tree plugin sees
-  only the files this machine already has; `DESIGN.md` §4.2 wants that directory and it is its
-  own change, because a real directory is a cache of the room to keep in step and a save in it
-  has to be routed back to the room.
-- A host wiping a shared buffer releases the path in the room; a guest's `selvage://` buffers
-  are not released that way, and neither is a path the room stops naming, because this
-  client's document set only grows within a session.
+- A guest's mirror holds the room's listing as real files, and that is what a language server,
+  `rg`, ctags and a tree plugin see. What it does not hold is content nobody has fetched: a file
+  whose path has not been opened or fetched is empty, so a search over the mirror is partial until
+  the paths it covers have been (`DESIGN.md` §4.2). A file a tool creates in the mirror is not part
+  of the room, and create, rename and delete do not reach the room at all.
+- A host wiping a shared buffer releases the path in the room; a guest wiping one does too, but a
+  guest keeps a path the room stops naming, because this client's document set only grows within a
+  session.
