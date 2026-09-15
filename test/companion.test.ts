@@ -12,14 +12,40 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { LineReader } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
+import { NvimEditorHost } from '../companion/editor.ts';
 import { Companion } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/envelope.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
 
+/**
+ * The editor host the harness hands the companion, recording what the bridge asks it to read and
+ * which folder the front-end pointed it at. A path the room asks for reaches this host's disk
+ * through `readGrantedFile` and nowhere else, and the call is made with the event that names the
+ * path — so the count is a fact about the ask, not a sample of work still in flight (a read that
+ * does happen resolves several turns later). The recorded folder is the same kind of fact: the
+ * host is pointed at one as the session is built, before any listing is worked out.
+ */
+class RecordingHost extends NvimEditorHost {
+  readonly reads: string[] = [];
+  readonly folders: Array<string | undefined> = [];
+
+  override sharedFolder(root: string | undefined): void {
+    this.folders.push(root);
+    super.sharedFolder(root);
+  }
+
+  override readGrantedFile(path: string): Promise<string | undefined> {
+    this.reads.push(path);
+    return super.readGrantedFile(path);
+  }
+}
+
 interface Harness {
   companion: Companion;
+  /** The editor host the companion was built with: `reads` is every ask that reached the disk. */
+  editor: RecordingHost;
   /** The replica in use: the last one a `host` or `join` opened. */
   readonly engine: FakeEngine;
   sent: Notification[];
@@ -38,6 +64,9 @@ function harness(
   options: { defaultAutoSave?: boolean; granted?: string[]; grantError?: Error } = {},
 ): Harness {
   const sent: Notification[] = [];
+  const send = (notification: Notification): void => {
+    sent.push(notification);
+  };
   const hosts: string[] = [];
   const joins: string[] = [];
   const engines: FakeEngine[] = [];
@@ -48,8 +77,10 @@ function harness(
     engines.push(engine);
     return engine;
   };
+  const editor = new RecordingHost({ send });
   const companion = new Companion({
-    send: (notification) => sent.push(notification),
+    send,
+    editor,
     autoSave: options.defaultAutoSave ?? false,
     engines: {
       host: (serverUrl) => {
@@ -64,6 +95,7 @@ function harness(
   });
   return {
     companion,
+    editor,
     sent,
     hosts,
     joins,
@@ -803,6 +835,7 @@ test('a path the room asks for is read off the folder and put into the replica',
 test('a path the room asks for is read once, however often the room asks', async (t) => {
   const root = folder(t);
   tree(root, 'never-opened.txt', 'the host never opened this\n');
+  tree(root, 'asked-again.txt', 'the room asked for this one too\n');
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
 
@@ -812,13 +845,38 @@ test('a path the room asks for is read once, however often the room asks', async
     () => it.engine.has('never-opened.txt'),
     () => it.engine.text('never-opened.txt'),
   );
-  // The file goes away, so a second read could only end in a refusal to report.
-  rmSync(join(root, 'never-opened.txt'));
-  it.engine.emit({ type: 'documentsChanged', documents: ['never-opened.txt'] });
-  await settle();
+  assert.deepEqual(it.editor.reads, ['never-opened.txt'], 'the path was read off the folder');
 
-  assert.equal(it.engine.text('never-opened.txt'), 'the host never opened this\n');
-  assert.deepEqual(refusals(it), [], 'the path was asked for once and not gone back to disk for');
+  // The room restates its open-document set, with a name in it this window has not been asked
+  // for — and the first name's file is gone, so a read of it could only end in a refusal to
+  // report. The new name's read is real file system work, so the wait below is for this emit to
+  // have been handled rather than for a number of turns.
+  rmSync(join(root, 'never-opened.txt'));
+  it.engine.emit({
+    type: 'documentsChanged',
+    documents: ['never-opened.txt', 'asked-again.txt'],
+  });
+  await until(
+    'the name that is new to be seeded',
+    () => it.engine.has('asked-again.txt'),
+    () => it.engine.text('asked-again.txt'),
+  );
+
+  // Whether the disk was gone back to for the first name is settled with the event rather than
+  // after it: `seedRequested` consults the guard it recorded the path in *before* it asks the
+  // host for anything, and the recording of the read is that ask. There is no turn to wait for,
+  // and a count taken here cannot be one taken too early.
+  assert.deepEqual(
+    it.editor.reads,
+    ['never-opened.txt', 'asked-again.txt'],
+    'the path the room had already been answered for was read again',
+  );
+  assert.equal(
+    it.engine.text('never-opened.txt'),
+    'the host never opened this\n',
+    'the repeat ask put something else into the room',
+  );
+  assert.deepEqual(refusals(it), [], 'the repeat ask reported a refusal for a read it did not make');
 });
 
 test('a path outside the folder is refused and reported, not seeded empty', async (t) => {
@@ -890,6 +948,11 @@ test('a host with no folder publishes nothing at all', async () => {
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await settle();
 
+  // A listing is a reading of a folder, and this session never named one: the host is pointed at a
+  // folder as the session is built, and a listing is only ever worked out for a folder that is.
+  // The replica's own listing cannot say that much — nothing arriving is also what a reading that
+  // has not landed yet looks like — so the host's folder is what settles it.
+  assert.deepEqual(it.editor.folders, [], 'a front-end that named no folder pointed the host at none');
   assert.deepEqual(it.engine.grants, [], 'a front-end that named no folder has no listing');
   assert.deepEqual(refusals(it), [], 'and nothing to say about one');
 });
