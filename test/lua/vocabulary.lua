@@ -111,7 +111,7 @@ local TITLES = {
 --- once: what is pinned is the words and the level, not how often they are said.
 local MESSAGES = {
   -- Hosting and joining.
-  { 'INFO', 'room %s is open; copy the invite link to let someone join (:SelvageCopyInvite)' },
+  { 'INFO', 'room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite)' },
   { 'INFO', 'you are already hosting room %s; the invite link is on the clipboard' },
   { 'INFO', 'joined room %s; opening %s' },
   { 'INFO', 'joined room %s; opening %s; %d more, :SelvageOpen to choose' },
@@ -164,12 +164,14 @@ local MESSAGES = {
   -- What this front-end refuses on its own.
   { 'ERROR', '%s is not valid UTF-8, so it is not shared' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared' },
+  { 'WARN', 'this buffer has no file, so it is not shared; the folder this session shares is %s' },
   { 'ERROR', 'the companion exited with %s' },
   { 'WARN', 'already %s room %s; leave that session first' },
   { 'ERROR', 'a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080' },
   { 'ERROR', 'an invite link is needed' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
   { 'INFO', "the room's files are mirrored at %s; :SelvageFetch fetches their content" },
+  { 'INFO', 'this file is empty until fetched; :SelvageFetch %s fills it' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s" },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends" },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it' },
@@ -180,6 +182,7 @@ local MESSAGES = {
   { 'INFO', 'you are hosting, so the files a mirror would hold are already on your disk' },
   { 'INFO', 'the room lists no files to fetch' },
   { 'INFO', 'fetching opens them in the room, so every peer receives them' },
+  { 'INFO', 'fetching opens %s in the room, so every peer receives it' },
   { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them' },
   { 'INFO', 'fetched the files' },
   { 'WARN', 'fetched the files; these had not arrived within %ds: %s' },

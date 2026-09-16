@@ -113,6 +113,10 @@ local function said_since(from, needle)
   return nil
 end
 
+-- The host confirm names the folder the session shares: the root is otherwise invisible until
+-- a file outside it is opened. (The session at the top of this file hosted before `vim.notify`
+-- was captured, so the check below names the next hosting instead.)
+
 selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 
@@ -124,11 +128,33 @@ check('the exit of a companion this session stopped is not reported', errors(), 
 -- A companion that dies while the session is live still is: it has taken the session's buffers
 -- with it, and they have to be let go of.
 selvage.host('ws://127.0.0.1:1')
+local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
+check(
+  'the host confirm names the folder the session shares',
+  said_since(before_host_confirm, 'room r-test is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
+  true
+)
 
 local after_crash = errors()
 handlers().on_exit(1)
 check('a companion that dies on its own is', errors(), after_crash + 1)
+
+-- A connection that fails says what the engine said and what to try next: the engine's text is
+-- accurate but names no next step, and a bad address is the newcomer's failure. A fresh host
+-- earns the failure: the crashed companion above hears nothing anymore.
+selvage.host('ws://127.0.0.1:1')
+local before_error = #notices
+handlers().on_message({ type = 'status', state = 'error', message = 'connection refused' })
+local failed = said_since(before_error, 'connection refused')
+check('a failed connection says what the engine said', failed ~= nil, true)
+check(
+  '  and what to try next',
+  failed ~= nil and failed:find('check the address and try again', 1, true) ~= nil,
+  true
+)
+check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
+selvage.leave()
 
 -- -- a guest has the room's document put in front of it -----------------------
 --

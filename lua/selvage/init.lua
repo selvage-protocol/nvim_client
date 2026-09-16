@@ -38,6 +38,9 @@ local state = {
   unmutated = {},
   --- The held paths a fresh open never received, which a listing leaving them named once per path.
   gone = {},
+  --- The granted paths this session already said are empty until fetched, so the sentence is
+  --- for the open and not for every visit: entering an empty mirror file is ordinary reading.
+  unfetched = {},
   --- The folder this session's grant is rooted at, as it stood when the session started. The
   --- working directory can move under it at any moment (`:cd`, `:lcd`, `:tcd`) and the grant
   --- does not: it is the folder the invite was offered from (`DESIGN.md` §4.2), not wherever
@@ -46,6 +49,9 @@ local state = {
   --- The paths this session refused to share because they are outside that folder, so the
   --- refusal is said once per path, as it is for a buffer that is not UTF-8.
   outside = {},
+  --- The buffers with no file this session already named, so the refusal is said once per
+  --- buffer: entering and leaving an untitled buffer is ordinary editing, not news.
+  unfiled = {},
   group = nil,
   --- The augroup the guest's mirror is watched with: reading one of its files shares it with the
   --- room, and saving one is the session's to route rather than the editor's to write.
@@ -600,6 +606,26 @@ local function refuse_outside(path)
   )
 end
 
+--- Says, once per buffer, that a buffer with no file is not the room's to share. Hosting from
+--- an untitled buffer and typing is the newcomer's silence: the room never hears it, and
+--- nothing else here says so.
+local function refuse_unfiled(bufnr)
+  if state.unfiled[bufnr] ~= nil then
+    return
+  end
+  local root = state.root
+  if root == nil then
+    return
+  end
+  state.unfiled[bufnr] = true
+  notify(
+    ('this buffer has no file, so it is not shared; the folder this session shares is %s'):format(
+      root == '' and '/' or root
+    ),
+    vim.log.levels.WARN
+  )
+end
+
 --- The room path a buffer is shared under, and the absolute name it is refused for when it
 --- is not one to share.
 ---
@@ -608,7 +634,7 @@ end
 --- moment. A name is absolute — Neovim resolves it when it sets one — and the separator in
 --- the prefix is what keeps a sibling whose name merely begins with the grant's out of it.
 --- A file outside the grant comes back as the second value so the refusal can be said;
---- anything that is not a file buffer is neither shared nor refused.
+--- anything that is not a file buffer comes back as neither, so its own refusal can be.
 local function room_path(bufnr)
   if vim.bo[bufnr].buftype ~= '' then
     return nil, nil
@@ -773,6 +799,23 @@ local function notice_gone(path)
   )
 end
 
+--- Says, once per path, that a mirror file opened empty holds nothing yet because its content
+--- has not been fetched: the shape is materialised and the content is not, so an empty file is
+--- the expected sight, and `:SelvageFetch` is what fills it.
+local function notice_unfetched(path)
+  if state.unfetched[path] ~= nil then
+    return
+  end
+  state.unfetched[path] = true
+  notify(('this file is empty until fetched; :SelvageFetch %s fills it'):format(path))
+end
+
+--- Whether a buffer holds nothing: one empty line, the way an empty file reads.
+local function buffer_empty(bufnr)
+  local lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return #lines == 0 or (#lines == 1 and lines[1] == '')
+end
+
 --- Shares the buffer in the window, or says why it is not the room's to share.
 local function share_current()
   local bufnr = api.nvim_get_current_buf()
@@ -781,6 +824,8 @@ local function share_current()
     share(bufnr, path)
   elseif refused ~= nil then
     refuse_outside(refused)
+  else
+    refuse_unfiled(bufnr)
   end
 end
 
@@ -1035,8 +1080,12 @@ function M.fetch(path)
     -- A fetch is a hold: every path it takes joins the room's open-document set, so every peer
     -- receives it and, with a mirror, materialises it. Said before it happens, because a fetch of
     -- a whole listing is a whole project published and the sentence after it is too late to be a
-    -- choice (`DESIGN.md` §4.2).
-    notify('fetching opens them in the room, so every peer receives them')
+    -- choice (`DESIGN.md` §4.2). A single path names itself; the plural is for the listing.
+    if #targets == 1 then
+      notify(('fetching opens %s in the room, so every peer receives it'):format(targets[1]))
+    else
+      notify('fetching opens them in the room, so every peer receives them')
+    end
   end
   for _, target in ipairs(targets) do
     pending[target] = true
@@ -1898,6 +1947,9 @@ local function watch_mirror()
         if file ~= nil and mirror.granted(path) and vim.fn.filereadable(file) == 0 then
           refuse_mutation(path)
         end
+        if mirror.granted(path) and not mirror.written(path) and buffer_empty(event.buf) then
+          notice_unfetched(path)
+        end
       elseif state.unmutated[path] == nil then
         refuse_unlisted(path)
       end
@@ -1982,6 +2034,8 @@ local function watch_buffers()
         share(event.buf, path)
       elseif refused ~= nil then
         refuse_outside(refused)
+      else
+        refuse_unfiled(event.buf)
       end
     end,
   })
@@ -2010,6 +2064,7 @@ local function forget_documents()
   state.documents = {}
   state.unshareable = {}
   state.outside = {}
+  state.unfiled = {}
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
@@ -2053,6 +2108,7 @@ local function reset()
   state.unwritable = {}
   state.unmutated = {}
   state.gone = {}
+  state.unfetched = {}
   mirror.teardown()
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
@@ -2098,8 +2154,9 @@ local function on_status(message)
     reset()
   elseif message.state == 'hosting' then
     notify(
-      ('room %s is open; copy the invite link to let someone join (:SelvageCopyInvite)'):format(
-        tostring(message.roomId)
+      ('room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite)'):format(
+        tostring(message.roomId),
+        state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
       )
     )
     share_current()
@@ -2114,7 +2171,10 @@ local function on_status(message)
     watch_presence()
     watch_follow_window()
   elseif message.state == 'error' then
-    notify(tostring(message.message), vim.log.levels.ERROR)
+    -- This state is only ever a connection that failed: the companion sends it when the open
+    -- behind a host or join throws, so the engine's text names the failure and the suffix names
+    -- the next step.
+    notify(tostring(message.message) .. '; check the address and try again', vim.log.levels.ERROR)
   end
 end
 
