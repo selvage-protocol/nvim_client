@@ -17,6 +17,7 @@ import { Companion } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/envelope.ts';
 
+import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
 import { FakeEngine } from './helpers/fake-engine.ts';
 
 /**
@@ -892,27 +893,31 @@ test('a path the room asks for is read once, however often the room asks', async
   assert.deepEqual(refusals(it), [], 'the repeat ask reported a refusal for a read it did not make');
 });
 
-test('a path outside the folder is refused and reported, not seeded empty', async (t) => {
+test('a path outside the folder is dropped silently, never read and never reported', async (t) => {
   const root = folder(t);
   const outside = join(root, 'outside');
   mkdirSync(outside, { recursive: true });
   writeFileSync(join(outside, 'secret.txt'), 'not inside the folder\n');
   const walled = join(root, 'walled');
   mkdirSync(walled, { recursive: true });
+  tree(walled, 'wall.txt', 'ordinary\n');
 
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: walled });
-  it.engine.emit({ type: 'documentsChanged', documents: ['../outside/secret.txt'] });
+
+  // A path the grant would never publish — `..`, an excluded name, an over-long one — is
+  // not something a peer can talk the room into: it is dropped before any read, so a
+  // guessed secret buys no dialog confirming it, and a bogus listing buys no read at all.
+  it.engine.emit({ type: 'documentsChanged', documents: ['../outside/secret.txt', 'wall.txt'] });
   await until(
-    'the refusal to be reported',
-    () => refusals(it).length > 0,
-    () => refusals(it),
+    'the grantable path to be seeded from the folder',
+    () => it.engine.has('wall.txt'),
+    () => it.engine.text('wall.txt'),
   );
 
   assert.equal(it.engine.text('../outside/secret.txt'), '', 'nothing was shared for it');
-  assert.deepEqual(refusals(it), [
-    'could not share ../outside/secret.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
-  ]);
+  assert.deepEqual(it.editor.reads, ['wall.txt'], 'the path outside the folder was never read');
+  assert.deepEqual(refusals(it), [], 'the path outside the folder was never reported');
 });
 
 test('a path through a directory link is refused and reported', async (t) => {
@@ -937,6 +942,77 @@ test('a path through a directory link is refused and reported', async (t) => {
   assert.deepEqual(refusals(it), [
     'could not share escape/secret.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
   ]);
+});
+
+test('one bogus listing is one dialog, never one per path', async (t) => {
+  const root = folder(t);
+  const walled = join(root, 'walled');
+  mkdirSync(walled, { recursive: true });
+
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: walled });
+
+  it.engine.emit({
+    type: 'documentsChanged',
+    documents: ['gone-1.txt', 'gone-2.txt', 'gone-3.txt', '../evil', '.env'],
+  });
+  await until(
+    'the aggregated refusal to be reported',
+    () => refusals(it).length === 1,
+    () => refusals(it),
+  );
+
+  // One report for the whole event, however many paths failed it: a listing of N unknown
+  // paths is one dialog, never N.
+  assert.match(refusals(it)[0] ?? '', /could not share 3 paths the room asked for/);
+  assert.match(refusals(it)[0] ?? '', /nothing was shared for them/);
+  // The ungrantable two were dropped silently: never read, never reported.
+  assert.deepEqual(it.editor.reads, ['gone-1.txt', 'gone-2.txt', 'gone-3.txt']);
+
+  // One failure on its own still reads as it always did: the sentence this client shares
+  // with the other one, pinned word for word.
+  it.engine.emit({ type: 'documentsChanged', documents: ['gone-4.txt'] });
+  await until(
+    'the single refusal to be reported',
+    () => refusals(it).length === 2,
+    () => refusals(it),
+  );
+  assert.equal(
+    refusals(it)[1],
+    'could not share gone-4.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
+  );
+});
+
+test('a locally opened file the grant excludes is refused once, not seeded', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'open', path: '.env', text: 'SECRET=1\n' });
+
+  // A file the user opened is still one the room has to carry: the grant's own rule gates
+  // it exactly as it gates a peer's request, so opening it shares nothing. The refusal is
+  // said once per path, out loud, rather than seeded as an empty document.
+  assert.deepEqual(refusals(it), [
+    'will not share .env with the room: it is not a path the room shares (excluded from the grant, or escaping the folder); nothing was shared for it',
+  ]);
+  assert.equal(it.engine.has('.env'), false, 'a refused file entered the replica');
+  assert.deepEqual(it.engine.opened, [], 'a refused file was held in the room');
+
+  // The editor re-fires the open event on focus or split, and that must not nag.
+  await it.companion.handle({ type: 'open', path: '.env', text: 'SECRET=1\n' });
+  assert.equal(refusals(it).length, 1, 'reopening a refused file nagged again');
+});
+
+test('a locally opened file over the size a session carries is refused', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  const big = `${'x'.repeat(MAX_GRANT_FILE_BYTES + 1)}\n`;
+  await it.companion.handle({ type: 'open', path: 'big.log', text: big });
+
+  assert.equal(refusals(it).length, 1);
+  assert.match(refusals(it)[0] ?? '', /will not share big\.log with the room/);
+  assert.match(refusals(it)[0] ?? '', /over the 1048576 bytes a session will carry/);
+  assert.match(refusals(it)[0] ?? '', /nothing was shared for it/);
+  assert.equal(it.engine.has('big.log'), false, 'an oversized file entered the replica');
 });
 test('a host publishes the listing of the folder the session started in', async (t) => {
   const root = folder(t);
