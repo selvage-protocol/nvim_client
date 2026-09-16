@@ -125,6 +125,17 @@ This user's own caret is published from the events that move it — `CursorMoved
 entering a buffer — coalesced into one `selection` per 100 ms, and `selectionCleared` goes out
 when there is no shared document in front of the user.
 
+Following moves the follower's caret: Neovim has no viewport-only state that survives a redraw,
+so being where a peer is means the cursor is there, and the next keystroke lands there too. That
+is why a local edit of a shared document ends the follow, saying `stopped following <name>` —
+while a remote edit only re-lands it. Going somewhere deliberately ends one the same way, the
+peer's leaving ends it with their name on it, and a rename keeps it, since the target is the
+peer id. While a follow stands, the window shows a `winbar` row naming the peer and the command
+that stops it, in the peer's own colour; the row the window had is put back when the follow
+ends. `vim.g.selvage_following` holds the followed peer's id meanwhile, and
+`%{v:lua.require'selvage'.statusline()}` is the snippet for whoever wants the same words in
+their own statusline.
+
 ### The vendored engine
 
 `vendor/` is a copy, never edited here. Refresh it from a sibling `vscode_client` checkout:
@@ -148,6 +159,9 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
+| `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart. |
+| `:SelvageFollow [name]` | Follow a participant: land where they are and keep landing there as they move, across documents, until something ends it. Takes its name the way `:SelvageGoTo` does. |
+| `:SelvageStopFollowing` | Stop following, or say there is nothing to stop. |
 
 `:SelvageHost` and `:SelvageJoin` open a session and never end one. Hosting while hosting reaches
 for the invite link instead of minting a second room, and a `:SelvageHost` while a guest or a
