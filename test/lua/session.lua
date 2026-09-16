@@ -113,6 +113,10 @@ local function said_since(from, needle)
   return nil
 end
 
+-- The host confirm names the folder the session shares: the root is otherwise invisible until
+-- a file outside it is opened. (The session at the top of this file hosted before `vim.notify`
+-- was captured, so the check below names the next hosting instead.)
+
 selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 
@@ -124,7 +128,13 @@ check('the exit of a companion this session stopped is not reported', errors(), 
 -- A companion that dies while the session is live still is: it has taken the session's buffers
 -- with it, and they have to be let go of.
 selvage.host('ws://127.0.0.1:1')
+local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
+check(
+  'the host confirm names the folder the session shares',
+  said_since(before_host_confirm, 'room r-test is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
+  true
+)
 
 local after_crash = errors()
 handlers().on_exit(1)

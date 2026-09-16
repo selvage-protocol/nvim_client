@@ -2126,8 +2126,9 @@ local function on_status(message)
     reset()
   elseif message.state == 'hosting' then
     notify(
-      ('room %s is open; copy the invite link to let someone join (:SelvageCopyInvite)'):format(
-        tostring(message.roomId)
+      ('room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite)'):format(
+        tostring(message.roomId),
+        state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
       )
     )
     share_current()
