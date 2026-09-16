@@ -424,8 +424,22 @@ async function main(): Promise<void> {
   });
   log('the host created and deleted a path under its folder, and the guest followed it');
 
+  // The blip must not land in the middle of the follow phase either: the guest tracks the
+  // host's caret across a remote edit there, and a socket cut mid-track ends the follow —
+  // observed both as a silent clear on reset and as the edit sentence — which reads as a
+  // product failure either way. Both instances report when the track is done, and only then
+  // is the relay cut.
+  await pollFor(
+    'the guest to track the host caret and stop following',
+    () => (existsSync(ackFile + '.follow') && existsSync(ackFile + '.follow-done') ? true : undefined),
+    DEADLINE_MS + 20_000,
+  ).catch(async (error: unknown) => {
+    await Promise.race([Promise.all([hostRun, guestRun]), delay(5000)]);
+    throw error;
+  });
+  log('the guest tracked the host caret across a remote edit and stopped following');
+
   if (RECONNECT && controlFile !== undefined) {
-    log('cutting the guest relay (a real TCP close)');
     guestRelay.dropAll();
     await delay(2000);
     writeFileSync(controlFile, 'go');

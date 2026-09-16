@@ -408,6 +408,75 @@ harness.wait_ack('watch', harness.deadline_ms)
 -- takes it with it — which is the same reason phase 1 is acked.
 harness.wait_ack('granted', harness.deadline_ms)
 
+-- -- following the host's caret across a remote edit -------------------------------------
+--
+-- The guest follows the host by peer id, lands where they are, and then tracks them while
+-- they edit: the host appends a line and moves its caret onto it, and this window's cursor
+-- has to end up on that line — through the room's text arriving and the caret following it.
+-- Stopping goes through the indicator's own command. The marker reads the same in both
+-- drivers; it is choreography, not product vocabulary.
+--
+-- The host stages itself in the seed document before signalling: landing where it is only
+-- proves anything if where it is stays put until the follow starts.
+harness.wait_for_file(
+  'the host to stage itself in the seed document',
+  harness.deadline_ms,
+  harness.ack_file .. '.follow-host-ready'
+)
+local own_name = vim.env.SELVAGE_DISPLAY_NAME
+harness.wait('the host to be drawn in the room', harness.deadline_ms, function()
+  for _, peer in ipairs(selvage.peers()) do
+    if peer.label ~= own_name and peer.path ~= nil then
+      return true
+    end
+  end
+  return false
+end, function()
+  return vim.inspect(selvage.peers())
+end)
+local host_peer = nil
+for _, peer in ipairs(selvage.peers()) do
+  if peer.label ~= own_name then
+    host_peer = peer
+  end
+end
+harness.log('following', vim.inspect(host_peer))
+selvage.follow(host_peer.peerId)
+harness.wait('the landing on the host', harness.deadline_ms, function()
+  return vim.fn.bufname('%') == harness.buffer_name(harness.seed_path)
+end, function()
+  return 'the window holds ' .. vim.inspect(vim.fn.bufname('%'))
+end)
+harness.write_file(harness.ack_file .. '.follow-ready', 'go')
+local follow_marker = '[[FOLLOW-CARET]]'
+harness.wait('the host edit to arrive', harness.deadline_ms, function()
+  return harness.contains(follow_marker)
+end, harness.observe)
+harness.wait('the follow to track the host caret onto the marker line', harness.deadline_ms, function()
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  return vim.api.nvim_buf_get_lines(0, 0, -1, true)[row] == follow_marker
+end, function()
+  return 'cursor at ' .. vim.inspect(vim.api.nvim_win_get_cursor(0))
+end)
+if selvage.following() == nil then
+  harness.fail('the follow ended while the host moved; the room edit must not end one')
+end
+local winbar = vim.api.nvim_get_option_value('winbar', { win = 0 })
+if winbar == nil or winbar:find('following', 1, true) == nil then
+  harness.fail(('the indicator is not standing while following; winbar holds %s'):format(vim.inspect(winbar)))
+end
+harness.log('tracked the host onto', vim.inspect(follow_marker), 'under', vim.inspect(winbar))
+vim.cmd('SelvageStopFollowing')
+if selvage.following() ~= nil then
+  harness.fail('stopping through the command left the follow standing')
+end
+harness.record('follow', vim.inspect(vim.api.nvim_win_get_cursor(0)), {
+  tracked = true,
+  stopped = true,
+})
+harness.wait_ack('follow', harness.deadline_ms)
+harness.write_file(harness.ack_file .. '.follow-done', 'go')
+
 if harness.control_file ~= nil then
   harness.wait_for_file(
     'the orchestrator to signal the network blip is over',
