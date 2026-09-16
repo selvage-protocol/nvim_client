@@ -139,6 +139,8 @@ local MESSAGES = {
   { 'WARN', 'nothing to go to: %s is not in a document' },
   { 'WARN', 'nothing to follow: %s is not in a document' },
   { 'WARN', 'nothing to go to: %s\'s caret does not resolve here' },
+  { 'WARN', 'nothing to follow: %s\'s caret does not resolve here' },
+  { 'ERROR', 'could not open %s from the room: %s' },
   { 'WARN', 'no participant matches "%s"' },
   -- The display name.
   { 'INFO', 'no display name is set yet' },

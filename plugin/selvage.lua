@@ -70,9 +70,9 @@ end, {
   desc = 'Go to a participant',
   complete = function(lead)
     local matches = {}
-    for _, peer in ipairs(require('selvage').peers()) do
-      if peer.label:sub(1, #lead) == lead then
-        matches[#matches + 1] = peer.label
+    for _, row in ipairs(require('selvage').complete_peers()) do
+      if row:sub(1, #lead) == lead then
+        matches[#matches + 1] = row
       end
     end
     return matches
@@ -86,9 +86,9 @@ end, {
   desc = 'Follow a participant',
   complete = function(lead)
     local matches = {}
-    for _, peer in ipairs(require('selvage').peers()) do
-      if peer.label:sub(1, #lead) == lead then
-        matches[#matches + 1] = peer.label
+    for _, row in ipairs(require('selvage').complete_peers()) do
+      if row:sub(1, #lead) == lead then
+        matches[#matches + 1] = row
       end
     end
     return matches
