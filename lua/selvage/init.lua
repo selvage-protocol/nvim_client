@@ -2558,9 +2558,40 @@ local function resolve_display_name(callback)
 end
 
 --- The last server address a host was started on, so the question the next bare `:SelvageHost`
---- asks starts from it. It is this Neovim's memory for as long as it runs and no more;
---- `vim.g.selvage_server_url` is the setting that stops the question being asked.
+--- asks starts from it. The file below is what outlives this Neovim; this is what answers
+--- without reading it twice in one process. `vim.g.selvage_server_url` is the setting that
+--- stops the question being asked.
 local last_server = nil
+
+--- The file the last server address is kept in across restarts: the other client remembers it
+--- in its global state, and a bare `:SelvageHost` starts its question from it all the same. A
+--- file beside the mirrors under `stdpath`, read when the question is asked and written when a
+--- host starts, so a restart forgets nothing. A read or write that fails is not a session's
+--- failure, so both give up silently.
+local function last_server_file()
+  return vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_server')
+end
+
+--- The address the file remembers, or nil when no host has been started yet or it cannot be read.
+local function read_last_server()
+  local ok, lines = pcall(vim.fn.readfile, last_server_file())
+  if not ok or type(lines) ~= 'table' or #lines < 1 then
+    return nil
+  end
+  local address = vim.trim(tostring(lines[1]))
+  if address == '' then
+    return nil
+  end
+  return address
+end
+
+--- Remembers `address` for the next question, in this Neovim and after it.
+local function remember_last_server(address)
+  last_server = address
+  local file = last_server_file()
+  pcall(vim.fn.mkdir, vim.fs.dirname(file), 'p')
+  pcall(vim.fn.writefile, { address }, file)
+end
 
 --- Whether a document the room changes is written. Nothing is sent when the plugin's global says
 --- nothing, so the companion's own default — write it — stands, as the other client's setting
@@ -2586,7 +2617,7 @@ local function confirm_leave(question, button)
 end
 
 --- The server to mint a room on: the configured address, else a question starting from the last
---- one typed. An answer is remembered for this Neovim and the question is still asked next time,
+--- one typed. An answer is remembered across restarts and the question is still asked next time,
 --- as it is in the other client: a value baked in would be an endpoint nobody chose.
 local function resolve_server_url(callback)
   local configured = vim.g.selvage_server_url
@@ -2600,7 +2631,7 @@ local function resolve_server_url(callback)
   end
   vim.ui.input({
     prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (set vim.g.selvage_server_url to stop being asked): ',
-    default = last_server or '',
+    default = last_server or read_last_server() or '',
   }, function(input)
     local address = vim.trim(input or '')
     if address == '' then
@@ -2683,7 +2714,7 @@ function M.host(url)
     end_session()
   end
   local function with_url(address)
-    last_server = address
+    remember_last_server(address)
     resolve_display_name(function(display_name)
       local process = ensure()
       if process ~= nil then
