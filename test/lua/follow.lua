@@ -684,13 +684,21 @@ check('  which the global reports by peer id', vim.g.selvage_following, 'p-ada')
 check(
   '  which the window reports with the way to stop',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow# following Ada — :SelvageStopFollowing to stop %*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
 )
 check('  which the statusline reports', selvage.statusline(), 'following Ada')
+-- The indicator's colour is the peer's marker colour: what the caret wears.
+local ada_marker = nil
+for _, peer in ipairs(selvage.peers()) do
+  if peer.peerId == 'p-ada' then
+    ada_marker = peer.colour
+  end
+end
 check(
-  '  in the colour the bridge gave the peer',
-  vim.api.nvim_get_hl(0, { name = 'SelvageFollow' }).bg,
-  tonumber('61afef', 16)
+  '  in the colour of the peer marker',
+  ada_marker ~= nil
+    and vim.api.nvim_get_hl(0, { name = 'SelvageFollow' }).bg == tonumber(ada_marker:sub(2), 16),
+  true
 )
 check(
   '  and the landing reaches the room through the coalesced publish',
@@ -818,6 +826,44 @@ check(
   true
 )
 
+-- The indicator doubles as the stop control: what a click on it runs is the stop command's
+-- own handler. A click needs 'mouse' in a live window; here the handler is called the way
+-- the click would call it.
+selvage.follow('Ada')
+local before_click = #notices
+local clicked = pcall(function()
+  return vim.fn.SelvageStopFollowing(0, 1, 'l', '')
+end)
+check('the indicator answers a click', clicked, true)
+if clicked then
+  check(
+    '  stopping the follow',
+    said_since(before_click, 'stopped following Ada') ~= nil,
+    true
+  )
+  check('  which the session reports', selvage.following(), nil)
+  check('  which the global reports', vim.g.selvage_following, nil)
+  check('  and takes the indicator down', vim.api.nvim_get_option_value('winbar', { win = 0 }), '')
+end
+
+-- Leaving the window does not end the follow: the indicator rides along instead.
+selvage.follow('Ada')
+vim.cmd('split')
+check(
+  'the split window carries the indicator',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }),
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
+)
+check('  and the follow stands through the switch', selvage.following(), 'Ada')
+vim.cmd('close')
+check(
+  'coming back keeps the indicator',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }),
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
+)
+check('  and the follow with it', selvage.following(), 'Ada')
+selvage.stop_following()
+
 -- The peer leaving ends the follow with their name on it. The membership report is what
 -- says so: presence alone cannot tell a departure from a frame with nothing to draw.
 selvage.follow('Ada')
@@ -852,7 +898,7 @@ check('a rename keeps the follow', selvage.following(), 'Ada Lovelace')
 check(
   '  and re-labels the indicator',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow# following Ada Lovelace — :SelvageStopFollowing to stop %*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada Lovelace — click or :SelvageStopFollowing to stop %X%*'
 )
 -- The re-label comes from the membership report itself, not the next presence frame: a peer
 -- who renames and goes idle reads correctly indefinitely.
@@ -861,7 +907,7 @@ check('a rename on the peers report alone re-labels the follow', selvage.followi
 check(
   '  and the indicator with it',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow# following Ada — :SelvageStopFollowing to stop %*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
 )
 peers_report({ { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } })
 check('  and back again while the peer stays silent', selvage.following(), 'Ada Lovelace')
@@ -922,7 +968,7 @@ vim.api.nvim_win_set_buf(0, one_buf)
 check(
   'the indicator follows the window across documents',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow# following Bob — :SelvageStopFollowing to stop %*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Bob — click or :SelvageStopFollowing to stop %X%*'
 )
 -- A split showing the same buffer keeps its own copy: leaving the buffer in one window
 -- must not take the indicator down in the other.
@@ -934,7 +980,7 @@ vim.api.nvim_win_set_buf(0, two_buf)
 check(
   'the window left behind is put back while its sibling keeps the indicator',
   vim.api.nvim_get_option_value('winbar', { win = other_win }),
-  '%#SelvageFollow# following Bob — :SelvageStopFollowing to stop %*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ following Bob — click or :SelvageStopFollowing to stop %X%*'
 )
 vim.cmd('only')
 vim.api.nvim_win_set_buf(0, two_buf)

@@ -1340,13 +1340,25 @@ local function land(peer_id)
   return true
 end
 
---- The indicator's own row for `label`.
+--- The indicator's own row for `label`: the peer's name and the way to stop, clickable
+--- where the editor takes a mouse. The `%0@...@ ... %X` label is what makes a click stop
+--- the follow, through the stop command's own handler; a click needs `'mouse'` set, while
+--- the command stops the follow regardless.
 local function indicator_text(label)
   -- The row is evaluated like a statusline, where `%` starts an item: a name carrying
   -- one has to arrive doubled.
   local safe = tostring(label or ''):gsub('%%', '%%%%')
-  return ('%%#SelvageFollow# following %s — :SelvageStopFollowing to stop %%*'):format(safe)
+  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(safe)
 end
+
+-- What the indicator's click label calls: a Vim function by name. A Lua `_G` function is
+-- invisible to that lookup (`exists('*name')` is 0 for one), so this thin wrapper exists
+-- to hand the click to the stop command's handler. Defined once, when the module loads:
+-- with no follow standing the handler only says there is nothing to stop, and no clickable
+-- row stands then anyway.
+vim.cmd([[function! SelvageStopFollowing(minwid, clicks, button, mods) abort
+  call v:lua.require('selvage').stop_following()
+endfunction]])
 
 --- Which saved row a window's buffer reads and writes: the window and the buffer together,
 --- because that is the granularity the editor swaps them at.
@@ -1357,7 +1369,7 @@ end
 --- Whether `text` is the indicator's own row: only the indicator writes that framing, so a
 --- buffer showing it with no row saved is residue rather than someone's own row.
 local function is_indicator_row(text)
-  return tostring(text):find('%#SelvageFollow# following ', 1, true) == 1
+  return tostring(text):find('%#SelvageFollow#%0@SelvageStopFollowing@ following ', 1, true) == 1
 end
 
 --- Puts back the winbar rows the indicator replaced, wherever they stand: every window
