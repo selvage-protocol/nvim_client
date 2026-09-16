@@ -191,7 +191,32 @@ interface InstanceOutcome {
     deleteOpenTextKept?: boolean;
     deleteOpenStillOffered?: boolean;
   };
+  /**
+   * The follow phase: the guest follows the host by peer id, tracks its caret across a
+   * remote edit onto the marker line, and stops through the command. The guest records its
+   * own cursor with the track done; the host records the caret row it moved onto.
+   */
+  follow?: { text: string; tracked?: boolean; stopped?: boolean; caretRow?: number };
   error?: string;
+}
+
+/**
+ * The row of a cursor the drivers record with `vim.inspect`, e.g. `{ 4, 0 }`. The outcome
+ * file is written while its instance is still running, so a read that lands mid-write is an
+ * empty or partial one rather than a cursor at row zero: those read as no row, and the
+ * phase gate below reports them as unconverged rather than as a track onto row zero.
+ */
+function cursorRow(recorded: string | undefined): number | undefined {
+  const raw = (recorded ?? '').trim();
+  if (raw === '') {
+    return undefined;
+  }
+  const match = /^\{\s*(\d+)/.exec(raw);
+  if (match === null) {
+    return undefined;
+  }
+  const row = Number(match[1]);
+  return Number.isInteger(row) ? row : undefined;
 }
 
 function readOutcome(resultFile: string): InstanceOutcome | undefined {
@@ -424,8 +449,22 @@ async function main(): Promise<void> {
   });
   log('the host created and deleted a path under its folder, and the guest followed it');
 
+  // The blip must not land in the middle of the follow phase either: the guest tracks the
+  // host's caret across a remote edit there, and a socket cut mid-track ends the follow —
+  // observed both as a silent clear on reset and as the edit sentence — which reads as a
+  // product failure either way. Both instances report when the track is done, and only then
+  // is the relay cut.
+  await pollFor(
+    'the guest to track the host caret and stop following',
+    () => (existsSync(ackFile + '.follow') && existsSync(ackFile + '.follow-done') ? true : undefined),
+    DEADLINE_MS + 20_000,
+  ).catch(async (error: unknown) => {
+    await Promise.race([Promise.all([hostRun, guestRun]), delay(5000)]);
+    throw error;
+  });
+  log('the guest tracked the host caret across a remote edit and stopped following');
+
   if (RECONNECT && controlFile !== undefined) {
-    log('cutting the guest relay (a real TCP close)');
     guestRelay.dropAll();
     await delay(2000);
     writeFileSync(controlFile, 'go');
@@ -520,6 +559,18 @@ async function main(): Promise<void> {
       deleteOpenTextKept: guestOutcome?.watch?.deleteOpenTextKept,
       deleteOpenStillOffered: guestOutcome?.watch?.deleteOpenStillOffered,
     },
+    follow: {
+      // The guest tracked the host's caret across a remote edit and stopped following: its
+      // own cursor stands on the row the host moved its caret onto, with both halves of the
+      // proof recorded in the outcomes above.
+      converged:
+        guestOutcome?.follow?.tracked === true &&
+        guestOutcome?.follow?.stopped === true &&
+        hostOutcome?.follow?.caretRow !== undefined &&
+        cursorRow(guestOutcome?.follow?.text) === hostOutcome.follow.caretRow,
+      guestCursor: guestOutcome?.follow?.text,
+      hostCaretRow: hostOutcome?.follow?.caretRow,
+    },
     exitCodes: { host: hostCode, guest: guestCode },
   };
   writeFileSync(resolve(RUN_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
@@ -551,13 +602,19 @@ async function main(): Promise<void> {
   if (RECONNECT && summary.phase2?.converged !== true) {
     throw new Error('the reconnect phase did not converge after the simulated network blip');
   }
+  // Gated on the phase's own files, like the polls above: a run that never reached the
+  // follow phase reports where it stopped rather than as a follow failure.
+  const followPhaseRan = existsSync(ackFile + '.follow') && existsSync(ackFile + '.follow-done');
+  if (followPhaseRan && !summary.follow.converged) {
+    throw new Error('the guest did not track the host caret across a remote edit and stop following');
+  }
   if (hostCode !== 0 || guestCode !== 0) {
     throw new Error(`an instance exited non-zero: host ${hostCode}, guest ${guestCode}`);
   }
   log(
     'PASSED: two real Neovim instances converged on the shared document, a guest read a granted path the host never opened, ' +
-      'a save in the guest\'s mirror of that grant reached the host, and the guest followed the ' +
-      'host\'s folder gaining a path and losing one' +
+      'a save in the guest\'s mirror of that grant reached the host, the guest followed the ' +
+      'host\'s folder gaining a path and losing one, and the guest tracked the host\'s caret across a remote edit and stopped following' +
       (RECONNECT ? ', and again after a simulated network blip' : ''),
   );
 }

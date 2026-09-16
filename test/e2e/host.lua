@@ -137,6 +137,41 @@ harness.record('watch', harness.file_text(harness.created_path), {
 harness.ack('watch')
 harness.log('the folder changed and the guest followed it')
 
+-- -- the guest follows this window's caret -------------------------------------------------
+--
+-- The guest's half of this proof is that following tracks a caret across a remote edit: this
+-- window appends a line and moves its caret onto it, firing the caret events by hand like the
+-- phase-1 move does, because a headless Neovim moves nothing on its own. The guest signals it
+-- is following first, so the move is tracked rather than already stood on. The marker reads
+-- the same in both drivers; it is choreography, not product vocabulary.
+--
+-- The window is put back in the seed document with its caret on the first line before the
+-- guest is told it may follow: the guest lands where this window is, so where that is has to
+-- be a fact before the landing rather than a race with it.
+vim.api.nvim_set_current_buf(bufnr)
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = bufnr })
+vim.api.nvim_exec_autocmds('ModeChanged', { buffer = bufnr })
+harness.write_file(harness.ack_file .. '.follow-host-ready', 'go')
+harness.wait_for_file(
+  'the guest to start following',
+  harness.deadline_ms,
+  harness.ack_file .. '.follow-ready'
+)
+vim.api.nvim_set_current_buf(bufnr)
+local follow_marker = '[[FOLLOW-CARET]]'
+vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { follow_marker })
+local caret_row = vim.api.nvim_buf_line_count(bufnr)
+vim.api.nvim_win_set_cursor(0, { caret_row, 0 })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = bufnr })
+vim.api.nvim_exec_autocmds('ModeChanged', { buffer = bufnr })
+harness.log('moved the caret onto the follow marker at row', caret_row)
+harness.record('follow', harness.text(), { caretRow = caret_row })
+harness.ack('follow')
+-- The guest needs the caret publish to arrive before this window goes: leaving takes the
+-- room with it for the guest too, so this window stays until the guest reports it tracked.
+harness.wait_for_file('the guest to finish tracking', harness.deadline_ms, harness.ack_file .. '.follow-done')
+
 if harness.control_file ~= nil then
   harness.wait_for_file(
     'the orchestrator to signal the network blip is over',
