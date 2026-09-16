@@ -171,6 +171,7 @@ local MESSAGES = {
   { 'ERROR', 'an invite link is needed' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
   { 'INFO', "the room's files are mirrored at %s; :SelvageFetch fetches their content" },
+  { 'INFO', 'this file is empty until fetched; :SelvageFetch %s fills it' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s" },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends" },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it' },

@@ -811,6 +811,37 @@ check(
 check('  and the mirror is not mentioned', said_since(before, 'is inside the mirror') ~= nil, false)
 vim.fn.delete(own_file)
 
+-- -- a file nobody fetched opens empty, and says so -------------------------------------------
+--
+-- The mirror materialises the shape and not the content, so a file whose content nobody
+-- fetched is empty — and an empty file with no word about it reads as a room that failed to
+-- send. Opening one says where the content comes from, once per path.
+
+root = join({}, GRANT)
+responder = nil
+before = #notices
+vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/README.md'))
+local hint_at = notice_at(before, 'this file is empty until fetched')
+check('opening a file nobody fetched says it is empty until fetched', hint_at ~= nil, true)
+check(
+  '  pointing at the command that fills it',
+  hint_at ~= nil and notices[hint_at].message:find(':SelvageFetch README.md', 1, true) ~= nil,
+  true
+)
+check('  at info level', hint_at ~= nil and notices[hint_at].level or nil, vim.log.levels.INFO)
+
+-- Entering it again is not news: the sentence is for the open, and the buffer is still empty.
+local hint_repeated = #notices
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = vim.api.nvim_get_current_buf() })
+check('  and says so once per path', #notices, hint_repeated)
+
+-- A file holding text is not this: a tool may have written the mirror's file behind the
+-- client's back, and the buffer reads what is there.
+vim.fn.writefile({ 'from a tool' }, root .. '/src/main.rs')
+before = #notices
+vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/src/main.rs'))
+check('  while a file holding text says nothing', said_since(before, 'empty until fetched') ~= nil, false)
+
 -- -- :SelvageFetch ------------------------------------------------------------------------
 --
 -- The one answer to a partial project-wide search: fetch a file, a directory of them, or the

@@ -38,6 +38,9 @@ local state = {
   unmutated = {},
   --- The held paths a fresh open never received, which a listing leaving them named once per path.
   gone = {},
+  --- The granted paths this session already said are empty until fetched, so the sentence is
+  --- for the open and not for every visit: entering an empty mirror file is ordinary reading.
+  unfetched = {},
   --- The folder this session's grant is rooted at, as it stood when the session started. The
   --- working directory can move under it at any moment (`:cd`, `:lcd`, `:tcd`) and the grant
   --- does not: it is the folder the invite was offered from (`DESIGN.md` §4.2), not wherever
@@ -794,6 +797,23 @@ local function notice_gone(path)
     ('%s is no longer in the room; the host no longer has it'):format(path),
     vim.log.levels.WARN
   )
+end
+
+--- Says, once per path, that a mirror file opened empty holds nothing yet because its content
+--- has not been fetched: the shape is materialised and the content is not, so an empty file is
+--- the expected sight, and `:SelvageFetch` is what fills it.
+local function notice_unfetched(path)
+  if state.unfetched[path] ~= nil then
+    return
+  end
+  state.unfetched[path] = true
+  notify(('this file is empty until fetched; :SelvageFetch %s fills it'):format(path))
+end
+
+--- Whether a buffer holds nothing: one empty line, the way an empty file reads.
+local function buffer_empty(bufnr)
+  local lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return #lines == 0 or (#lines == 1 and lines[1] == '')
 end
 
 --- Shares the buffer in the window, or says why it is not the room's to share.
@@ -1923,6 +1943,9 @@ local function watch_mirror()
         if file ~= nil and mirror.granted(path) and vim.fn.filereadable(file) == 0 then
           refuse_mutation(path)
         end
+        if mirror.granted(path) and not mirror.written(path) and buffer_empty(event.buf) then
+          notice_unfetched(path)
+        end
       elseif state.unmutated[path] == nil then
         refuse_unlisted(path)
       end
@@ -2081,6 +2104,7 @@ local function reset()
   state.unwritable = {}
   state.unmutated = {}
   state.gone = {}
+  state.unfetched = {}
   mirror.teardown()
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
