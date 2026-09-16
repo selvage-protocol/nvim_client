@@ -131,10 +131,15 @@ is why a local edit of a shared document ends the follow, saying `stopped follow
 while a remote edit only re-lands it. Going somewhere deliberately ends one the same way, the
 peer's leaving ends it with their name on it, and a rename keeps it, since the target is the
 peer id. While a follow stands, the window shows a `winbar` row naming the peer and the command
-that stops it, in the peer's own colour; the row the window had is put back when the follow
-ends. `vim.g.selvage_following` holds the followed peer's id meanwhile, and
+that stops it, in the peer's own colour; every buffer's own row is saved as the indicator
+arrives and put back as it leaves, so re-targeting across documents leaves nothing behind.
+`vim.g.selvage_following` holds the followed peer's id meanwhile, and
 `%{v:lua.require'selvage'.statusline()}` is the snippet for whoever wants the same words in
-their own statusline.
+their own statusline. A typed jump to a peer in no document waits for the frame that draws
+them rather than refusing — a presence update one frame away reads exactly the same — while
+the picker refuses its own rows where the row says they are in no document. A host opens a
+peer's document only when it resolves to a readable file inside the shared folder, never
+creating it; anything else says `could not open <path> from the room: <reason>`.
 
 ### The vendored engine
 
@@ -159,7 +164,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 | `:SelvageCopyInvite` | Put the invite on the clipboard and the unnamed register. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
-| `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart. |
+| `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart, and a typed name whose caret has not arrived yet waits for it. |
 | `:SelvageFollow [name]` | Follow a participant: land where they are and keep landing there as they move, across documents, until something ends it. Takes its name the way `:SelvageGoTo` does. |
 | `:SelvageStopFollowing` | Stop following, or say there is nothing to stop. |
 
