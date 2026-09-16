@@ -131,7 +131,8 @@ is why a local edit of a shared document ends the follow, saying `stopped follow
 while a remote edit only re-lands it. Going somewhere deliberately ends one the same way, the
 peer's leaving ends it with their name on it, and a rename keeps it, since the target is the
 peer id. While a follow stands, the window shows a `winbar` row naming the peer and the command
-that stops it, in the peer's own colour; every buffer's own row is saved as the indicator
+that stops it, in the peer's own colour — clicking the row stops the follow too, where the
+editor takes a mouse; every buffer's own row is saved as the indicator
 arrives and put back as it leaves, so re-targeting across documents leaves nothing behind.
 `vim.g.selvage_following` holds the followed peer's id meanwhile, and
 `%{v:lua.require'selvage'.statusline()}` is the snippet for whoever wants the same words in
