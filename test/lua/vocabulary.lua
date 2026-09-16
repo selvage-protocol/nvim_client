@@ -98,6 +98,9 @@ local TITLES = {
   SelvageLeave = 'Leave the session',
   SelvageDisplayName = 'Set the name other participants see',
   SelvagePeers = "List the room's participants",
+  SelvageGoTo = 'Go to a participant',
+  SelvageFollow = 'Follow a participant',
+  SelvageStopFollowing = 'Stop following',
   SelvageFetch = "Fetch the room's content into the mirror",
 }
 
@@ -128,6 +131,15 @@ local MESSAGES = {
   -- Leaving.
   { 'INFO', 'left the session' },
   { 'WARN', 'not in a session' },
+  -- Going to a participant, and following one.
+  { 'INFO', 'following %s' },
+  { 'INFO', 'stopped following %s' },
+  { 'WARN', 'not following anyone' },
+  { 'WARN', '%s left the room, so following stopped' },
+  { 'WARN', 'nothing to go to: %s is not in a document' },
+  { 'WARN', 'nothing to follow: %s is not in a document' },
+  { 'WARN', 'nothing to go to: %s\'s caret does not resolve here' },
+  { 'WARN', 'no participant matches "%s"' },
   -- The display name.
   { 'INFO', 'no display name is set yet' },
   { 'INFO', 'the name others see is "%s"; :SelvageDisplayName <name> to change it' },

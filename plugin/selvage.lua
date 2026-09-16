@@ -62,3 +62,39 @@ end, { nargs = 0, desc = "List the room's participants" })
 command('SelvageDisplayName', function(args)
   require('selvage').set_display_name(args.args)
 end, { nargs = '?', desc = 'Set the name other participants see' })
+
+command('SelvageGoTo', function(args)
+  require('selvage').go_to(args.args)
+end, {
+  nargs = '?',
+  desc = 'Go to a participant',
+  complete = function(lead)
+    local matches = {}
+    for _, peer in ipairs(require('selvage').peers()) do
+      if peer.label:sub(1, #lead) == lead then
+        matches[#matches + 1] = peer.label
+      end
+    end
+    return matches
+  end,
+})
+
+command('SelvageFollow', function(args)
+  require('selvage').follow(args.args)
+end, {
+  nargs = '?',
+  desc = 'Follow a participant',
+  complete = function(lead)
+    local matches = {}
+    for _, peer in ipairs(require('selvage').peers()) do
+      if peer.label:sub(1, #lead) == lead then
+        matches[#matches + 1] = peer.label
+      end
+    end
+    return matches
+  end,
+})
+
+command('SelvageStopFollowing', function()
+  require('selvage').stop_following()
+end, { nargs = 0, desc = 'Stop following' })

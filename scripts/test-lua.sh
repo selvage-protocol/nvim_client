@@ -8,7 +8,7 @@
 # commands themselves decide (`test/lua/commands.lua`), the words the two clients share
 # (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), and what
 # stopping the process does to it (`test/lua/leave.lua`,
-# against a real job).
+# against a real job), and going to a participant and following one (`test/lua/follow.lua`).
 #
 #   scripts/test-lua.sh
 #
@@ -28,3 +28,4 @@ nvim --headless -l test/lua/commands.lua
 nvim --headless -l test/lua/vocabulary.lua
 nvim --headless -l test/lua/warnings.lua
 nvim --headless -l test/lua/leave.lua
+nvim --headless -l test/lua/follow.lua

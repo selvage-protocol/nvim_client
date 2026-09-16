@@ -69,6 +69,11 @@ local state = {
   room_peers = {},
   selection_armed = false,
   selection_path = nil,
+  --- The participant this window follows, or nil when it follows nobody: the peer id, the
+  --- label the indicator shows, the colour it shows it in, whether the landing was said out
+  --- loud, and the window the indicator lives in with the winbar row it replaced. A local
+  --- view state, never advertised: nothing about it reaches the room.
+  following = nil,
   generation = 0,
   -- Whether the next document the room names is still the one to put in front of the user.
   -- Set when a guest joins; cleared by the first document shown.
@@ -613,6 +618,10 @@ local function room_path(bufnr)
   return nil, nil
 end
 
+--- Ends the follow, defined alongside the follow below: `share` is what hears a local edit
+--- first, and it is defined before that section.
+local end_follow
+
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
     return
@@ -629,6 +638,13 @@ local function share(bufnr, path)
     return
   end
   local document = Document.new(bufnr, path, function(message)
+    -- A local edit of a shared document ends a follow: with the caret moved by the follow,
+    -- typing and following are in direct conflict, and the keystroke has already chosen the
+    -- place. A remote edit never reaches this closure — `Document:apply` writes the buffer
+    -- under its own flag and sends nothing — so only an edit made here ends one.
+    if message.type == 'change' and state.following ~= nil then
+      end_follow('stopped')
+    end
     state.process:send(message)
   end)
   state.documents[path] = document
@@ -1041,6 +1057,391 @@ function M.fetch(path)
   )
 end
 
+-- -- going to a participant, and following one ------------------------------------
+--
+-- `:SelvageGoTo` lands where a participant is; `:SelvageFollow` keeps landing there as
+-- they move, until something ends it. The landing moves the follower's caret: Neovim has
+-- no durable viewport-only state — the next redraw pulls the viewport back over the
+-- cursor — so following is being where they are, not watching from elsewhere. What
+-- follows from that is the break rule: a local edit of a shared document ends the follow,
+-- because the next keystroke lands where the caret is.
+
+--- The drawn cursor for `peer_id` in the last presence report, or nil when the room drew
+--- nothing for them: they are in no document, or in one this client does not hold and so
+--- cannot resolve. What is not drawn cannot be landed on, so a follow re-lands only onto
+--- these and anything else is a frame with nothing to do.
+local function cursor_for(peer_id)
+  for _, cursor in ipairs(state.cursors) do
+    if cursor.peerId == peer_id then
+      return cursor
+    end
+  end
+  return nil
+end
+
+--- The participant row for `peer_id`, as `:SelvagePeers` prints it, or nil.
+local function peer_row(peer_id)
+  for _, peer in ipairs(M.peers()) do
+    if peer.peerId == peer_id then
+      return peer
+    end
+  end
+  return nil
+end
+
+--- The name a row is picked by: the display name, disambiguated only when it must be.
+--- Two people can share a name and the room does not forbid it, so the disambiguator is
+--- the identity itself — the shortest prefix of the peer id that no other peer sharing
+--- the name shares — and the command carries the full id.
+local function row_name(peers, peer)
+  local clash = false
+  for _, other in ipairs(peers) do
+    if other.peerId ~= peer.peerId and other.label == peer.label then
+      clash = true
+      break
+    end
+  end
+  if not clash then
+    return peer.label
+  end
+  local id = tostring(peer.peerId)
+  for length = 1, #id do
+    local prefix = id:sub(1, length)
+    local shared = false
+    for _, other in ipairs(peers) do
+      if
+        other.peerId ~= peer.peerId
+        and other.label == peer.label
+        and tostring(other.peerId):sub(1, length) == prefix
+      then
+        shared = true
+        break
+      end
+    end
+    if not shared then
+      return ('%s (%s)'):format(peer.label, prefix)
+    end
+  end
+  return ('%s (%s)'):format(peer.label, id)
+end
+
+--- The participant `wanted` names: an exact peer id first, then the peers carrying that
+--- display name. Returns the row; or nil with 'several' and the rows; or nil with 'none'.
+local function resolve_peer(wanted)
+  wanted = vim.trim(wanted or '')
+  local peers = M.peers()
+  for _, peer in ipairs(peers) do
+    if peer.peerId == wanted then
+      return peer
+    end
+  end
+  local matches = {}
+  for _, peer in ipairs(peers) do
+    if peer.label == wanted then
+      matches[#matches + 1] = peer
+    end
+  end
+  if #matches == 1 then
+    return matches[1]
+  end
+  if #matches > 1 then
+    return nil, 'several', matches
+  end
+  return nil, 'none'
+end
+
+--- Puts the window on the peer's caret: their document shown, the cursor on the head
+--- offset the last presence report resolved. The row and column come through
+--- `Document:position`, which is in range for any offset by construction; the set itself is
+--- still guarded, because the buffer may have gone while the report stood.
+---
+--- Returns true on landing; false with 'unknown' when no caret is drawn for the peer,
+--- with 'missing' when their document has no buffer here, or 'unresolvable' when the
+--- cursor cannot be placed.
+local function land(peer_id)
+  local cursor = cursor_for(peer_id)
+  if cursor == nil or cursor.path == nil or cursor.head == nil then
+    return false, 'unknown'
+  end
+  local document = state.documents[cursor.path]
+  if document == nil or not api.nvim_buf_is_valid(document.bufnr) then
+    return false, 'missing'
+  end
+  if not show(document.bufnr) then
+    return false, 'missing'
+  end
+  local row, col = document:position(cursor.head)
+  if not pcall(api.nvim_win_set_cursor, 0, { row + 1, col }) then
+    return false, 'unresolvable'
+  end
+  -- The landing moved the caret, so the room hears it through the coalesced publish
+  -- rather than through whatever event the editor may or may not fire for a programmatic
+  -- move: headless Neovim fires none for anything, and the interval drops the duplicate
+  -- where the editor fired its own.
+  schedule_selection()
+  return true
+end
+
+--- Puts back the winbar row the indicator replaced, where that window still stands.
+local function restore_winbar(win, prev)
+  if win ~= nil and api.nvim_win_is_valid(win) then
+    pcall(api.nvim_set_option_value, 'winbar', prev or '', { win = win })
+  end
+end
+
+--- Shows the follow in the window the landing put the peer in: a `winbar` row naming them
+--- and how to stop, in their own colour. Window-local, so nothing else on screen moves,
+--- and the row it replaced is put back when the follow ends. Never the statusline, which
+--- is what statusline plugins own.
+local function set_indicator()
+  local following = state.following
+  if following == nil then
+    return
+  end
+  local win = api.nvim_get_current_win()
+  if following.win ~= win then
+    restore_winbar(following.win, following.prev_winbar)
+    following.win = win
+    following.prev_winbar = nil
+  end
+  if following.prev_winbar == nil then
+    local ok, current = pcall(api.nvim_get_option_value, 'winbar', { win = win })
+    following.prev_winbar = (ok and current) or ''
+  end
+  pcall(api.nvim_set_hl, 0, 'SelvageFollow', {
+    fg = '#000000',
+    bg = following.colour or '#888888',
+    bold = true,
+  })
+  -- The row is evaluated like a statusline, where `%` starts an item: a name carrying
+  -- one has to arrive doubled.
+  local label = tostring(following.label or ''):gsub('%%', '%%%%')
+  pcall(api.nvim_set_option_value, 'winbar', ('%%#SelvageFollow# following %s — :SelvageStopFollowing to stop %%*'):format(label), {
+    win = win,
+  })
+  vim.g.selvage_following = following.peerId
+end
+
+--- Takes the indicator down, wherever it stands.
+local function clear_indicator()
+  local following = state.following
+  if following ~= nil then
+    restore_winbar(following.win, following.prev_winbar)
+  end
+  vim.g.selvage_following = nil
+end
+
+--- Ends the follow, saying so as `why` asks: 'stopped' for the user and for an edit, 'left'
+--- for a peer that went, and silence for the session going with it.
+end_follow = function(why)
+  local following = state.following
+  if following == nil then
+    return
+  end
+  clear_indicator()
+  state.following = nil
+  if why == 'stopped' then
+    notify(('stopped following %s'):format(following.label))
+  elseif why == 'left' then
+    notify(('%s left the room, so following stopped'):format(following.label), vim.log.levels.WARN)
+  end
+end
+
+--- Lands the follow again on a new frame: the peer moved, or their text arrived. A frame
+--- with nothing drawn for them is a frame with nothing to do — they may be between
+--- documents, or in one this client does not hold — so the follow stands and stays silent.
+--- The first landing is said out loud.
+local function follow_frame()
+  local following = state.following
+  if following == nil then
+    return
+  end
+  -- The target is the peer id, so a rename keeps the follow and re-labels it.
+  local row = peer_row(following.peerId)
+  if row ~= nil then
+    following.label = row.label
+    following.colour = row.colour or following.colour
+  end
+  if land(following.peerId) then
+    set_indicator()
+    if not following.said then
+      following.said = true
+      notify(('following %s'):format(following.label))
+    end
+  end
+end
+
+--- Follows the peer, landing now and again on every frame until something ends it.
+local function begin_follow(row)
+  local previous = state.following
+  state.following = {
+    peerId = row.peerId,
+    label = row.label,
+    colour = row.colour,
+    -- Following the peer already followed re-lands, idempotent: said once.
+    said = previous ~= nil and previous.peerId == row.peerId and previous.said or false,
+    -- A re-target keeps the window the indicator stands in and the row it replaced: the
+    -- indicator is already that window's, so saving it again would keep the indicator
+    -- itself as the row to put back.
+    win = previous ~= nil and previous.win or nil,
+    prev_winbar = previous ~= nil and previous.prev_winbar or nil,
+  }
+  follow_frame()
+end
+
+--- Lands on the peer's caret once.
+local function go_to_row(row)
+  if row.path == nil then
+    notify(('nothing to go to: %s is not in a document'):format(row.label), vim.log.levels.WARN)
+    return
+  end
+  -- A deliberate navigation ends a follow: the user chose a different place to be, and a
+  -- follow that yanked them back a moment later is the behaviour people remember as
+  -- broken.
+  if state.following ~= nil then
+    end_follow('stopped')
+  end
+  local ok = land(row.peerId)
+  if not ok then
+    notify(('nothing to go to: %s\'s caret does not resolve here'):format(row.label), vim.log.levels.WARN)
+  end
+end
+
+--- Asks which participant, in the editor's own idiom: a picker over the room's rows, each
+--- the name, the role and the document, disambiguated where two share a name.
+local function pick_peer(prompt, on_choice)
+  local peers = M.peers()
+  vim.ui.select(peers, {
+    prompt = prompt,
+    format_item = function(peer)
+      return ('%s — %s — %s'):format(
+        row_name(peers, peer),
+        tostring(peer.role or 'peer'),
+        tostring(peer.path or 'no shared document open')
+      )
+    end,
+  }, on_choice)
+end
+
+--- The words a name that matched several peers is refused with, in the shape
+--- `:SelvageOpen` uses for a path.
+local function several_rows(wanted, matches)
+  local peers = M.peers()
+  local rows = {}
+  for _, peer in ipairs(matches) do
+    rows[#rows + 1] = row_name(peers, peer)
+  end
+  return rows
+end
+
+--- Goes to the participant `name` picks: their document shown, the cursor on their caret.
+--- With no name and one participant, that one; with several, the user is asked which.
+function M.go_to(name)
+  if not in_session() then
+    notify('join a session first', vim.log.levels.WARN)
+    return
+  end
+  local peers = M.peers()
+  if #peers == 0 then
+    notify('no other participants yet', vim.log.levels.WARN)
+    return
+  end
+  local wanted = vim.trim(name or '')
+  if wanted == '' then
+    if #peers == 1 then
+      go_to_row(peers[1])
+    else
+      pick_peer('selvage: go to which participant?', function(row)
+        if row ~= nil then
+          go_to_row(row)
+        end
+      end)
+    end
+    return
+  end
+  local row, err, matches = resolve_peer(wanted)
+  if row ~= nil then
+    go_to_row(row)
+  elseif err == 'several' then
+    notify(('"%s" matches several: %s'):format(wanted, table.concat(several_rows(wanted, matches), ', ')), vim.log.levels.WARN)
+  else
+    notify(('no participant matches "%s"'):format(wanted), vim.log.levels.WARN)
+  end
+end
+
+--- Follows the participant `name` picks, until something ends it: the user, an edit of
+--- their own, the peer leaving, or the session going.
+function M.follow(name)
+  if not in_session() then
+    notify('join a session first', vim.log.levels.WARN)
+    return
+  end
+  local peers = M.peers()
+  if #peers == 0 then
+    notify('no other participants yet', vim.log.levels.WARN)
+    return
+  end
+  local wanted = vim.trim(name or '')
+  if wanted == '' then
+    if #peers == 1 then
+      begin_follow(peers[1])
+    else
+      pick_peer('selvage: follow which participant?', function(row)
+        if row ~= nil then
+          -- The choice is read fresh: the room may have moved since the picker opened.
+          local fresh = peer_row(row.peerId)
+          if fresh == nil then
+            notify(('nothing to follow: %s is not in a document'):format(row.label), vim.log.levels.WARN)
+          else
+            begin_follow(fresh)
+          end
+        end
+      end)
+    end
+    return
+  end
+  local row, err, matches = resolve_peer(wanted)
+  if row == nil then
+    if err == 'several' then
+      notify(('"%s" matches several: %s'):format(wanted, table.concat(several_rows(wanted, matches), ', ')), vim.log.levels.WARN)
+    else
+      notify(('no participant matches "%s"'):format(wanted), vim.log.levels.WARN)
+    end
+    return
+  end
+  if row.path == nil then
+    notify(('nothing to follow: %s is not in a document'):format(row.label), vim.log.levels.WARN)
+    return
+  end
+  begin_follow(row)
+end
+
+--- Stops following, or says there is nothing to stop.
+function M.stop_following()
+  if state.following == nil then
+    notify('not following anyone', vim.log.levels.WARN)
+    return
+  end
+  end_follow('stopped')
+end
+
+--- The label of the participant this window follows, or nil when it follows nobody: what
+--- the indicator shows, for a statusline or a script.
+function M.following()
+  return state.following ~= nil and state.following.label or nil
+end
+
+--- What the indicator shows, for whoever wants it in the statusline:
+--- `%{v:lua.require'selvage'.statusline()}`.
+function M.statusline()
+  local following = state.following
+  if following == nil then
+    return ''
+  end
+  return 'following ' .. tostring(following.label or '')
+end
+
+
 --- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
 --- here. Without this the room keeps the document for the life of the session, offering
 --- edits to a `Document` that answers every one of them `ok = false`, and the companion
@@ -1288,6 +1689,9 @@ local function reset()
   state.generation = state.generation + 1
   state.selection_armed = false
   state.selection_path = nil
+  -- The follow goes with the session, silently: leaving, the room going and the
+  -- connection ending say their own sentence, and none of them is about the follow.
+  end_follow('silent')
   state.status = 'idle'
   state.role = nil
   state.room = nil
@@ -1457,6 +1861,20 @@ local function on_report(report)
     -- The room's own list of who is in it: everyone, not only the peers this client holds a
     -- document for and can draw a caret for.
     state.room_peers = report.peers or {}
+    -- A peer the room no longer names has left it: the follow ends, saying so. The peer id
+    -- is the target, so a rename — same id, new name — keeps following and re-labels.
+    if state.following ~= nil then
+      local gone = true
+      for _, peer in ipairs(state.room_peers) do
+        if peer.peer_id == state.following.peerId then
+          gone = false
+          break
+        end
+      end
+      if gone then
+        end_follow('left')
+      end
+    end
   elseif report.kind == 'roomGone' then
     -- The room is over and the companion has let the engine go, so the session here ends with
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
@@ -1511,6 +1929,9 @@ local function on_message(message)
     local document = state.documents[message.path]
     local ok = document ~= nil and document:apply(message) or false
     state.process:send({ type = 'applied', id = message.id, ok = ok })
+    -- The room's text moved under the follow: land again where the peer's caret resolves
+    -- now. A remote edit is not a local one, so it never ends the follow.
+    follow_frame()
   elseif message.type == 'save' then
     local document = state.documents[message.path]
     local ok = document == nil or document:save()
@@ -1526,6 +1947,8 @@ local function on_message(message)
     on_report(message.report)
   elseif message.type == 'presence' then
     draw_presence(message.cursors)
+    -- The peer may have moved, or arrived where this client can draw them: land again.
+    follow_frame()
   end
 end
 
