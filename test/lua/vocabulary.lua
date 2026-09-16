@@ -164,6 +164,7 @@ local MESSAGES = {
   -- What this front-end refuses on its own.
   { 'ERROR', '%s is not valid UTF-8, so it is not shared' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared' },
+  { 'WARN', 'this buffer has no file, so it is not shared; the folder this session shares is %s' },
   { 'ERROR', 'the companion exited with %s' },
   { 'WARN', 'already %s room %s; leave that session first' },
   { 'ERROR', 'a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080' },

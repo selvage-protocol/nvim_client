@@ -205,8 +205,50 @@ check('a host standing outside the grant shares nothing', #selvage.documents(), 
 check('  and says why', said_since(before_standing, 'six.txt is outside'), 1)
 check('  and asks the room for nothing', opens_of('six.txt', before_standing_sends), 0)
 
+-- A buffer with no file is not shared either, and says so once per buffer rather than leaving
+-- a person typing into a silence: hosting from an untitled buffer names it, returning to that
+-- buffer does not name it again, and a second untitled buffer is named once for itself.
 selvage.leave()
-vim.notify = notify
+set_cwd(grant)
+vim.cmd('enew!')
+local unfiled_buf = vim.api.nvim_get_current_buf()
+local before_unfiled = #notices
+local before_unfiled_sends = #sent
+start_hosting('r-grant-4')
+check('a host with no file shares nothing', #selvage.documents(), 0)
+check(
+  '  and says the buffer has no file',
+  said_since(before_unfiled, 'has no file, so it is not shared'),
+  1
+)
+check(
+  '  naming the folder the session shares',
+  said_since(before_unfiled, 'the folder this session shares is '),
+  1
+)
+check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+local unfiled_opens = 0
+for index = before_unfiled_sends + 1, #sent do
+  if sent[index].type == 'open' then
+    unfiled_opens = unfiled_opens + 1
+  end
+end
+check('  and asks the room for nothing', unfiled_opens, 0)
+
+local before_revisit_unfiled = #notices
+open(grant .. '/one.txt')
+vim.cmd('buffer ' .. unfiled_buf)
+check('  once per buffer, not once per visit', said_since(before_revisit_unfiled, 'has no file'), 0)
+-- `:enew!` on an empty unnamed buffer reuses its number, so the second buffer is made
+-- explicitly: entering it is what has to name it.
+vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, false))
+check(
+  '  while a second untitled buffer is named once for itself',
+  said_since(before_revisit_unfiled, 'has no file, so it is not shared'),
+  1
+)
+
+selvage.leave()
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

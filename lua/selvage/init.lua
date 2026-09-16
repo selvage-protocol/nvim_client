@@ -46,6 +46,9 @@ local state = {
   --- The paths this session refused to share because they are outside that folder, so the
   --- refusal is said once per path, as it is for a buffer that is not UTF-8.
   outside = {},
+  --- The buffers with no file this session already named, so the refusal is said once per
+  --- buffer: entering and leaving an untitled buffer is ordinary editing, not news.
+  unfiled = {},
   group = nil,
   --- The augroup the guest's mirror is watched with: reading one of its files shares it with the
   --- room, and saving one is the session's to route rather than the editor's to write.
@@ -600,6 +603,26 @@ local function refuse_outside(path)
   )
 end
 
+--- Says, once per buffer, that a buffer with no file is not the room's to share. Hosting from
+--- an untitled buffer and typing is the newcomer's silence: the room never hears it, and
+--- nothing else here says so.
+local function refuse_unfiled(bufnr)
+  if state.unfiled[bufnr] ~= nil then
+    return
+  end
+  local root = state.root
+  if root == nil then
+    return
+  end
+  state.unfiled[bufnr] = true
+  notify(
+    ('this buffer has no file, so it is not shared; the folder this session shares is %s'):format(
+      root == '' and '/' or root
+    ),
+    vim.log.levels.WARN
+  )
+end
+
 --- The room path a buffer is shared under, and the absolute name it is refused for when it
 --- is not one to share.
 ---
@@ -608,7 +631,7 @@ end
 --- moment. A name is absolute — Neovim resolves it when it sets one — and the separator in
 --- the prefix is what keeps a sibling whose name merely begins with the grant's out of it.
 --- A file outside the grant comes back as the second value so the refusal can be said;
---- anything that is not a file buffer is neither shared nor refused.
+--- anything that is not a file buffer comes back as neither, so its own refusal can be.
 local function room_path(bufnr)
   if vim.bo[bufnr].buftype ~= '' then
     return nil, nil
@@ -781,6 +804,8 @@ local function share_current()
     share(bufnr, path)
   elseif refused ~= nil then
     refuse_outside(refused)
+  else
+    refuse_unfiled(bufnr)
   end
 end
 
@@ -1982,6 +2007,8 @@ local function watch_buffers()
         share(event.buf, path)
       elseif refused ~= nil then
         refuse_outside(refused)
+      else
+        refuse_unfiled(event.buf)
       end
     end,
   })
@@ -2010,6 +2037,7 @@ local function forget_documents()
   state.documents = {}
   state.unshareable = {}
   state.outside = {}
+  state.unfiled = {}
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
