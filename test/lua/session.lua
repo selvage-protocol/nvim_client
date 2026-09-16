@@ -140,6 +140,22 @@ local after_crash = errors()
 handlers().on_exit(1)
 check('a companion that dies on its own is', errors(), after_crash + 1)
 
+-- A connection that fails says what the engine said and what to try next: the engine's text is
+-- accurate but names no next step, and a bad address is the newcomer's failure. A fresh host
+-- earns the failure: the crashed companion above hears nothing anymore.
+selvage.host('ws://127.0.0.1:1')
+local before_error = #notices
+handlers().on_message({ type = 'status', state = 'error', message = 'connection refused' })
+local failed = said_since(before_error, 'connection refused')
+check('a failed connection says what the engine said', failed ~= nil, true)
+check(
+  '  and what to try next',
+  failed ~= nil and failed:find('check the address and try again', 1, true) ~= nil,
+  true
+)
+check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
+selvage.leave()
+
 -- -- a guest has the room's document put in front of it -----------------------
 --
 -- The room path is the host's working directory plus the path within it — a VS Code host

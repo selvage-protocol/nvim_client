@@ -2171,7 +2171,10 @@ local function on_status(message)
     watch_presence()
     watch_follow_window()
   elseif message.state == 'error' then
-    notify(tostring(message.message), vim.log.levels.ERROR)
+    -- This state is only ever a connection that failed: the companion sends it when the open
+    -- behind a host or join throws, so the engine's text names the failure and the suffix names
+    -- the next step.
+    notify(tostring(message.message) .. '; check the address and try again', vim.log.levels.ERROR)
   end
 end
 
