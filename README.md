@@ -154,6 +154,9 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 
 ## Commands
 
+Hosting starts outside the editor: start `selvaged`, note the address it prints, and give that
+address to `:SelvageHost` — or set `vim.g.selvage_server_url` to stop being asked for it.
+
 | | |
 |---|---|
 | `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the address is asked for, starting from the one last used, and `vim.g.selvage_server_url` answers it without asking. |
@@ -165,7 +168,7 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
 | `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart, and a typed name whose caret has not arrived yet waits for it. |
-| `:SelvageFollow [name]` | Follow a participant: land where they are and keep landing there as they move, across documents, until something ends it. Takes its name the way `:SelvageGoTo` does. |
+| `:SelvageFollow [name]` | Follow a participant: land where they are and keep landing there as they move, across documents, until something ends it — typing in a shared document stops it. Takes its name the way `:SelvageGoTo` does. |
 | `:SelvageStopFollowing` | Stop following, or say there is nothing to stop. |
 
 `:SelvageHost` and `:SelvageJoin` open a session and never end one. Hosting while hosting reaches
@@ -337,8 +340,10 @@ is a directory that ripgrep and a language server read for themselves, so it has
 - Neovim 0.10 or newer (`vim.str_utfindex`/`vim.str_byteindex` with an encoding argument, with a
   fallback to the older two-value form).
 - Node 22.18 or newer on `PATH`. The companion is TypeScript run directly by Node's own type
-  stripping — there is no build step.
-- A `selvaged` to connect to.
+  stripping — there is no build step. Guests need this too: the sync engine runs locally on
+  both ends, so joining takes the same Node and the same `npm ci` below as hosting does.
+- A `selvaged` to connect to. Hosts start one and note the address it prints; guests join with
+  the invite link the host copies, and need nothing else from the server side.
 
 ## Installing
 
