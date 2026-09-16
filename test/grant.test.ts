@@ -19,7 +19,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 
-import { MAX_GRANT_FILE_BYTES, MAX_GRANT_PATHS } from '../vendor/bridge/index.ts';
+import { MAX_GRANT_FILE_BYTES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
 import { enumerateGrant, readGrantedFile } from '../companion/grant.ts';
 
 const SCRATCH = resolve(import.meta.dirname, '..', '.tmp');
@@ -77,6 +77,47 @@ test('a listing leaves out what the grant excludes', async () => {
   await put('excluded/.hg/store');
   await put('excluded/kept.txt');
   assert.deepEqual(await enumerateGrant(join(ROOT, 'excluded')), ['kept.txt']);
+});
+
+test('a listing leaves out secret names and keeps their templates', async () => {
+  await put('secrets/id_rsa', 'private\n');
+  await put('secrets/id_rsa.pub', 'public\n');
+  await put('secrets/server.pem', 'private\n');
+  await put('secrets/server.key', 'private\n');
+  await put('secrets/.aws/credentials', 'secret\n');
+  await put('secrets/.envrc', 'secret\n');
+  await put('secrets/.npmrc', 'secret\n');
+  await put('secrets/.env.example', 'TEMPLATE=1\n');
+  await put('secrets/.env.production', 'URL=1\n');
+  await put('secrets/kept.txt');
+  // Templates carry no secrets and stay shareable; anything else under a secret name —
+  // including a public key beside its private one — stays out.
+  assert.deepEqual(await enumerateGrant(join(ROOT, 'secrets')), [
+    '.env.example',
+    '.env.production',
+    'kept.txt',
+  ]);
+  for (const path of ['id_rsa', 'server.pem', '.aws/credentials', '.envrc']) {
+    assert.equal(await readGrantedFile(join(ROOT, 'secrets'), path), undefined, `${path} was served`);
+  }
+});
+
+test('the grant folds case only where the filesystem does', () => {
+  // The default macOS and Windows filesystems fold case, so `.GIT/` names the same files
+  // as `.git/` there; on a case-sensitive checkout `Build/` is an ordinary directory.
+  assert.equal(isGrantedPath('.GIT/config', 'darwin'), false);
+  assert.equal(isGrantedPath('.GIT/config', 'win32'), false);
+  assert.equal(isGrantedPath('.GIT/config', 'linux'), true);
+  assert.equal(isGrantedPath('Build/notes.txt', 'linux'), true);
+  assert.equal(isGrantedPath('Build/notes.txt', 'darwin'), false);
+  assert.equal(isGrantedPath('.GIT/config', ''), false, 'an unknown host keeps the fold');
+});
+
+test('a name that spoofs a tree row is refused', () => {
+  assert.equal(isGrantedPath('a\u200eb.txt'), false, 'left-to-right mark');
+  assert.equal(isGrantedPath('a\ufeffb.txt'), false, 'zero-width no-break space');
+  assert.equal(isGrantedPath('a\u0007b.txt'), false, 'control character');
+  assert.equal(isGrantedPath('notes.txt'), true);
 });
 
 test('a listing stops at the count it will carry', async () => {
