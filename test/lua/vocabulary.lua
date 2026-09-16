@@ -182,6 +182,7 @@ local MESSAGES = {
   { 'INFO', 'you are hosting, so the files a mirror would hold are already on your disk' },
   { 'INFO', 'the room lists no files to fetch' },
   { 'INFO', 'fetching opens them in the room, so every peer receives them' },
+  { 'INFO', 'fetching opens %s in the room, so every peer receives it' },
   { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them' },
   { 'INFO', 'fetched the files' },
   { 'WARN', 'fetched the files; these had not arrived within %ds: %s' },

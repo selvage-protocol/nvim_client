@@ -860,6 +860,11 @@ before = #notices
 selvage.fetch('deep.txt')
 check('a fetch of one path writes its file', read(root .. '/notes/deep.txt'), 'deep\n')
 check('  and says what it did', said_since(before, 'fetched the files') ~= nil, true)
+check(
+  '  and scopes the consent to that one path',
+  said_since(before, 'fetching opens notes/deep.txt in the room, so every peer receives it') ~= nil,
+  true
+)
 
 before = #notices
 selvage.fetch('src')
@@ -871,6 +876,11 @@ before = #notices
 selvage.fetch()
 check('a fetch of nothing fetches the whole listing', read(root .. '/README.md'), 'readme\n')
 check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
+check(
+  '  and keeps the whole-listing consent plural',
+  said_since(before, 'fetching opens them in the room, so every peer receives them') ~= nil,
+  true
+)
 check('  and every file it names is held in the room', #selvage.documents(), 4)
 local opened_at = notice_at(before, 'opens them in the room, so every peer receives them')
 local fetched_at = notice_at(before, 'fetched the files')

@@ -1080,8 +1080,12 @@ function M.fetch(path)
     -- A fetch is a hold: every path it takes joins the room's open-document set, so every peer
     -- receives it and, with a mirror, materialises it. Said before it happens, because a fetch of
     -- a whole listing is a whole project published and the sentence after it is too late to be a
-    -- choice (`DESIGN.md` §4.2).
-    notify('fetching opens them in the room, so every peer receives them')
+    -- choice (`DESIGN.md` §4.2). A single path names itself; the plural is for the listing.
+    if #targets == 1 then
+      notify(('fetching opens %s in the room, so every peer receives it'):format(targets[1]))
+    else
+      notify('fetching opens them in the room, so every peer receives them')
+    end
   end
   for _, target in ipairs(targets) do
     pending[target] = true
