@@ -163,6 +163,11 @@ check('  and says what is missing', said_since(before, 'an invite link is needed
 
 -- With somebody to ask, the same command asks. The address is a value only the person knows, and
 -- there is no default for it in this plugin.
+--
+-- The hosts below own the state they read: the data home is sandboxed to this checkout, so the
+-- address they write is nowhere the person's own Neovim would read.
+vim.env.XDG_DATA_HOME = vim.fn.getcwd() .. '/.tmp/lua-commands-data'
+vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 answer_with('ws://127.0.0.1:7777')
 vim.cmd('SelvageHost')
 check('a bare :SelvageHost asks for an address', prompted ~= nil, true)
@@ -177,6 +182,25 @@ end)
 vim.cmd('SelvageHost')
 check('  the next question starts from the address just used', prompted and prompted.default, 'ws://127.0.0.1:7777')
 check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
+
+-- The address outlives this Neovim: it is written when a host starts, so a restart — a fresh
+-- plugin with no memory of its own — starts its question from the file rather than from nothing,
+-- as the other client does from its global state.
+answer_with('ws://127.0.0.1:7778')
+vim.cmd('SelvageHost')
+check('a host writes the address down', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
+-- A restart loads the plugin with the real prompt in place, not this file's stand-in, so the
+-- input is put back before the reload: otherwise the fresh plugin mistakes the stand-in for
+-- the built-in and believes there is someone to ask where there is no one.
+vim.ui.input = builtin_input
+package.loaded['selvage'] = nil
+selvage = require('selvage')
+answer_with(function(opts)
+  return opts.default
+end)
+vim.cmd('SelvageHost')
+check('  a restart still starts from the address last used', prompted and prompted.default, 'ws://127.0.0.1:7778')
+check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
 
 -- A configured address is not asked about at all, as it is in the other client.
 vim.g.selvage_server_url = 'ws://127.0.0.1:9999'
