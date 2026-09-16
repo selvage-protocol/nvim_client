@@ -1345,13 +1345,15 @@ local function set_indicator()
   local ours = indicator_text(following.label)
   local ok, current = pcall(api.nvim_get_option_value, 'winbar', { win = win })
   current = (ok and current) or ''
-  if current ~= ours then
+  local key = winbar_key(win, api.nvim_get_current_buf())
+  if state.saved_winbars[key] == nil then
     -- A re-target lands the indicator in a buffer whose row is already saved, and a rename
-    -- only re-words it: saving again would keep the indicator itself as the row to put back.
-    local key = winbar_key(win, api.nvim_get_current_buf())
-    if state.saved_winbars[key] == nil then
-      state.saved_winbars[key] = current
-    end
+    -- only re-words it, so those never reach here. What does is a split inheriting the row
+    -- it split from: the copy is ours but nothing saved it, and its own row is the default —
+    -- it never had one — so that is what leaving puts back.
+    state.saved_winbars[key] = current ~= ours and current or ''
+  end
+  if current ~= ours then
     pcall(api.nvim_set_option_value, 'winbar', ours, { win = win })
   end
   pcall(api.nvim_set_hl, 0, 'SelvageFollow', {
@@ -1391,7 +1393,12 @@ local function follow_window_leave(event)
     return
   end
   local leaving = event ~= nil and event.buf or nil
-  for _, win in ipairs(api.nvim_list_wins()) do
+  -- The event's own window is the one leaving: a split still showing the same buffer keeps
+  -- its own copy of the indicator until it moves, rather than losing it to a sibling's
+  -- switch. Without an event there is no leaver to name, so every window still showing a
+  -- visited buffer is swept instead.
+  local wins = leaving == nil and api.nvim_list_wins() or { api.nvim_get_current_win() }
+  for _, win in ipairs(wins) do
     if api.nvim_win_is_valid(win) then
       local bufnr = api.nvim_win_get_buf(win)
       if leaving == nil or bufnr == leaving then
@@ -2219,20 +2226,16 @@ local function on_report(report)
       for _, peer in ipairs(state.room_peers) do
         member[peer.peer_id] = true
       end
-      local rows = {}
-      for _, peer in ipairs(state.peers) do
-        if member[peer.peerId] then
-          rows[#rows + 1] = peer
-        end
-      end
-      state.peers = rows
       local cursors = {}
       for _, cursor in ipairs(state.cursors) do
         if member[cursor.peerId] then
           cursors[#cursors + 1] = cursor
         end
       end
-      state.cursors = cursors
+      -- Redrawn, not just reassigned: the marks of a departed peer would otherwise stand
+      -- until the next presence frame. The rows above stay the membership join; the draw
+      -- rebuilds the same drawable metadata and clears what no cursor names anymore.
+      draw_presence(cursors)
     end
     -- A peer the room no longer names has left it: the follow ends, saying so. The peer id
     -- is the target, so a rename — same id, new name — keeps following and re-labels, now,

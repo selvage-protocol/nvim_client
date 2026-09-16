@@ -924,6 +924,19 @@ check(
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
   '%#SelvageFollow# following Bob — :SelvageStopFollowing to stop %*'
 )
+-- A split showing the same buffer keeps its own copy: leaving the buffer in one window
+-- must not take the indicator down in the other.
+vim.cmd('vsplit')
+local split_wins = vim.api.nvim_list_wins()
+check('the split shows the same document', #split_wins, 2)
+local other_win = split_wins[1] == vim.api.nvim_get_current_win() and split_wins[2] or split_wins[1]
+vim.api.nvim_win_set_buf(0, two_buf)
+check(
+  'the window left behind is put back while its sibling keeps the indicator',
+  vim.api.nvim_get_option_value('winbar', { win = other_win }),
+  '%#SelvageFollow# following Bob — :SelvageStopFollowing to stop %*'
+)
+vim.cmd('only')
 vim.api.nvim_win_set_buf(0, two_buf)
 selvage.stop_following()
 vim.api.nvim_win_set_buf(0, one_buf)
@@ -1115,6 +1128,30 @@ check(
 )
 check('  saying nothing', #notices, before_heal)
 
+-- The marks go with the membership: a peer the room no longer names leaves no caret
+-- behind even before the next presence frame redraws.
+presence({
+  {
+    peerId = 'p-ada',
+    label = 'Ada Lovelace',
+    role = 'guest',
+    path = 'g/one.txt',
+    anchor = 13,
+    head = 13,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+  cursor_for('p-bob', 'g/two.txt', 4, '#98c379'),
+})
+peers_report({
+  { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' },
+})
+local presence_ns = vim.api.nvim_get_namespaces()['selvage.presence']
+check(
+  'the departed peer takes their marks with them',
+  #vim.api.nvim_buf_get_extmarks(vim.fn.bufnr('selvage://g/two.txt'), presence_ns, 0, -1, {}),
+  0
+)
 -- The membership report is the room's own list: a peer it no longer names is gone even
 -- before the next presence frame redraws, and completion stops offering them with it.
 peers_report({
