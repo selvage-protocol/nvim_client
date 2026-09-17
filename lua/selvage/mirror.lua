@@ -218,8 +218,12 @@ end
 local function materialise(root, paths, blocked)
   local made = {}
   for _, path in ipairs(paths) do
-    local file = vim.fs.joinpath(root, path)
-    local dir = vim.fs.dirname(file)
+    -- Plain string work, not `vim.fs`: this loop runs once per path of the listing in the
+    -- editor's foreground as it arrives, and each `vim.fs` call crosses the Lua/Vimscript
+    -- boundary. A listed path never starts or ends with a separator, and the root this joins
+    -- onto never ends with one, so the join and its directory are exact.
+    local file = root .. '/' .. path
+    local dir = file:match('^(.*)/[^/]*$')
     if made[dir] == nil then
       made[dir] = ensure_dir(dir)
     end

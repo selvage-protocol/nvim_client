@@ -1099,6 +1099,9 @@ end
 --- wait is for the file and not for a message: content is fetched when it is on disk and not
 --- before, and a search over the mirror sees exactly that.
 ---
+--- The command returns while the room answers: the completion is a later notice, said when
+--- the files are on disk or when the wait runs out, so a slow room never holds the editor.
+---
 --- @param path string|nil one path, a directory of them, or nil for the whole listing
 function M.fetch(path)
   if not in_session() then
@@ -1164,26 +1167,42 @@ function M.fetch(path)
       document:save(true)
     end
   end
+  -- The wait is a deferred re-check, not a foreground one: a fetch of a whole project holds
+  -- the editor for up to a minute if the room is slow, and the command should return while
+  -- the room answers. What is already held is said at once; the rest is said when it arrives
+  -- or when the wait runs out.
   local timeout = fetch_timeout_ms(#targets)
-  vim.wait(timeout, function()
-    return not in_session() or #unfetched(pending) == 0
-  end, 50)
-  if not in_session() then
-    notify('The session ended before the files were fetched.', vim.log.levels.WARN)
-    return
+  local generation = state.generation
+  local deadline = uv.hrtime() + timeout * 1000000
+  local function revisit()
+    -- A fetch a later session outlived is that session's silence: the room it asked is gone,
+    -- and its deadline must not speak into the one that replaced it. A session that ended
+    -- with nothing after it still ends the wait the same way the foreground one did.
+    if state.generation ~= generation and in_session() then
+      return
+    end
+    if not in_session() then
+      notify('The session ended before the files were fetched.', vim.log.levels.WARN)
+      return
+    end
+    local left = unfetched(pending)
+    if #left == 0 then
+      notify('Fetched the files.')
+      return
+    end
+    if uv.hrtime() >= deadline then
+      notify(
+        ('Fetched the files; these had not arrived within %ds: %s.'):format(
+          seconds(timeout),
+          table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
+        ),
+        vim.log.levels.WARN
+      )
+      return
+    end
+    vim.defer_fn(revisit, 50)
   end
-  local left = unfetched(pending)
-  if #left == 0 then
-    notify('Fetched the files.')
-    return
-  end
-  notify(
-    ('Fetched the files; these had not arrived within %ds: %s.'):format(
-      seconds(timeout),
-      table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
-    ),
-    vim.log.levels.WARN
-  )
+  revisit()
 end
 
 -- -- going to a participant, and following one ------------------------------------

@@ -104,6 +104,16 @@ local function notice_at(from, needle)
   return nil
 end
 
+--- The completion a fetch says later: a fetch returns while the room answers, so what it
+--- finished with is a later notice the test waits for rather than the call's return. What the
+--- room answered at once is already said, so the wait is only ever for a slow room.
+local function fetched_since(from, needle)
+  vim.wait(2000, function()
+    return said_since(from, needle) ~= nil
+  end, 50)
+  return said_since(from, needle)
+end
+
 --- The content a file holds, which is the only thing a tool that reads the mirror sees.
 local function read(path)
   local ok, lines = pcall(vim.fn.readfile, path)
@@ -949,15 +959,15 @@ responder = function(message)
 end
 before = #notices
 selvage.fetch('late.txt')
-check('a fetch waits for the room to answer', read(root .. '/late.txt'), 'answered late\n')
-check('  and says what arrived', said_since(before, 'Fetched the files') ~= nil, true)
+check('a fetch waits for the room to answer', fetched_since(before, 'Fetched the files') ~= nil, true)
+check('  and the file is what arrived', read(root .. '/late.txt'), 'answered late\n')
 
 responder = nil
 root = join({}, { 'quiet.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('quiet.txt')
-check('a fetch the room never answers reports what arrived', said_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
+check('a fetch the room never answers reports what arrived', fetched_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
 check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
 
 -- The room answering late is not a lost fetch: the document is still held, so the text arriving
@@ -983,14 +993,26 @@ selvage.fetch('unwritten.txt')
 vim.g.selvage_fetch_timeout_ms = nil
 check(
   'a :w on an unfetched buffer does not make the fetch claim it',
-  said_since(before, 'Fetched the files.') ~= nil,
+  fetched_since(before, 'Fetched the files.') ~= nil,
   false
 )
 check(
   '  but reports what had not arrived',
-  said_since(before, 'these had not arrived within 0s: unwritten.txt') ~= nil,
+  fetched_since(before, 'these had not arrived within 0s: unwritten.txt') ~= nil,
   true
 )
+
+-- A fetch returns while the room answers: holding the editor for the whole wait is what the
+-- foreground poll did, and a slow room held it for up to a minute. The deadline the chain
+-- still keeps speaks later, into no later test's window.
+root = join({}, { 'slowpoke.txt' })
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 800
+local started = uv.hrtime()
+selvage.fetch('slowpoke.txt')
+local waited_ms = (uv.hrtime() - started) / 1000000
+vim.g.selvage_fetch_timeout_ms = nil
+check('a fetch with a slow room returns without waiting out the room', waited_ms < 400, true)
 
 -- A word that names nothing is refused rather than fetched as nothing.
 before = #notices
@@ -1050,7 +1072,7 @@ vim.g.selvage_fetch_timeout_ms = 300
 selvage.fetch('slow.txt')
 check(
   'a file closed mid-fetch is reported as not arrived',
-  said_since(before, 'had not arrived within') ~= nil,
+  fetched_since(before, 'had not arrived within') ~= nil,
   true
 )
 check('  and the close reached the room', sent_since('close', opened) ~= nil, true)
@@ -1070,7 +1092,7 @@ vim.schedule(function()
   handle({ type = 'status', state = 'idle' })
 end)
 selvage.fetch()
-check('a session that ends mid-fetch ends the wait', said_since(before, 'The session ended before the files were fetched') ~= nil, true)
+check('a session that ends mid-fetch ends the wait', fetched_since(before, 'The session ended before the files were fetched') ~= nil, true)
 check('  and the mirror went with it', selvage.session().mirror, nil)
 vim.g.selvage_fetch_timeout_ms = nil
 
