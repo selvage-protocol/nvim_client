@@ -1134,6 +1134,46 @@ test('a file created under the host root is republished', async (t) => {
   assert.deepEqual(it.engine.grants, [['notes.txt'], ['created.txt', 'notes.txt']]);
 });
 
+test('a file created in a subdirectory is republished', async (t) => {
+  // `fs.watch` honours `recursive` only on macOS and Windows: on Linux a watcher on the
+  // root alone never fires for anything under a subdirectory, so the room's listing would go
+  // stale for the whole tree below it.
+  const { root, it } = await hosting(t, { 'notes.txt': 'a note\n', 'src/main.rs': 'fn main() {}\n' });
+  assert.deepEqual(it.engine.grants, [['notes.txt', 'src/main.rs']]);
+
+  tree(root, 'src/created.rs', 'made while hosting\n');
+
+  await until(
+    'the created path to be published',
+    () => it.engine.grants.at(-1)?.includes('src/created.rs') === true,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [
+    ['notes.txt', 'src/main.rs'],
+    ['notes.txt', 'src/created.rs', 'src/main.rs'],
+  ]);
+});
+
+test('a directory created while hosting is watched', async (t) => {
+  // A directory that did not exist when the session started has no watcher yet: the mkdir
+  // fires its parent, the republish that follows learns the new directory, and only a watcher
+  // set rebuilt after that republish sees what lands inside it afterwards.
+  const { root, it } = await hosting(t);
+
+  mkdirSync(join(root, 'later'));
+  await delay(QUIET_MS);
+  assert.deepEqual(it.engine.grants, [['notes.txt']], 'an empty directory names no paths');
+
+  tree(root, 'later/inside.rs', 'made after the directory\n');
+
+  await until(
+    'the path in the new directory to be published',
+    () => it.engine.grants.at(-1)?.includes('later/inside.rs') === true,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [['notes.txt'], ['later/inside.rs', 'notes.txt']]);
+});
+
 test('a file deleted under the host root is republished', async (t) => {
   const { root, it } = await hosting(t, { 'notes.txt': 'a note\n', 'gone.txt': 'to be deleted\n' });
   assert.deepEqual(it.engine.grants, [['gone.txt', 'notes.txt']]);
