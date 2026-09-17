@@ -180,7 +180,7 @@ local MESSAGES = {
   { 'WARN', 'Already %s room %s; leave that session first.' },
   { 'ERROR', 'A server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.' },
   { 'ERROR', 'An invite link is needed.' },
-  { 'ERROR', 'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like ws://host:8080/session?room=…&token=….' },
+  { 'ERROR', 'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
   { 'INFO', "The room's files are mirrored at %s; :SelvageFetch fetches their content." },
   { 'INFO', 'This file is empty until fetched; :SelvageFetch %s fills it.' },

@@ -239,6 +239,27 @@ vim.cmd('SelvageJoin')
 check('a bare :SelvageJoin offers the invite on the clipboard', prompted and prompted.default, clipboard)
 check('  and joins the room it names', last_of('join') and last_of('join').invite, clipboard)
 
+-- The host copies the page link now, never the wire address: the clipboard offer is
+-- that link, and the companion dials the wire URL it resolves to.
+clipboard = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one&token=t&server=ws%3A%2F%2F127.0.0.1%3A8080'
+before = #notices
+vim.cmd('SelvageJoin')
+check('  a page link is offered too', prompted and prompted.default, clipboard)
+check(
+  '  and joins on the wire URL it names',
+  last_of('join') and last_of('join').invite,
+  'ws://127.0.0.1:8080/session?room=r-one&token=t'
+)
+
+-- A page link without a server joins on the page default, the demo it was copied from.
+clipboard = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one&token=t'
+vim.cmd('SelvageJoin')
+check(
+  '  a serverless page link joins on the page default',
+  last_of('join') and last_of('join').invite,
+  'ws://100.64.0.3:8080/session?room=r-one&token=t'
+)
+
 clipboard = 'a note the person copied instead'
 vim.cmd('SelvageJoin')
 check('  a clipboard that is not an invite is not offered', prompted and prompted.default, '')
@@ -302,6 +323,30 @@ check(
   true
 )
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
+-- A truncated page link is refused the same way, before any dial.
+answer_with('https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'a truncated page link is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
+-- A whole page link pasted at the prompt joins on the wire URL it names.
+answer_with('https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-two&token=t2&server=ws%3A%2F%2F127.0.0.1%3A9')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'a pasted page link joins the room it names',
+  last_of('join') and last_of('join').invite,
+  'ws://127.0.0.1:9/session?room=r-two&token=t2'
+)
+check('  and says nothing about it', said_since(before, 'That does not look like') == nil, true)
 
 -- -- the auto-save knob -------------------------------------------------------------
 --
@@ -418,7 +463,46 @@ before = #notices
 vim.cmd('SelvageHost ws://127.0.0.1:9')
 check('hosting again mints no second room', count_type('host'), hosts_before)
 check('  and asks nothing', confirmations, 0)
-check('  and puts the invite on the clipboard', registers['+'], 'ws://127.0.0.1:2/session?room=r-again&token=t')
+check(
+  '  and puts the page link on the clipboard',
+  registers['+'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-again&token=t&server=ws%3A%2F%2F127.0.0.1%3A2'
+)
+check('  and the unnamed register too', registers['"'], registers['+'])
+check('  and never the wire address', registers['+']:find('ws://', 1, true), nil)
+
+-- A room on the page default links with no server: the page already knows it.
+report_status('hosting', 'r-demo', 'ws://100.64.0.3:8080/session?room=r-demo&token=t')
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  a default-server room links with no server',
+  registers['+'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-demo&token=t'
+)
+
+-- The setting moves the copied link.
+vim.g.selvage_web_origin = 'https://custom.example:9443/'
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  the web origin setting moves the copied link',
+  registers['+'],
+  'https://custom.example:9443/?room=r-demo&token=t'
+)
+vim.g.selvage_web_origin = nil
+
+-- A non-https setting falls back to the default page rather than minting a
+-- cleartext link carrying the room's token.
+vim.g.selvage_web_origin = 'http://custom.example:9443/'
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  an http setting falls back to the default page',
+  registers['+'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-demo&token=t'
+)
+vim.g.selvage_web_origin = nil
 
 -- A process with nobody to answer the modal question cannot be asked, so the session it holds is
 -- not given up: the consequence is said and nothing else happens.
