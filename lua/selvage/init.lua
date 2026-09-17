@@ -79,6 +79,10 @@ local state = {
   presence_marks = {},
   peer_groups = {},
   peer_fills = {},
+  --- The paint a peer's highlights were last set with, so a report that changes nothing sets
+  --- nothing: every report redrew every caret's highlight, at a highlight set per cursor per
+  --- report, on top of the marks the draw already recreates.
+  peer_paints = {},
   peer_count = 0,
   cursors = {},
   -- The peers the last presence report drew, as rows for `:SelvagePeers` to print.
@@ -230,7 +234,18 @@ local function peer_highlight(cursor)
     name = 'SelvagePeer' .. state.peer_count
     state.peer_groups[cursor.peerId] = name
   end
-  api.nvim_set_hl(0, name, { fg = '#000000', bg = cursor.colour or '#888888', bold = true })
+  -- The set is the cost, not the name: a colour that did not move since the last report keeps
+  -- the highlight it already has.
+  local paints = state.peer_paints[cursor.peerId]
+  if paints == nil then
+    paints = {}
+    state.peer_paints[cursor.peerId] = paints
+  end
+  local paint = tostring(cursor.colour or '#888888')
+  if paints.group ~= paint then
+    paints.group = paint
+    api.nvim_set_hl(0, name, { fg = '#000000', bg = cursor.colour or '#888888', bold = true })
+  end
   return name
 end
 
@@ -263,23 +278,34 @@ local function peer_fill(cursor)
     name = 'SelvagePeer' .. state.peer_count .. 'Fill'
     state.peer_fills[cursor.peerId] = name
   end
-  local r, g, b = channels(cursor.colour)
-  if r == nil then
-    api.nvim_set_hl(0, name, {})
-    return name
+  local paints = state.peer_paints[cursor.peerId]
+  if paints == nil then
+    paints = {}
+    state.peer_paints[cursor.peerId] = paints
   end
   local background = api.nvim_get_hl(0, { name = 'Normal' }).bg
   if background == nil then
     background = vim.o.background == 'light' and 0xffffff or 0x000000
   end
-  local nr = math.floor(background / 65536) % 256
-  local ng = math.floor(background / 256) % 256
-  local nb = background % 256
-  local alpha = fill_alpha(cursor.fill)
-  local function mix(fore, back)
-    return math.floor(fore * alpha + back * (1 - alpha) + 0.5)
+  -- The fill, the colour and the background it was resolved against: a report that moves
+  -- none of them keeps the highlight it already has, a theme switch included.
+  local paint = tostring(cursor.colour) .. '\0' .. tostring(cursor.fill) .. '\0' .. tostring(background)
+  if paints.fill ~= paint then
+    paints.fill = paint
+    local r, g, b = channels(cursor.colour)
+    if r == nil then
+      api.nvim_set_hl(0, name, {})
+      return name
+    end
+    local nr = math.floor(background / 65536) % 256
+    local ng = math.floor(background / 256) % 256
+    local nb = background % 256
+    local alpha = fill_alpha(cursor.fill)
+    local function mix(fore, back)
+      return math.floor(fore * alpha + back * (1 - alpha) + 0.5)
+    end
+    api.nvim_set_hl(0, name, { bg = ('#%02x%02x%02x'):format(mix(r, nr), mix(g, ng), mix(b, nb)) })
   end
-  api.nvim_set_hl(0, name, { bg = ('#%02x%02x%02x'):format(mix(r, nr), mix(g, ng), mix(b, nb)) })
   return name
 end
 
@@ -2197,6 +2223,7 @@ local function reset()
   end
   state.peer_groups = {}
   state.peer_fills = {}
+  state.peer_paints = {}
   state.peer_count = 0
   state.generation = state.generation + 1
   state.selection_armed = false

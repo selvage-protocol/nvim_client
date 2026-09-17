@@ -1457,6 +1457,50 @@ check(
 check('  still hosting afterwards', selvage.session().status, 'hosting')
 selvage.leave()
 
+-- -- presence redraws only what moved -----------------------------------------------------
+--
+-- Every report recreated every caret's highlight, at a highlight set per cursor per report.
+-- A report that moves no colour, fill or background sets nothing now; one that moves a
+-- colour repaints.
+
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-paint' })
+local paint_path = nil
+for index = #sent, 1, -1 do
+  if sent[index].type == 'open' then
+    paint_path = sent[index].path
+    break
+  end
+end
+check('the repaint section shares a document to draw in', paint_path ~= nil, true)
+
+local hl_sets = 0
+local real_set_hl = vim.api.nvim_set_hl
+vim.api.nvim_set_hl = function(...)
+  hl_sets = hl_sets + 1
+  return real_set_hl(...)
+end
+local paint_cursor = {
+  peerId = 'p-paint',
+  label = 'Paint',
+  path = paint_path,
+  anchor = 0,
+  head = 0,
+  colour = '#61afef',
+  fill = '#61afef40',
+}
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+local sets_after_first = hl_sets
+check('the first report paints', sets_after_first > 0, true)
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+check('a report that changed nothing sets no highlight', hl_sets, sets_after_first)
+paint_cursor.colour = '#98c379'
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+check('  while a colour that moved repaints', hl_sets > sets_after_first, true)
+vim.api.nvim_set_hl = real_set_hl
+
+selvage.leave()
+
 -- The framing drops a line that decoded to no shape before any handler runs: a bare value
 -- decodes fine and would fail only when something indexes it, far from the line that caused
 -- it.
