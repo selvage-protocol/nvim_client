@@ -240,9 +240,9 @@ export class Companion {
    *
    * A guest hears the room's open-document set in the handshake, and the sync that carries the
    * text is a later message. Reconciling a buffer against a replica that has received nothing
-   * asks it to hold the empty document, which a Neovim buffer cannot: its text always ends in a
-   * newline, so the buffer would keep one the room does not have, the mirror would drop it, and
-   * the two would hold different texts from the first keystroke.
+   * asks it to hold the empty document, while the room may yet send a seed: the buffer would
+   * publish its own content as the document, and the two would hold different texts from the
+   * first keystroke.
    *
    * Such a document is held in the room now, and put in front of the bridge when its text is
    * there. The hold is what makes the room send the text to this client, and the text's arrival
