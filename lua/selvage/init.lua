@@ -1348,7 +1348,7 @@ local function indicator_text(label)
   -- The row is evaluated like a statusline, where `%` starts an item: a name carrying
   -- one has to arrive doubled.
   local safe = tostring(label or ''):gsub('%%', '%%%%')
-  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(safe)
+  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(safe)
 end
 
 -- What the indicator's click label calls: a Vim function by name. A Lua `_G` function is
@@ -1369,7 +1369,7 @@ end
 --- Whether `text` is the indicator's own row: only the indicator writes that framing, so a
 --- buffer showing it with no row saved is residue rather than someone's own row.
 local function is_indicator_row(text)
-  return tostring(text):find('%#SelvageFollow#%0@SelvageStopFollowing@ following ', 1, true) == 1
+  return tostring(text):find('%#SelvageFollow#%0@SelvageStopFollowing@ Following ', 1, true) == 1
 end
 
 --- Puts back the winbar rows the indicator replaced, wherever they stand: every window
@@ -1539,7 +1539,7 @@ local function land_follow()
     -- The first landing is said out loud.
     if not following.said then
       following.said = true
-      notify(('following %s'):format(following.label))
+      notify(('Following %s'):format(following.label))
     end
   end
   return ok, reason, err
@@ -1843,7 +1843,7 @@ function M.statusline()
   if following == nil then
     return ''
   end
-  return 'following ' .. tostring(following.label or '')
+  return 'Following ' .. tostring(following.label or '')
 end
 
 

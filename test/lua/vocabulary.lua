@@ -132,7 +132,7 @@ local MESSAGES = {
   { 'INFO', 'left the session' },
   { 'WARN', 'not in a session' },
   -- Going to a participant, and following one.
-  { 'INFO', 'following %s' },
+  { 'INFO', 'Following %s' },
   { 'INFO', 'stopped following %s' },
   { 'WARN', 'not following anyone' },
   { 'WARN', '%s left the room, so following stopped' },

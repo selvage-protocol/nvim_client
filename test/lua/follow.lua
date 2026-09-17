@@ -676,7 +676,7 @@ check('following lands on the peer', vim.fn.bufname('%'), 'selvage://g/one.txt')
 check('  with the cursor on their caret', cursor(), '2,1')
 check(
   '  and says so once the landing is made',
-  said_since(before_follow, 'following Ada') ~= nil,
+  said_since(before_follow, 'Following Ada') ~= nil,
   true
 )
 check('  which the session reports', selvage.following(), 'Ada')
@@ -684,9 +684,9 @@ check('  which the global reports by peer id', vim.g.selvage_following, 'p-ada')
 check(
   '  which the window reports with the way to stop',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Ada — click or :SelvageStopFollowing to stop %X%*'
 )
-check('  which the statusline reports', selvage.statusline(), 'following Ada')
+check('  which the statusline reports', selvage.statusline(), 'Following Ada')
 -- The indicator's colour is the peer's marker colour: what the caret wears.
 local ada_marker = nil
 for _, peer in ipairs(selvage.peers()) do
@@ -765,7 +765,7 @@ check('  which the statusline reports', selvage.statusline(), '')
 -- An edit in the followed document itself ends it the same way.
 local before_refollow = #notices
 selvage.follow('Ada')
-check('following again says so again', said_since(before_refollow, 'following Ada') ~= nil, true)
+check('following again says so again', said_since(before_refollow, 'Following Ada') ~= nil, true)
 local before_own_edit = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/one.txt'), 0, 0, false, { 'ALPHA' })
 check(
@@ -852,14 +852,14 @@ vim.cmd('split')
 check(
   'the split window carries the indicator',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Ada — click or :SelvageStopFollowing to stop %X%*'
 )
 check('  and the follow stands through the switch', selvage.following(), 'Ada')
 vim.cmd('close')
 check(
   'coming back keeps the indicator',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Ada — click or :SelvageStopFollowing to stop %X%*'
 )
 check('  and the follow with it', selvage.following(), 'Ada')
 selvage.stop_following()
@@ -898,7 +898,7 @@ check('a rename keeps the follow', selvage.following(), 'Ada Lovelace')
 check(
   '  and re-labels the indicator',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada Lovelace — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Ada Lovelace — click or :SelvageStopFollowing to stop %X%*'
 )
 -- The re-label comes from the membership report itself, not the next presence frame: a peer
 -- who renames and goes idle reads correctly indefinitely.
@@ -907,7 +907,7 @@ check('a rename on the peers report alone re-labels the follow', selvage.followi
 check(
   '  and the indicator with it',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Ada — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Ada — click or :SelvageStopFollowing to stop %X%*'
 )
 peers_report({ { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } })
 check('  and back again while the peer stays silent', selvage.following(), 'Ada Lovelace')
@@ -946,17 +946,17 @@ local before_retarget = #notices
 selvage.follow('Ada Lovelace')
 check(
   'following while following re-targets with the new name',
-  said_since(before_retarget, 'following Ada Lovelace') ~= nil,
+  said_since(before_retarget, 'Following Ada Lovelace') ~= nil,
   true
 )
 check('  which the global reports', vim.g.selvage_following, 'p-ada')
 local retarget_notices = #notices
 selvage.follow('Bob')
-check('  and again for the other peer', said_since(retarget_notices, 'following Bob') ~= nil, true)
+check('  and again for the other peer', said_since(retarget_notices, 'Following Bob') ~= nil, true)
 check('  which the global reports anew', vim.g.selvage_following, 'p-bob')
 local idempotent_notices = #notices
 selvage.follow('Bob')
-check('following the peer already followed re-lands silently', #notices, idempotent_notices)
+check('Following the peer already followed re-lands silently', #notices, idempotent_notices)
 check('  on their caret', cursor(), '2,0')
 
 -- The indicator is the window's, but the editor swaps its row per buffer: moving it — by
@@ -968,7 +968,7 @@ vim.api.nvim_win_set_buf(0, one_buf)
 check(
   'the indicator follows the window across documents',
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Bob — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Bob — click or :SelvageStopFollowing to stop %X%*'
 )
 -- A split showing the same buffer keeps its own copy: leaving the buffer in one window
 -- must not take the indicator down in the other.
@@ -980,7 +980,7 @@ vim.api.nvim_win_set_buf(0, two_buf)
 check(
   'the window left behind is put back while its sibling keeps the indicator',
   vim.api.nvim_get_option_value('winbar', { win = other_win }),
-  '%#SelvageFollow#%0@SelvageStopFollowing@ following Bob — click or :SelvageStopFollowing to stop %X%*'
+  '%#SelvageFollow#%0@SelvageStopFollowing@ Following Bob — click or :SelvageStopFollowing to stop %X%*'
 )
 vim.cmd('only')
 vim.api.nvim_win_set_buf(0, two_buf)
@@ -1008,7 +1008,7 @@ selvage.stop_following()
 local before_follow_nodoc = #notices
 selvage.follow('Cara')
 check(
-  'following a peer in no document refuses',
+  'Following a peer in no document refuses',
   said_since(before_follow_nodoc, 'nothing to follow: Cara is not in a document') ~= nil,
   true
 )
@@ -1116,7 +1116,7 @@ check('  the buffer the listing offered', vim.fn.bufnr('selvage://g/late.txt') ~
 -- where the empty buffer clamped it.
 arrive('g/late.txt', 'hey\n')
 selvage.follow('Zed')
-check('following into arrived text lands on the caret', cursor(), '1,2')
+check('Following into arrived text lands on the caret', cursor(), '1,2')
 check('  in the arrived document', vim.fn.bufname('%'), 'selvage://g/late.txt')
 check('  saying so', selvage.following(), 'Zed')
 
@@ -1140,7 +1140,7 @@ check(
   vim.api.nvim_get_option_value('winbar', { win = 0 }),
   winbar_no_follow
 )
-check('  and never saying it landed', said_since(before_ghost, 'following Zed'), nil)
+check('  and never saying it landed', said_since(before_ghost, 'Following Zed'), nil)
 
 -- The text arriving over the sync retries a pending jump: a wiped buffer re-opens on the
 -- attempt and lands when the room's text arrives, with no new presence frame needed. The
@@ -1219,7 +1219,7 @@ check(
 local before_gone_follow = #notices
 selvage.follow('Zed')
 check(
-  'following a departed peer matches nobody',
+  'Following a departed peer matches nobody',
   said_since(before_gone_follow, 'no participant matches "Zed"') ~= nil,
   true
 )
@@ -1241,7 +1241,7 @@ presence({
 })
 local winbar_before_refollow = vim.api.nvim_get_option_value('winbar', { win = 0 })
 selvage.follow('p-ada')
-check('following again before leaving', selvage.following(), 'Ada Lovelace')
+check('Following again before leaving', selvage.following(), 'Ada Lovelace')
 -- Leaving with the follow spread across buffers: every buffer left behind was already put
 -- back on leaving it, so ending the session with one hidden drops nothing with the map.
 vim.api.nvim_win_set_buf(0, vim.fn.bufnr('selvage://g/two.txt'))
