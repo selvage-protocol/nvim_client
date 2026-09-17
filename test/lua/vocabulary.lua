@@ -169,6 +169,12 @@ local MESSAGES = {
   { 'ERROR', '%s is not valid UTF-8, so it is not shared.' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared.' },
   { 'WARN', 'This buffer has no file, so it is not shared; the folder this session shares is %s.' },
+  { 'WARN', '%s is not a regular file, so it is not shared.' },
+  -- What a misspeaking companion earns: said, never obeyed blindly.
+  { 'WARN', 'Unknown message type from the companion: %s.' },
+  { 'WARN', 'Unreadable message from the companion.' },
+  { 'WARN', 'Unreadable report from the companion.' },
+  { 'WARN', 'Unreadable status from the companion.' },
   { 'ERROR', 'The companion exited with %s.' },
   { 'WARN', 'Already %s room %s; leave that session first.' },
   { 'ERROR', 'A server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.' },

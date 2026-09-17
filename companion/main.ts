@@ -8,7 +8,7 @@
 import { appendFileSync } from 'node:fs';
 
 import { Companion } from './session.ts';
-import { LineReader } from './ipc.ts';
+import { LineReader, isRequest } from './ipc.ts';
 import type { Notification, Request } from './ipc.ts';
 
 /**
@@ -53,13 +53,18 @@ const companion = new Companion({ send: write });
 let queue: Promise<void> = Promise.resolve();
 
 const reader = new LineReader((line) => {
-  let request: Request;
+  let parsed: unknown;
   try {
-    request = JSON.parse(line) as Request;
+    parsed = JSON.parse(line);
   } catch (error: unknown) {
     warn(`ignoring a line that is not JSON: ${error instanceof Error ? error.message : line}`);
     return;
   }
+  if (!isRequest(parsed)) {
+    warn(`ignoring a message that is not a request: ${line}`);
+    return;
+  }
+  const request: Request = parsed;
   trace('<', request);
   queue = queue.then(() => companion.handle(request)).catch((error: unknown) => {
     warn(`handling ${request.type} failed: ${error instanceof Error ? error.message : String(error)}`);

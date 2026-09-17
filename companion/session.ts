@@ -15,6 +15,7 @@ import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engin
 
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant } from './grant.ts';
+import { isRequest } from './ipc.ts';
 import type { Notification, Request } from './ipc.ts';
 
 /**
@@ -124,6 +125,12 @@ export class Companion {
    * order the front-end relies on, and an overlapping `handle` would not keep it.
    */
   async handle(request: Request): Promise<void> {
+    // The stdin mouth checks this too, but a request can also arrive from a test or a future
+    // caller: one answered blindly is a crash down the line, where the failure names nothing
+    // about the message that caused it. Misshapen is dropped, not answered.
+    if (!isRequest(request)) {
+      return;
+    }
     switch (request.type) {
       case 'host': {
         await this.connect(

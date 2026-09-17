@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { LineReader } from '../companion/ipc.ts';
+import { LineReader, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { Companion } from '../companion/session.ts';
@@ -786,6 +786,42 @@ test('the line reader reassembles a message split across chunks', () => {
   assert.deepEqual(lines, ['{"type":"leave"}']);
   reader.push('se","path":"a"}\n\n');
   assert.deepEqual(lines, ['{"type":"leave"}', '{"type":"close","path":"a"}']);
+});
+
+// -- the IPC mouth, both directions ----------------------------------------------------
+//
+// A misshapen message answered blindly is a crash down the line, where the failure names
+// nothing about the message that caused it. The stdin mouth drops what is not a request;
+// `handle` drops it too, for the caller that did not come through stdin.
+
+test('a line that is not a request is refused before it is queued', () => {
+  // A notification echoed back, a newer front-end's new message, a `host` with nowhere to
+  // host, a `change` whose offsets are strings, a line that decoded to a bare value.
+  for (const line of [
+    '{"type":"presence","cursors":[]}',
+    '{"type":"frobnicate"}',
+    '{"type":"host"}',
+    '{"type":"change","path":"a","start":"0","end":1,"text":"x"}',
+    '{"type":"save","id":7}',
+    '7',
+    '"leave"',
+    '{}',
+  ]) {
+    assert.equal(isRequest(JSON.parse(line) as unknown), false, line);
+  }
+  assert.equal(
+    isRequest({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: 'proj' }),
+    true,
+    'a whole request still passes',
+  );
+  assert.equal(isRequest({ type: 'leave' }), true, 'and a bare one too');
+});
+
+test('a misshapen request handled directly is dropped, not answered', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host' } as unknown as Request);
+  assert.deepEqual(it.hosts, [], 'no room was opened for a host with no server');
+  assert.deepEqual(it.sent, [], 'and nothing was answered');
 });
 
 // -- the grant, host-side ------------------------------------------------------------

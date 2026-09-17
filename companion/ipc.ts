@@ -122,3 +122,60 @@ export class LineReader {
     }
   }
 }
+
+/**
+ * Whether a parsed line is a request this process answers. The front-end is the same user's
+ * own editor, not a remote peer, so a misshapen message is a bug rather than an attack — but
+ * one answered blindly is a crash somewhere down the line (`request.serverUrl` read off a
+ * `join`, a `change` counted with a start that is a string), where the failure names nothing
+ * about the message that caused it. Anything here refuses is said on stderr and dropped
+ * before it is queued.
+ *
+ * The union above is what a front-end may send; anything else — a notification echoed back,
+ * a newer front-end's new message, a line that decoded to a bare string — is not one.
+ */
+export function isRequest(value: unknown): value is Request {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const fields = value as Record<string, unknown>;
+  if (typeof fields['type'] !== 'string') {
+    return false;
+  }
+  const text = (name: string): boolean => typeof fields[name] === 'string';
+  const count = (name: string): boolean => typeof fields[name] === 'number';
+  const flag = (name: string): boolean => typeof fields[name] === 'boolean';
+  const maybeText = (name: string): boolean =>
+    fields[name] === undefined || typeof fields[name] === 'string';
+  const maybeFlag = (name: string): boolean =>
+    fields[name] === undefined || typeof fields[name] === 'boolean';
+  switch (fields['type']) {
+    case 'host':
+      return (
+        text('serverUrl') &&
+        maybeText('displayName') &&
+        maybeFlag('autoSave') &&
+        maybeText('root')
+      );
+    case 'join':
+      return text('invite') && maybeText('displayName') && maybeFlag('autoSave');
+    case 'leave':
+    case 'selectionCleared':
+      return true;
+    case 'rename':
+      return text('displayName');
+    case 'open':
+      return text('path') && text('text');
+    case 'close':
+      return text('path');
+    case 'change':
+      return text('path') && count('start') && count('end') && text('text');
+    case 'applied':
+    case 'saved':
+      return count('id') && flag('ok');
+    case 'selection':
+      return text('path') && count('anchor') && count('head');
+    default:
+      return false;
+  }
+}

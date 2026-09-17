@@ -78,7 +78,10 @@ function Companion:receive(data, on_message)
     self.pending = data[index]
     if line:gsub('%s', '') ~= '' then
       local ok, message = pcall(vim.json.decode, line)
-      if ok then
+      -- Decoded is not shaped: a bare string or number decodes fine and would fail only when
+      -- something indexes it, far from the line that caused it. Said the way an undecodable
+      -- line is and dropped before any handler runs.
+      if ok and type(message) == 'table' and type(message.type) == 'string' then
         on_message(message)
       else
         vim.notify('selvage: unreadable message from the companion', vim.log.levels.WARN)
