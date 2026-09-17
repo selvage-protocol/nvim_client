@@ -243,6 +243,66 @@ clipboard = 'a note the person copied instead'
 vim.cmd('SelvageJoin')
 check('  a clipboard that is not an invite is not offered', prompted and prompted.default, '')
 
+-- -- a pasted invite with the wrong shape is refused before any dial ------------------
+--
+-- A truncated paste is the newcomer's failure, and the engine would report it as an
+-- address problem. The prompt refuses it in the other client's words instead, and
+-- nothing is sent: the address suffix stays for failures that really are the address's.
+
+clipboard = ''
+answer_with('ws://127.0.0.1:8080/session?room=r-one')
+local joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'a truncated paste is refused at the prompt',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check(
+  '  in the other client\u{2019}s words',
+  said_since(before, 'Paste the whole link the host sent you') ~= nil,
+  true
+)
+check('  at error level', notices[before + 1] ~= nil and notices[before + 1].level or nil, vim.log.levels.ERROR)
+check('  and nothing is dialled', count_type('join'), joins_before)
+
+answer_with('wss://example.com/session?room=r-one')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'a paste without a token is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled either', count_type('join'), joins_before)
+
+-- Substring matching is not parameter matching: `?bedroom=x&token=y` contains `room=`
+-- without naming a room, and `?room=&token=t` names one with nothing in it. Both are
+-- refused at the prompt rather than reaching the engine's own refusal.
+answer_with('ws://127.0.0.1:8080/session?bedroom=x&token=t')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'a lookalike parameter is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
+answer_with('ws://127.0.0.1:8080/session?room=&token=t')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'an empty room value is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
 -- -- the auto-save knob -------------------------------------------------------------
 --
 -- Whether a document the room changes is written is the front-end's setting, as it is in the

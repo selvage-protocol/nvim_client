@@ -2927,6 +2927,18 @@ local function clipboard_invite()
   return ''
 end
 
+--- Whether a typed value has an invite link's shape: a WebSocket address naming a room
+--- and its token. The names match at a query boundary (`?`/`&`) with a non-empty value,
+--- so a `bedroom=` lookalike or an empty value does not pass. A truncated paste fails here, in the other client's words, rather than
+--- later as whatever the engine said: nobody can tell "bad paste" from "server down"
+--- from an ECONNREFUSED. A link that arrives by argument still goes to the engine, the
+--- way the other client sends one past its own box.
+local function is_invite_link(text)
+  return text:match('^wss?://%S+$') ~= nil
+    and text:match('[?&]room=[^&]+') ~= nil
+    and text:match('[?&]token=[^&]+') ~= nil
+end
+
 --- The invite to join on, asked for when the command was given none.
 local function resolve_invite(callback)
   if not can_prompt() then
@@ -2936,6 +2948,13 @@ local function resolve_invite(callback)
   vim.ui.input({ prompt = 'Join a Selvage session: ', default = clipboard_invite() }, function(input)
     local invite = vim.trim(input or '')
     if invite == '' then
+      return
+    end
+    if not is_invite_link(invite) then
+      notify(
+        'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like ws://host:8080/session?room=…&token=….',
+        vim.log.levels.ERROR
+      )
       return
     end
     callback(invite)
