@@ -462,7 +462,7 @@ if selvage.following() == nil then
   harness.fail('the follow ended while the host moved; the room edit must not end one')
 end
 local winbar = vim.api.nvim_get_option_value('winbar', { win = 0 })
-if winbar == nil or winbar:find('following', 1, true) == nil then
+if winbar == nil or winbar:find('Following ', 1, true) == nil then
   harness.fail(('the indicator is not standing while following; winbar holds %s'):format(vim.inspect(winbar)))
 end
 harness.log('tracked the host onto', vim.inspect(follow_marker), 'under', vim.inspect(winbar))
