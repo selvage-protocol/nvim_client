@@ -132,7 +132,7 @@ local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check(
   'the host confirm names the folder the session shares',
-  said_since(before_host_confirm, 'room r-test is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
+  said_since(before_host_confirm, 'Room r-test is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
   true
 )
 
@@ -177,7 +177,7 @@ check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage:
 check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
 check(
   '  and the join says the room and the landing',
-  said_since(before_join, 'joined room r-guest; opening workspace/README.md') ~= nil,
+  said_since(before_join, 'Joined room r-guest; opening workspace/README.md') ~= nil,
   true
 )
 
@@ -229,7 +229,7 @@ handlers().on_message({
 check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
 check(
   '  and said so, pointing at the others',
-  said_since(before, 'joined room r-two; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
+  said_since(before, 'Joined room r-two; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
   true
 )
 local pointed = false
@@ -251,7 +251,7 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
 check(
   '  and the join says the room has nothing in it yet',
-  said_since(before_empty, 'joined room r-empty; the room has no open documents yet') ~= nil,
+  said_since(before_empty, 'Joined room r-empty; the room has no open documents yet') ~= nil,
   true
 )
 local before_late = #notices
@@ -274,7 +274,7 @@ check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated
 check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
 check(
   '  and the join claims no landing',
-  said_since(before_off, 'joined room r-off') ~= nil,
+  said_since(before_off, 'Joined room r-off') ~= nil,
   true
 )
 vim.g.selvage_open_on_join = nil
@@ -807,7 +807,7 @@ local before_no_session = #notices
 vim.cmd('SelvagePeers')
 check(
   'with no session the list says there is none',
-  said_since(before_no_session, 'join a session first') ~= nil,
+  said_since(before_no_session, 'Join a session first') ~= nil,
   true
 )
 
@@ -874,7 +874,7 @@ local hosts_before_dismissal = count_type('host')
 selvage.host('ws://127.0.0.1:1')
 check('a dismissed prompt starts no session', count_type('host'), hosts_before_dismissal)
 check('  and does not configure a name', vim.g.selvage_display_name, nil)
-check('  and says a name is needed', said_since(before_dismissal, 'a name is needed') ~= nil, true)
+check('  and says A name is needed', said_since(before_dismissal, 'A name is needed') ~= nil, true)
 
 -- An emptied box is the same answer as a dismissed one.
 vim.ui.input = function(_, on_confirm)
@@ -885,7 +885,7 @@ local before_blank = #notices
 local hosts_before_blank = count_type('host')
 selvage.host('ws://127.0.0.1:1')
 check('an emptied prompt starts no session', count_type('host'), hosts_before_blank)
-check('  and says a name is needed', said_since(before_blank, 'a name is needed') ~= nil, true)
+check('  and says A name is needed', said_since(before_blank, 'A name is needed') ~= nil, true)
 check('  and does not configure a name', vim.g.selvage_display_name, nil)
 
 -- No input at all: the built-in `vim.ui.input` reads a terminal a headless process does not
@@ -911,11 +911,11 @@ vim.cmd('SelvageDisplayName Grace')
 check(':SelvageDisplayName sets the configured name', vim.g.selvage_display_name, 'Grace')
 local before_set = #notices
 vim.cmd('SelvageDisplayName Pat')
-check('  it says what it did', said_since(before_set, 'display name set to "Pat"') ~= nil, true)
+check('  it says what it did', said_since(before_set, 'Display name set to "Pat"') ~= nil, true)
 check('  and without protocol mechanics', said_since(before_set, 'room') == nil, true)
 local before_report = #notices
 vim.cmd('SelvageDisplayName')
-check('  and with no name reports the one in force', said_since(before_report, 'the name others see is "Pat"') ~= nil, true)
+check('  and with no name reports the one in force', said_since(before_report, 'The name others see is "Pat"') ~= nil, true)
 
 -- A change during a live session is sent now: `session.rename` carries it and the room answers
 -- with `peer.renamed`, so the sign and `:SelvagePeers` re-label from that event rather than from
@@ -935,7 +935,7 @@ vim.cmd('SelvageDisplayName Second')
 check('  :SelvageDisplayName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
 check('  and sends the live rename', count_type('rename'), renames_before + 1)
 check('  naming the new name', last_of('rename') and last_of('rename').displayName, 'Second')
-check('  and confirms the new name', said_since(before_live, 'display name set to "Second"') ~= nil, true)
+check('  and confirms the new name', said_since(before_live, 'Display name set to "Second"') ~= nil, true)
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('the next session uses the changed name', last_of('host') and last_of('host').displayName, 'Second')
@@ -972,7 +972,7 @@ vim.cmd('SelvageDisplayName ' .. string.rep('b', 33))
 check('a name of 33 units is refused', vim.g.selvage_display_name, at_limit)
 check(
   '  with the count and the limit',
-  said_since(before_long, 'this name is 33 UTF-16 code units and the limit is 32') ~= nil,
+  said_since(before_long, 'This name is 33 UTF-16 code units and the limit is 32') ~= nil,
   true
 )
 check(
@@ -1010,7 +1010,7 @@ selvage.host('ws://127.0.0.1:1')
 check('a 33-unit answer at the prompt is asked for again', asked, 2)
 check(
   '  with the count and the limit',
-  said_since(before_prompt, 'this name is 33 UTF-16 code units and the limit is 32') ~= nil,
+  said_since(before_prompt, 'This name is 33 UTF-16 code units and the limit is 32') ~= nil,
   true
 )
 check('  and the shorter answer names the session', last_of('host') and last_of('host').displayName, 'Cara')
@@ -1070,7 +1070,7 @@ selvage.host('ws://127.0.0.1:1')
 check('an over-long login name starts nothing', count_type('host'), hosts_before_suggestion)
 check(
   '  and the refusal is about there being no name, not about its length',
-  said_since(before_suggestion, 'no display name is set and there is no one to ask') ~= nil,
+  said_since(before_suggestion, 'No display name is set and there is no one to ask') ~= nil,
   true
 )
 vim.env.USER = saved_user
@@ -1145,12 +1145,12 @@ local before_late_leave = #notices
 selvage.leave()
 check(
   'a leave after the engine gave up says there is no session',
-  said_since(before_late_leave, 'not in a session') ~= nil,
+  said_since(before_late_leave, 'Not in a session') ~= nil,
   true
 )
 check(
   '  and does not claim to have left one',
-  said_since(before_late_leave, 'left the session') == nil,
+  said_since(before_late_leave, 'Left the session') == nil,
   true
 )
 
@@ -1188,7 +1188,7 @@ local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
 check(
   'the room going is reported with its reason',
-  said_since(before_gone, 'the room is gone (host did not return)') ~= nil,
+  said_since(before_gone, 'The room is gone (host did not return)') ~= nil,
   true
 )
 check('  and the session ends with it', selvage.session().status, 'idle')
@@ -1201,7 +1201,7 @@ local before_reports = #notices
 handlers().on_message({ type = 'report', report = { kind = 'applyRefused', path = 'a.txt' } })
 check(
   'a refused apply is a sentence',
-  said_since(before_reports, "the editor would not apply the room's change to a.txt; the file may be read-only") ~= nil,
+  said_since(before_reports, "The editor would not apply the room's change to a.txt; the file may be read-only") ~= nil,
   true
 )
 check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
@@ -1218,13 +1218,13 @@ handlers().on_message({
 })
 check(
   'a save that failed says why',
-  said_since(before_reports, 'could not save a.txt; the file on disk is behind the room (the path is read-only)') ~= nil,
+  said_since(before_reports, 'Could not save a.txt; the file on disk is behind the room (the path is read-only)') ~= nil,
   true
 )
 handlers().on_message({ type = 'report', report = { kind = 'saveFailed', path = 'a.txt' } })
 check(
   '  and the sentence alone when the report carried no reason',
-  said_since(before_reports, 'could not save a.txt; the file on disk is behind the room') ~= nil,
+  said_since(before_reports, 'Could not save a.txt; the file on disk is behind the room') ~= nil,
   true
 )
 check('  without inventing one', notices[#notices].message:find('()', 1, true) == nil, true)

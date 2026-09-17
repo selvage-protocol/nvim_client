@@ -153,13 +153,13 @@ vim.g.selvage_server_url = nil
 local before = #notices
 local raised = pcall(vim.cmd, 'SelvageHost')
 check('a bare :SelvageHost does not raise E471', raised, true)
-check('  and the refusal is the plugin\u{2019}s', said_since(before, 'a server address is needed') ~= nil, true)
+check('  and the refusal is the plugin\u{2019}s', said_since(before, 'A server address is needed') ~= nil, true)
 check('  and it names one', said_since(before, ':SelvageHost ws://127.0.0.1:8080') ~= nil, true)
 
 before = #notices
 raised = pcall(vim.cmd, 'SelvageJoin')
 check('a bare :SelvageJoin does not raise E471 either', raised, true)
-check('  and says what is missing', said_since(before, 'an invite link is needed') ~= nil, true)
+check('  and says what is missing', said_since(before, 'An invite link is needed') ~= nil, true)
 
 -- With somebody to ask, the same command asks. The address is a value only the person knows, and
 -- there is no default for it in this plugin.
@@ -259,10 +259,10 @@ check('the name in force is nil when nothing is configured', selvage.display_nam
 vim.cmd('SelvageDisplayName')
 check(
   '  and the read form says there is none',
-  said_since(before, 'no display name is set yet') ~= nil,
+  said_since(before, 'No display name is set yet') ~= nil,
   true
 )
-check('  rather than reporting a name nobody chose', said_since(before, 'the name others see is') == nil, true)
+check('  rather than reporting a name nobody chose', said_since(before, 'The name others see is') == nil, true)
 check('  and the global is left unset', vim.g.selvage_display_name, nil)
 vim.g.selvage_display_name = 'Test User'
 
@@ -281,7 +281,7 @@ check('a join while hosting asks first', confirmations, 1)
 check(
   '  naming the room and what joining it does',
   question and question.text,
-  'you are hosting room r-host; joining another session ends this room for everyone'
+  'You are hosting room r-host; joining another session ends this room for everyone.'
 )
 check('  offering to leave and join', question and question.choices, '&Leave and join\n&Cancel')
 check('  a declined question joins nothing', count_type('join'), joins_before)
@@ -302,7 +302,7 @@ check('a host while a guest asks first', confirmations, asks_before + 1)
 check(
   '  saying that hosting means leaving',
   question and question.text,
-  'you are in room r-guest; hosting a session means leaving it first'
+  'You are in room r-guest; hosting a session means leaving it first.'
 )
 check('  offering to leave and host', question and question.choices, '&Leave and host\n&Cancel')
 check('  a declined question hosts nothing', count_type('host'), hosts_before)
@@ -348,7 +348,7 @@ local window_before = vim.fn.bufname('%')
 vim.cmd('SelvageOpen')
 check(
   ':SelvageOpen while hosting is refused with the reason',
-  said_since(before, 'you are hosting, so the files you open are the ones the room has') ~= nil,
+  said_since(before, 'You are hosting, so the files you open are the ones the room has') ~= nil,
   true
 )
 check('  and the window is left where it was', vim.fn.bufname('%'), window_before)
@@ -361,9 +361,9 @@ check('  at information level', notices[#notices].level, vim.log.levels.INFO)
 
 before = #notices
 handlers().on_message({ type = 'refused', what = 'host', roomId = 'r-open' })
-check('a refused host is reported', said_since(before, 'already hosting room r-open') ~= nil, true)
+check('a refused host is reported', said_since(before, 'Already hosting room r-open') ~= nil, true)
 handlers().on_message({ type = 'refused', what = 'join', roomId = 'r-open' })
-check('  and a refused join', said_since(before, 'already in room r-open') ~= nil, true)
+check('  and a refused join', said_since(before, 'Already in room r-open') ~= nil, true)
 
 vim.notify = notify
 vim.ui.input = builtin_input

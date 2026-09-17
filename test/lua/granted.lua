@@ -227,7 +227,7 @@ before = #notices
 selvage.open()
 check(
   'a room that offers nothing says so',
-  said_since(before, 'the room has no open documents yet') ~= nil,
+  said_since(before, 'The room has no open documents yet') ~= nil,
   true
 )
 

@@ -175,7 +175,7 @@ local before_unknown = #notices
 selvage.go_to('Nobody')
 check(
   'a name nobody carries says so',
-  said_since(before_unknown, 'no participant matches "Nobody"') ~= nil,
+  said_since(before_unknown, 'No participant matches "Nobody"') ~= nil,
   true
 )
 
@@ -250,7 +250,7 @@ local before_stale_go = #notices
 local _ = go_choice.on_choice(go_row)
 check(
   'choosing a peer who has since left refuses cleanly',
-  said_since(before_stale_go, 'no participant matches "' .. go_row.label .. '"') ~= nil,
+  said_since(before_stale_go, 'No participant matches "' .. go_row.label .. '"') ~= nil,
   true
 )
 peers_report({
@@ -344,7 +344,7 @@ peers_report({
 })
 check(
   'a peer leaving while pended matches nobody',
-  said_since(before_leftpend, 'no participant matches "Cara"') ~= nil,
+  said_since(before_leftpend, 'No participant matches "Cara"') ~= nil,
   true
 )
 local before_stalepend = #notices
@@ -395,7 +395,7 @@ local before_nodoc_pick = #notices
 nodoc_choice.on_choice(nodoc_row)
 check(
   'choosing them refuses with it',
-  said_since(before_nodoc_pick, 'nothing to go to: Cara is not in a document') ~= nil,
+  said_since(before_nodoc_pick, 'Nothing to go to: Cara is not in a document') ~= nil,
   true
 )
 check('  leaving the window where it was', vim.api.nvim_get_current_buf(), buf2)
@@ -403,13 +403,13 @@ local before_unknown_id = #notices
 selvage.go_to('p-zzz')
 check(
   'an unknown peer id matches nobody going',
-  said_since(before_unknown_id, 'no participant matches "p-zzz"') ~= nil,
+  said_since(before_unknown_id, 'No participant matches "p-zzz"') ~= nil,
   true
 )
 selvage.follow('p-zzz')
 check(
   '  or following',
-  said_since(before_unknown_id, 'no participant matches "p-zzz"') ~= nil,
+  said_since(before_unknown_id, 'No participant matches "p-zzz"') ~= nil,
   true
 )
 peers_report({
@@ -522,7 +522,7 @@ local before_missing = #notices
 selvage.go_to('Mallory')
 check(
   'a jump to no readable file refuses with what could not be opened',
-  said_since(before_missing, 'could not open ' .. gone_path .. ' from the room: there is no readable file there') ~= nil,
+  said_since(before_missing, 'Could not open ' .. gone_path .. ' from the room: there is no readable file there') ~= nil,
   true
 )
 check(
@@ -555,7 +555,7 @@ local before_outside = #notices
 selvage.go_to('Nancy')
 check(
   'a jump through a link out of the folder refuses as outside it',
-  said_since(before_outside, 'could not open ' .. link_path .. ' from the room: the path is not one this window shares') ~= nil,
+  said_since(before_outside, 'Could not open ' .. link_path .. ' from the room: the path is not one this window shares') ~= nil,
   true
 )
 check(
@@ -592,7 +592,7 @@ presence({
 })
 check(
   'a follow whose document will not open says so once',
-  said_since(before_unopen, 'could not open ' .. tmp_path .. ' from the room: there is no readable file there') ~= nil,
+  said_since(before_unopen, 'Could not open ' .. tmp_path .. ' from the room: there is no readable file there') ~= nil,
   true
 )
 check('  and stands through it', selvage.following(), 'Tmp')
@@ -620,13 +620,13 @@ local before_nosession = #notices
 selvage.go_to('Ada')
 check(
   'with no session going anywhere says there is none',
-  said_since(before_nosession, 'join a session first') ~= nil,
+  said_since(before_nosession, 'Join a session first') ~= nil,
   true
 )
 selvage.follow('Ada')
 check(
   '  and so does following',
-  said_since(before_nosession, 'join a session first') ~= nil,
+  said_since(before_nosession, 'Join a session first') ~= nil,
   true
 )
 check('following nothing is nothing', selvage.following(), nil)
@@ -754,7 +754,7 @@ vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/two.txt'), 0, 0, false, { '
 check('the edit reached the room', last_of('change') and last_of('change').path, 'g/two.txt')
 check(
   'a local edit in another shared document ends the follow',
-  said_since(before_other_edit, 'stopped following Ada') ~= nil,
+  said_since(before_other_edit, 'Stopped following Ada') ~= nil,
   true
 )
 check('  which the session reports', selvage.following(), nil)
@@ -770,7 +770,7 @@ local before_own_edit = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/one.txt'), 0, 0, false, { 'ALPHA' })
 check(
   'a local edit in the followed document ends the follow',
-  said_since(before_own_edit, 'stopped following Ada') ~= nil,
+  said_since(before_own_edit, 'Stopped following Ada') ~= nil,
   true
 )
 check('  and the buffer keeps the edit', table.concat(vim.api.nvim_buf_get_lines(vim.fn.bufnr('selvage://g/one.txt'), 0, 1, true), '\n'), 'ALPHA')
@@ -800,7 +800,7 @@ local before_crlf_local = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/two.txt'), -1, -1, true, { 'x\r', 'y' })
 check(
   'typing CRLF locally ends it all the same',
-  said_since(before_crlf_local, 'stopped following Ada') ~= nil,
+  said_since(before_crlf_local, 'Stopped following Ada') ~= nil,
   true
 )
 presence({ cursor_for('p-ada', 'g/one.txt', 13) })
@@ -814,7 +814,7 @@ selvage.follow('Ada')
 vim.cmd('SelvageStopFollowing')
 check(
   'stopping through the command says so',
-  said_since(before_stop, 'stopped following Ada') ~= nil,
+  said_since(before_stop, 'Stopped following Ada') ~= nil,
   true
 )
 check('  and takes the indicator down', vim.api.nvim_get_option_value('winbar', { win = 0 }), '')
@@ -822,7 +822,7 @@ local before_nothing = #notices
 vim.cmd('SelvageStopFollowing')
 check(
   'stopping with nothing to stop says so',
-  said_since(before_nothing, 'not following anyone') ~= nil,
+  said_since(before_nothing, 'Not following anyone') ~= nil,
   true
 )
 
@@ -846,7 +846,7 @@ check('the indicator answers a click', clicked, true)
 if clicked then
   check(
     '  stopping the follow',
-    said_since(before_click, 'stopped following Ada') ~= nil,
+    said_since(before_click, 'Stopped following Ada') ~= nil,
     true
   )
   check('  which the session reports', selvage.following(), nil)
@@ -942,7 +942,7 @@ local before_goto = #notices
 selvage.go_to('Bob')
 check(
   'going somewhere while following stops the follow first',
-  said_since(before_goto, 'stopped following Ada Lovelace') ~= nil,
+  said_since(before_goto, 'Stopped following Ada Lovelace') ~= nil,
   true
 )
 check('  and lands where asked', vim.fn.bufname('%'), 'selvage://g/two.txt')
@@ -1017,7 +1017,7 @@ local before_follow_nodoc = #notices
 selvage.follow('Cara')
 check(
   'Following a peer in no document refuses',
-  said_since(before_follow_nodoc, 'nothing to follow: Cara is not in a document') ~= nil,
+  said_since(before_follow_nodoc, 'Nothing to follow: Cara is not in a document') ~= nil,
   true
 )
 check('  establishing nothing', selvage.following(), nil)
@@ -1045,7 +1045,7 @@ local before_stale_follow = #notices
 follow_choice.on_choice(follow_row)
 check(
   'choosing a peer now in no document refuses with it',
-  said_since(before_stale_follow, 'nothing to follow: Ada Lovelace is not in a document') ~= nil,
+  said_since(before_stale_follow, 'Nothing to follow: Ada Lovelace is not in a document') ~= nil,
   true
 )
 check('  establishing nothing', selvage.following(), nil)
@@ -1058,7 +1058,7 @@ local before_left_pick = #notices
 follow_choice.on_choice(follow_row)
 check(
   'choosing a peer who has since left matches nobody',
-  said_since(before_left_pick, 'no participant matches "Ada Lovelace"') ~= nil,
+  said_since(before_left_pick, 'No participant matches "Ada Lovelace"') ~= nil,
   true
 )
 peers_report({
@@ -1138,7 +1138,7 @@ local before_ghost = #notices
 selvage.follow('Zed')
 check(
   'a follow that lands nowhere refuses instead of standing a ghost',
-  said_since(before_ghost, "nothing to follow: Zed's caret does not resolve here") ~= nil,
+  said_since(before_ghost, "Nothing to follow: Zed's caret does not resolve here") ~= nil,
   true
 )
 check('  establishing nothing', selvage.following(), nil)
@@ -1228,7 +1228,7 @@ local before_gone_follow = #notices
 selvage.follow('Zed')
 check(
   'Following a departed peer matches nobody',
-  said_since(before_gone_follow, 'no participant matches "Zed"') ~= nil,
+  said_since(before_gone_follow, 'No participant matches "Zed"') ~= nil,
   true
 )
 
