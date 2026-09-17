@@ -278,6 +278,31 @@ check(
 )
 check('  and nothing is dialled either', count_type('join'), joins_before)
 
+-- Substring matching is not parameter matching: `?bedroom=x&token=y` contains `room=`
+-- without naming a room, and `?room=&token=t` names one with nothing in it. Both are
+-- refused at the prompt rather than reaching the engine's own refusal.
+answer_with('ws://127.0.0.1:8080/session?bedroom=x&token=t')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'a lookalike parameter is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
+answer_with('ws://127.0.0.1:8080/session?room=&token=t')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin')
+check(
+  'an empty room value is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
 -- -- the auto-save knob -------------------------------------------------------------
 --
 -- Whether a document the room changes is written is the front-end's setting, as it is in the

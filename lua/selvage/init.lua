@@ -2928,14 +2928,15 @@ local function clipboard_invite()
 end
 
 --- Whether a typed value has an invite link's shape: a WebSocket address naming a room
---- and its token. A truncated paste fails here, in the other client's words, rather than
+--- and its token. The names match at a query boundary (`?`/`&`) with a non-empty value,
+--- so a `bedroom=` lookalike or an empty value does not pass. A truncated paste fails here, in the other client's words, rather than
 --- later as whatever the engine said: nobody can tell "bad paste" from "server down"
 --- from an ECONNREFUSED. A link that arrives by argument still goes to the engine, the
 --- way the other client sends one past its own box.
 local function is_invite_link(text)
   return text:match('^wss?://%S+$') ~= nil
-    and text:find('room=', 1, true) ~= nil
-    and text:find('token=', 1, true) ~= nil
+    and text:match('[?&]room=[^&]+') ~= nil
+    and text:match('[?&]token=[^&]+') ~= nil
 end
 
 --- The invite to join on, asked for when the command was given none.
