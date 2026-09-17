@@ -2915,16 +2915,20 @@ local function resolve_server_url(callback)
   end)
 end
 
---- The page CopyInvite links to: `vim.g.selvage_web_origin` when one is set, else
---- the Pi page default (`DEFAULT_WEB_ORIGIN`). A trailing slash is not a second
---- page, so it is stripped before the link is built.
+--- The page CopyInvite links to: `vim.g.selvage_web_origin` when it names an
+--- absolute `https:` origin, else the Pi page default (`DEFAULT_WEB_ORIGIN`). A
+--- non-HTTPS or unparsable value falls back rather than minting a cleartext link
+--- carrying the room's token. A trailing slash is not a second page, so it is
+--- stripped before the link is built.
 local function web_origin()
   local configured = vim.g.selvage_web_origin
-  local origin = DEFAULT_WEB_ORIGIN
-  if configured ~= nil and vim.trim(tostring(configured)) ~= '' then
-    origin = vim.trim(tostring(configured))
+  if configured ~= nil then
+    local trimmed = vim.trim(tostring(configured))
+    if trimmed:match('^https://%S+$') ~= nil then
+      return (trimmed:gsub('/+$', ''))
+    end
   end
-  return (origin:gsub('/+$', ''))
+  return DEFAULT_WEB_ORIGIN
 end
 
 --- Percent-encodes a query value the way the page builds its link: the unreserved

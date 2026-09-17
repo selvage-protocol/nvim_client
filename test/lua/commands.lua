@@ -492,6 +492,18 @@ check(
 )
 vim.g.selvage_web_origin = nil
 
+-- A non-https setting falls back to the default page rather than minting a
+-- cleartext link carrying the room's token.
+vim.g.selvage_web_origin = 'http://custom.example:9443/'
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  an http setting falls back to the default page',
+  registers['+'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-demo&token=t'
+)
+vim.g.selvage_web_origin = nil
+
 -- A process with nobody to answer the modal question cannot be asked, so the session it holds is
 -- not given up: the consequence is said and nothing else happens.
 vim.ui.input = builtin_input
