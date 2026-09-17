@@ -175,18 +175,32 @@ end
 
 --- The room's text for a path, as the edit the bridge would compute against what the buffer
 --- holds: the whole document replaced, which is the one range that does not care what is there,
---- followed by the save a document the room changed is written by.
+--- followed by the save a document the room changed is written by. An empty room text is the
+--- bridge's own diff of an empty mirror: the text inserted at the start, which is what carries
+--- a trailing newline into the buffer's empty last line.
 local function room_text(path, text, version)
   local body = text:gsub('\n$', '')
-  handle({
-    type = 'applyEdit',
-    id = message_id(),
-    path = path,
-    start = 0,
-    ['end'] = #body + 1,
-    text = body,
-    version = version,
-  })
+  if body == '' then
+    handle({
+      type = 'applyEdit',
+      id = message_id(),
+      path = path,
+      start = 0,
+      ['end'] = 0,
+      text = text,
+      version = version,
+    })
+  else
+    handle({
+      type = 'applyEdit',
+      id = message_id(),
+      path = path,
+      start = 0,
+      ['end'] = #body + 1,
+      text = body,
+      version = version,
+    })
+  end
   handle({ type = 'save', id = message_id(), path = path })
 end
 
@@ -232,7 +246,7 @@ end
 
 --- The text a buffer holds, as the room counts it.
 local function buffer_text(bufnr)
-  return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n') .. '\n'
+  return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n')
 end
 
 local GRANT = { 'README.md', 'notes/deep.txt', 'src/main.rs', 'src/util.rs' }
@@ -458,7 +472,7 @@ check("a listing that names it opens it as the mirror's file", vim.api.nvim_buf_
 check('  and that file is on disk', vim.fn.filereadable(root .. '/notes/deep.txt'), 1)
 check('  and the buffer it replaced is gone', vim.fn.bufnr('selvage://notes/deep.txt'), -1)
 check('  and the document is still held', table.concat(selvage.documents(), ','), 'notes/deep.txt')
-check('  and what the buffer held is still there', buffer_text(late), 'typed before the listing\n')
+check('  and what the buffer held is still there', buffer_text(late), 'typed before the listing')
 check('  and the file holds it, because this client holds it for the room', read(root .. '/notes/deep.txt'), 'typed before the listing\n')
 
 
@@ -498,9 +512,9 @@ handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } }
 
 check('a path that leaves the listing loses its file', vim.fn.filereadable(yanked .. '/notes/deep.txt'), 0)
 check('  and the buffer the person has open is not taken away', vim.api.nvim_buf_is_valid(open_buffer), true)
-check('  and it keeps its text', buffer_text(open_buffer), 'what the person was writing\n')
+check('  and it keeps its text', buffer_text(open_buffer), 'what the person was writing')
 check('  and its name', vim.api.nvim_buf_get_name(open_buffer), open_name)
-check('  and the document is still the room\'s', selvage.text('notes/deep.txt'), 'what the person was writing\n')
+check('  and the document is still the room\'s', selvage.text('notes/deep.txt'), 'what the person was writing')
 check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), true)
 check('  and it is not fetchable, because the listing no longer names it', vim.tbl_contains(selvage.fetchable(), 'notes/deep.txt'), false)
 
@@ -567,7 +581,7 @@ check(
   false
 )
 check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(kept_buf), true)
-check('  and it keeps its text', buffer_text(kept_buf), 'kept\n')
+check('  and it keeps its text', buffer_text(kept_buf), 'kept')
 
 -- An empty document the session already wrote is not a fresh open without an answer: the save
 -- marked it written even though its text is still empty, so the listing leaving it stays silent.
@@ -659,7 +673,7 @@ vim.fn.delete(planted_outside, 'rf')
 root = join({}, GRANT)
 selvage.open('notes/deep.txt')
 local buf = vim.api.nvim_get_current_buf()
-check('the placeholder opened empty', buffer_text(buf), '\n')
+check('the placeholder opened empty', buffer_text(buf), '')
 
 handle({
   type = 'applyEdit',
@@ -670,7 +684,7 @@ handle({
   text = 'the room wrote this',
   version = 0,
 })
-check("the room's text lands in the buffer", buffer_text(buf), 'the room wrote this\n')
+check("the room's text lands in the buffer", buffer_text(buf), 'the room wrote this')
 check('  and nothing is on disk yet', read(root .. '/notes/deep.txt'), '')
 
 handle({ type = 'save', id = message_id(), path = 'notes/deep.txt' })
@@ -686,7 +700,7 @@ root = join({}, GRANT)
 vim.fn.writefile({ 'a tool wrote this' }, root .. '/notes/deep.txt')
 selvage.open('notes/deep.txt')
 buf = vim.api.nvim_get_current_buf()
-check('a file a tool overwrote is read back into the buffer', buffer_text(buf), 'a tool wrote this\n')
+check('a file a tool overwrote is read back into the buffer', buffer_text(buf), 'a tool wrote this')
 handle({
   type = 'applyEdit',
   id = message_id(),

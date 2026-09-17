@@ -1,8 +1,9 @@
 -- A shared buffer: the translation between Neovim's byte positions and the companion's
 -- UTF-16 offsets, in both directions.
 --
--- The document's text is the buffer's lines joined by `\n` with a trailing `\n` — what Neovim's
--- own byte offsets count and what the file on disk holds. A shadow of the lines is kept because
+-- The document's text is the buffer's lines joined by `\n`, byte for byte what the room
+-- holds: a buffer whose last line is empty ends in a newline, and one whose last line has
+-- content does not. A shadow of the lines is kept because
 -- `on_bytes` reports what was removed as a range, not as text: the removed text is already gone
 -- from the buffer by the time the callback runs, and its length in UTF-16 units cannot be
 -- recovered from a buffer that no longer has it.
@@ -39,13 +40,14 @@ function Document.new(bufnr, path, send)
   return self
 end
 
---- The document's whole text, as the companion counts it.
+--- The document's whole text, as the companion counts it: the buffer's lines joined by
+--- `\n`, byte for byte what the room holds.
 function Document:text()
-  return table.concat(self.lines, '\n') .. '\n'
+  return table.concat(self.lines, '\n')
 end
 
---- The line at a 0-based row. `on_bytes` addresses the row after the last one — the position
---- past the document's final newline — and there is no line there.
+--- The line at a 0-based row. `on_bytes` addresses the row after the last one — the end of
+--- the document — and there is no line there.
 function Document:line(row)
   return self.lines[row + 1] or ''
 end
@@ -69,7 +71,7 @@ function Document:position(offset)
     end
     seen = seen + length + 1
   end
-  -- Past the final newline. A buffer holds lines, so there is no position after the last one
+  -- Past the end of the text. A buffer holds lines, so there is no position after the last one
   -- to address; the end of the last line is the closest thing that exists.
   local last = #self.lines
   return last - 1, #self.lines[last]
@@ -116,28 +118,13 @@ function Document:apply(edit)
   if edit.version ~= self.version then
     return false
   end
-  -- The one offset a buffer cannot address is the one past its final newline: the lines API
-  -- has no position there, and that is where an edit appending a line lands. Such an edit is
-  -- the same edit made at the end of the last line with its newline moved to the front —
-  -- appending `"b\n"` after the final newline and inserting `"\nb"` before it leave the same
-  -- text — so it is rewritten rather than clamped, which would put the text on the wrong line.
-  local length = self:prefix(#self.lines)
-  local text = edit.text
-  local first, first_col
+  -- The range counts the document's text, whose lines are the buffer's: a text ending in a
+  -- newline ends in an empty last line, and one without ends in its last line of content.
+  -- Either way the range lands on rows the lines API addresses, so it is mapped and written
+  -- as it stands.
+  local first, first_col = self:position(edit.start)
   local last, last_col = self:position(edit['end'])
-  if edit['end'] >= length then
-    -- A room document whose text does not end in a newline cannot be held in a buffer; the
-    -- newline this strips is one the companion's comparison then publishes back to the room.
-    text = text:gsub('\n$', '')
-    last, last_col = #self.lines - 1, #self.lines[#self.lines]
-  end
-  if edit.start >= length then
-    text = '\n' .. text
-    first, first_col = #self.lines - 1, #self.lines[#self.lines]
-  else
-    first, first_col = self:position(edit.start)
-  end
-  local replacement = vim.split(text, '\n', { plain = true })
+  local replacement = vim.split(edit.text, '\n', { plain = true })
   self.applying = true
   local ok, err = pcall(
     api.nvim_buf_set_text,
@@ -286,8 +273,14 @@ function Document:on_bytes(
   local new_end_row = start_row + new_row_count
   local new_end = new_row_count == 0 and start_col + new_end_col or new_end_col
 
-  local from = self:prefix(start_row) + utf16.of_byte(self:line(start_row), start_col)
-  local to = self:prefix(old_end_row) + utf16.of_byte(self:line(old_end_row), old_end)
+  -- A row past the last line is the end of the document: the text holds no trailing newline
+  -- for it to sit past, so it counts the text's own length.
+  local count = #self.lines
+  local past_end = self:prefix(count) - 1
+  local from = start_row >= count and past_end
+    or self:prefix(start_row) + utf16.of_byte(self:line(start_row), start_col)
+  local to = old_end_row >= count and past_end
+    or self:prefix(old_end_row) + utf16.of_byte(self:line(old_end_row), old_end)
 
   -- The rows the change now spans. The last of them can be the row past the buffer's end —
   -- an edit that appended a line ends there — which holds no line but does bound the text.
@@ -309,13 +302,16 @@ function Document:on_bytes(
     text = table.concat(parts, '\n')
   end
 
-  -- The row past the last line and the end of the document are one place to a buffer, which
-  -- always ends in a newline and cannot lose it. A change that reaches that row removed the
-  -- newline, so the text it deleted ends before it — unless the change brings a newline of its
-  -- own, or the text before it already ends at a line boundary.
-  local keeps_final_newline = text:find('\n$') ~= nil or (start_col == 0 and start_row > 0)
-  if old_end_row >= #self.lines and not keeps_final_newline then
-    to = math.min(to, self:prefix(#self.lines) - 1)
+  -- A change starting past the last line starts a new one: the newline it starts after is not
+  -- in the text, so the change brings it, in front. The span above padded the rows with the
+  -- empty line past the buffer's end, whose join put that newline at the back instead.
+  if start_row >= count then
+    text = '\n' .. text:gsub('\n$', '')
+  elseif old_end_row >= count and start_col == 0 and start_row > 0 and text:find('\n$') == nil then
+    -- A change reaching past the last line from a line boundary took the newline before that
+    -- line with it, so the removed text starts one unit earlier than the row does. A change
+    -- bringing a newline of its own already ends where it should.
+    from = from - 1
   end
 
   self:reshadow(start_row, old_end_row, rows)

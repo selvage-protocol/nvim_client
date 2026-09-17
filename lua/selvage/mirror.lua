@@ -515,8 +515,8 @@ function M.written(path)
   return state.written[path] == true
 end
 
---- Whether the path's file already holds `text`, read the way this client writes it: the lines of
---- a text whose final newline ends the last one.
+--- Whether the path's file already holds `text`, read the way this client writes it: one line
+--- per line of the text, an empty text holding none.
 ---
 --- This is what says a file is current without having to have watched it being written, so a fetch
 --- of a path this session already has does not write it again. It cannot tell an empty file from
@@ -535,8 +535,7 @@ function M.holds(path, text)
   if not ok then
     return false
   end
-  local body = text:gsub('\n$', '')
-  local wanted = body == '' and {} or vim.split(body, '\n', { plain = true })
+  local wanted = text == '' and {} or vim.split(text, '\n', { plain = true })
   if #lines ~= #wanted then
     return false
   end

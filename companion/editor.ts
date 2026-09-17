@@ -6,8 +6,9 @@
  * document's text synchronously, and the buffer it names is in another process, so this
  * class keeps a copy of every shared buffer and the front-end keeps it in step.
  *
- * A document's text is the buffer's lines joined by `\n` **with a trailing `\n`** — the text
- * Neovim's own byte offsets count, and the text the file on disk holds. Line endings are not
+ * A document's text is the buffer's lines joined by `\n`, byte for byte what the room holds:
+ * a buffer whose last line is empty ends in a newline, and one whose last line has content
+ * does not. Line endings are not
  * this adapter's business: a Neovim buffer holds lines, and `fileformat` turns them into CRLF
  * at write time, so the host always reports `\n` and `vendor/bridge/editing.ts`'s conversion
  * is a no-op here.

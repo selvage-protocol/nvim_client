@@ -753,7 +753,7 @@ local function share(bufnr, path)
   -- The same text `Document.new` will shadow, read once. The companion decodes its stdin as
   -- UTF-8, so a buffer whose bytes are not UTF-8 would reach the room as U+FFFD; refusing it
   -- here keeps the `open` out of the room and every later `change` with it.
-  local text = table.concat(api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n') .. '\n'
+  local text = table.concat(api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n')
   if not utf16.valid(text) then
     if state.unshareable[path] == nil then
       state.unshareable[path] = true
@@ -2483,7 +2483,7 @@ local function on_report(report)
             previous[path]
             and not mirror.granted(path)
             and not written_before[path]
-            and document:text() == '\n'
+            and document:text() == ''
           then
             notice_gone(path)
           end

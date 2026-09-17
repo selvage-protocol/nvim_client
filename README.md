@@ -27,8 +27,9 @@ The plugin and the companion speak **one JSON object per line** over the compani
 stdout, in both directions. `companion/ipc.ts` is the normative list; this is the summary.
 
 **Every offset is a UTF-16 code unit**, counted in the document's text as Neovim holds it: the
-buffer's lines joined by `\n` with a trailing `\n`. That is the unit `Y.Text` indices are counted
-in and the unit `vendor/bridge/editing.ts` works in, so nothing is converted on the companion's
+buffer's lines joined by `\n`, byte for byte what the room holds — a buffer whose last line is
+empty ends in a newline, and one whose last line has content does not. That is the unit `Y.Text`
+indices are counted in and the unit `vendor/bridge/editing.ts` works in, so nothing is converted on the companion's
 side; Lua converts from Neovim's byte positions, where the bytes are.
 
 Line endings are not this adapter's business. A Neovim buffer holds lines and `fileformat`
@@ -477,9 +478,6 @@ text in it, and the deleted path — materialised since the join — leaves both
   for `:SelvageOpen` rather than opening a window each, and a document the host opens after the
   join gets a buffer without taking the guest's window — except the first one into a room that
   was empty at the join, which is the landing the join asked for.
-- A room document whose text does not end in a newline gains one here. Neovim's line-array
-  buffer cannot represent a missing final newline, so the Neovim side publishes the newline it
-  has to add.
 - A peer's selection is the colour blended with the editor's background rather than a real
   translucent fill: a buffer highlight has no alpha, and a float would cost per-window
   bookkeeping on every scroll and edit for less than the block cursor gives at the same place.

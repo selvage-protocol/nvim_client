@@ -114,10 +114,9 @@ test("a guest's own buffer is held back until the room's text arrives", async ()
   await it.front.drain();
 
   // Nothing of that buffer goes in front of the bridge until the text is here. A buffer reconciled
-  // against an empty replica is asked to hold the empty document, which a Neovim buffer cannot —
-  // its text always ends in a newline, so the buffer would keep one the room does not have — and
-  // whatever it still holds when that lands is the buffer's own content rather than the user's
-  // edit. The hold is what makes the room send the text.
+  // against an empty replica is asked to hold the empty document, while the room may yet send
+  // a seed — and whatever the buffer still holds when that lands is the buffer's own content
+  // rather than the user's edit. The hold is what makes the room send the text.
   assert.deepEqual(it.applies, [], 'the guest buffer was reconciled against an empty replica');
   assert.deepEqual(it.engine.opened, ['notes.txt'], 'the path is held in the room');
   assert.equal(it.engine.text('notes.txt'), '', 'the guest published its own buffer');
