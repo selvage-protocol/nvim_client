@@ -1344,7 +1344,232 @@ local before_stale = count_type('change')
 vim.api.nvim_buf_set_lines(stale_buf, -1, -1, true, { 'after' })
 check('  and a keystroke still reaches the room', count_type('change'), before_stale + 1)
 
+
+-- The section before this one leaves its session standing, to prove a late message from
+-- the process it let go says nothing: a new host on top of it would only reach for the
+-- old room's invite, so this one ends it first.
 selvage.leave()
+-- -- a companion that misspeaks ---------------------------------------------------------
+--
+-- The companion is the same user's own process, so a misshapen message is a bug rather than
+-- an attack — but one answered blindly fails inside the job callback, aborting the message
+-- with the follow and go-to retries piggybacked on it. Each arm reads only the fields it
+-- needs, a save for an unknown path answers false, and an unknown type is named rather than
+-- dropped in silence.
+
+vim.cmd('edit! ' .. path)
+local before_shapes_host = #sent
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-shapes' })
+-- The last message is not necessarily the open: reloading the file settles a change the
+-- buffer still held through the document the previous session left attached.
+local shared_path = nil
+for index = #sent, before_shapes_host + 1, -1 do
+  if sent[index].type == 'open' then
+    shared_path = sent[index].path
+    break
+  end
+end
+check('the shape section shares a document to misspeak about', shared_path ~= nil, true)
+
+local before_shapes = #notices
+check(
+  'presence with cursors of the wrong type draws nothing and fails nothing',
+  pcall(handlers().on_message, { type = 'presence', cursors = 'x' }),
+  true
+)
+check(
+  '  and a cursor entry of the wrong type is skipped where it stands',
+  pcall(handlers().on_message, { type = 'presence', cursors = { 7 } }),
+  true
+)
+check(
+  '  and a held-path entry with offsets of the wrong type is skipped too',
+  pcall(handlers().on_message, {
+    type = 'presence',
+    cursors = {
+      { peerId = 'p-bad', label = 'Bad', path = shared_path, anchor = 'x' },
+      { peerId = 'p-worse', label = 'Worse', path = shared_path, anchor = 0 },
+    },
+  }),
+  true
+)
+check(
+  '  and the next well-shaped presence still draws',
+  pcall(handlers().on_message, { type = 'presence', cursors = {} }),
+  true
+)
+
+local before_save = #sent
+check(
+  'a save for a path this session holds nothing for answers false',
+  pcall(handlers().on_message, { type = 'save', id = 77, path = 'never-shared.txt' }),
+  true
+)
+check('  answering the save the companion asked for', sent[before_save + 1].type, 'saved')
+check('  with the refusal', sent[before_save + 1].ok, false)
+check(
+  '  and a save with no path at all answers false too',
+  pcall(handlers().on_message, { type = 'save', id = 78 }),
+  true
+)
+check('  with the refusal', sent[before_save + 2].ok, false)
+
+local before_edit = #sent
+check(
+  'an edit with offsets of the wrong type is answered, not applied',
+  pcall(handlers().on_message, {
+    type = 'applyEdit',
+    id = 79,
+    path = shared_path,
+    start = 'x',
+    ['end'] = 1,
+    text = 'z',
+    version = 0,
+  }),
+  true
+)
+check('  answering the edit the companion asked for', sent[before_edit + 1].type, 'applied')
+check('  with the refusal', sent[before_edit + 1].ok, false)
+
+check(
+  'an unknown type is named rather than dropped in silence',
+  pcall(handlers().on_message, { type = 'frobnicate' }),
+  true
+)
+check(
+  '  naming the type',
+  said_since(before_shapes, 'Unknown message type from the companion: frobnicate.') ~= nil,
+  true
+)
+local before_second = #notices
+handlers().on_message({ type = 'frobnicate' })
+check('  once per type, not once per message', said_since(before_second, 'Unknown message type') ~= nil, false)
+check(
+  'a message with no table to read a type off is said and dropped',
+  pcall(handlers().on_message, 7),
+  true
+)
+check(
+  '  as unreadable',
+  said_since(before_shapes, 'Unreadable message from the companion.') ~= nil,
+  true
+)
+check(
+  'a report that is not a table is said and dropped',
+  pcall(handlers().on_message, { type = 'report' }),
+  true
+)
+check(
+  'a status that is not a word leaves the session standing',
+  pcall(handlers().on_message, { type = 'status', state = 7 }),
+  true
+)
+check('  still hosting afterwards', selvage.session().status, 'hosting')
+selvage.leave()
+
+-- -- presence redraws only what moved -----------------------------------------------------
+--
+-- Every report recreated every caret's highlight, at a highlight set per cursor per report.
+-- A report that moves no colour, fill or background sets nothing now; one that moves a
+-- colour repaints.
+
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-paint' })
+local paint_path = nil
+for index = #sent, 1, -1 do
+  if sent[index].type == 'open' then
+    paint_path = sent[index].path
+    break
+  end
+end
+check('the repaint section shares a document to draw in', paint_path ~= nil, true)
+
+local hl_sets = 0
+local real_set_hl = vim.api.nvim_set_hl
+vim.api.nvim_set_hl = function(...)
+  hl_sets = hl_sets + 1
+  return real_set_hl(...)
+end
+local paint_cursor = {
+  peerId = 'p-paint',
+  label = 'Paint',
+  path = paint_path,
+  anchor = 0,
+  head = 0,
+  colour = '#61afef',
+  fill = '#61afef40',
+}
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+local sets_after_first = hl_sets
+check('the first report paints', sets_after_first > 0, true)
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+check('a report that changed nothing sets no highlight', hl_sets, sets_after_first)
+paint_cursor.colour = '#98c379'
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+check('  while a colour that moved repaints', hl_sets > sets_after_first, true)
+-- A selection to fill, so the fill has something to lose: caret-only reports never call it.
+paint_cursor.anchor = 0
+paint_cursor.head = 3
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+local paint_ns = vim.api.nvim_get_namespaces()['selvage.presence']
+local fill_name = nil
+for _, mark in ipairs(
+  vim.api.nvim_buf_get_extmarks(vim.api.nvim_get_current_buf(), paint_ns, 0, -1, { details = true })
+) do
+  if mark[4].end_row ~= nil and mark[4].sign_text == nil then
+    fill_name = mark[4].hl_group
+  end
+end
+check(
+  'the selection is filled',
+  fill_name ~= nil and vim.api.nvim_get_hl(0, { name = fill_name }).bg ~= nil,
+  true
+)
+vim.cmd('highlight clear')
+check(
+  '  until a colorscheme clears it',
+  fill_name ~= nil and vim.api.nvim_get_hl(0, { name = fill_name }).bg == nil,
+  true
+)
+vim.api.nvim_exec_autocmds('ColorScheme', {})
+check(
+  '  and the session repaints it',
+  fill_name ~= nil and vim.api.nvim_get_hl(0, { name = fill_name }).bg ~= nil,
+  true
+)
+vim.api.nvim_set_hl = real_set_hl
+
+selvage.leave()
+
+-- The framing drops a line that decoded to no shape before any handler runs: a bare value
+-- decodes fine and would fail only when something indexes it, far from the line that caused
+-- it.
+local real_jobstart = vim.fn.jobstart
+vim.fn.jobstart = function()
+  return 1
+end
+local framing = assert(loadfile(vim.fn.getcwd() .. '/lua/selvage/companion.lua'))()
+vim.fn.jobstart = real_jobstart
+local framed = framing.start({ on_message = function() end, on_exit = function() end }, { 'true' })
+check('the framing starts without a companion behind it', framed ~= nil, true)
+local received = {}
+local function receive(lines)
+  framed:receive(lines, function(message)
+    received[#received + 1] = message
+  end)
+end
+local before_framing = #notices
+receive({ '7\n', '' })
+check('a line that decoded to no shape reaches no handler', #received, 0)
+check(
+  '  and is said the way an undecodable line is',
+  said_since(before_framing, 'unreadable message from the companion') ~= nil,
+  true
+)
+receive({ '{"type":"leave"}\n', '' })
+check('  while a shaped line still reaches its handler', #received, 1)
+check('  naming its type', received[1] and received[1].type, 'leave')
 
 vim.notify = notify
 

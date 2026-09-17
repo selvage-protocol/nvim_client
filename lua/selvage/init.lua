@@ -52,6 +52,9 @@ local state = {
   --- The buffers with no file this session already named, so the refusal is said once per
   --- buffer: entering and leaving an untitled buffer is ordinary editing, not news.
   unfiled = {},
+  --- The room paths this session refused to share because the buffer's name is not a
+  --- regular file, so the refusal is said once per path.
+  linked = {},
   group = nil,
   --- The augroup the guest's mirror is watched with: reading one of its files shares it with the
   --- room, and saving one is the session's to route rather than the editor's to write.
@@ -76,6 +79,10 @@ local state = {
   presence_marks = {},
   peer_groups = {},
   peer_fills = {},
+  --- The paint a peer's highlights were last set with, so a report that changes nothing sets
+  --- nothing: every report redrew every caret's highlight, at a highlight set per cursor per
+  --- report, on top of the marks the draw already recreates.
+  peer_paints = {},
   peer_count = 0,
   cursors = {},
   -- The peers the last presence report drew, as rows for `:SelvagePeers` to print.
@@ -227,7 +234,18 @@ local function peer_highlight(cursor)
     name = 'SelvagePeer' .. state.peer_count
     state.peer_groups[cursor.peerId] = name
   end
-  api.nvim_set_hl(0, name, { fg = '#000000', bg = cursor.colour or '#888888', bold = true })
+  -- The set is the cost, not the name: a colour that did not move since the last report keeps
+  -- the highlight it already has.
+  local paints = state.peer_paints[cursor.peerId]
+  if paints == nil then
+    paints = {}
+    state.peer_paints[cursor.peerId] = paints
+  end
+  local paint = tostring(cursor.colour or '#888888')
+  if paints.group ~= paint then
+    paints.group = paint
+    api.nvim_set_hl(0, name, { fg = '#000000', bg = cursor.colour or '#888888', bold = true })
+  end
   return name
 end
 
@@ -260,23 +278,34 @@ local function peer_fill(cursor)
     name = 'SelvagePeer' .. state.peer_count .. 'Fill'
     state.peer_fills[cursor.peerId] = name
   end
-  local r, g, b = channels(cursor.colour)
-  if r == nil then
-    api.nvim_set_hl(0, name, {})
-    return name
+  local paints = state.peer_paints[cursor.peerId]
+  if paints == nil then
+    paints = {}
+    state.peer_paints[cursor.peerId] = paints
   end
   local background = api.nvim_get_hl(0, { name = 'Normal' }).bg
   if background == nil then
     background = vim.o.background == 'light' and 0xffffff or 0x000000
   end
-  local nr = math.floor(background / 65536) % 256
-  local ng = math.floor(background / 256) % 256
-  local nb = background % 256
-  local alpha = fill_alpha(cursor.fill)
-  local function mix(fore, back)
-    return math.floor(fore * alpha + back * (1 - alpha) + 0.5)
+  -- The fill, the colour and the background it was resolved against: a report that moves
+  -- none of them keeps the highlight it already has, a theme switch included.
+  local paint = tostring(cursor.colour) .. '\0' .. tostring(cursor.fill) .. '\0' .. tostring(background)
+  if paints.fill ~= paint then
+    paints.fill = paint
+    local r, g, b = channels(cursor.colour)
+    if r == nil then
+      api.nvim_set_hl(0, name, {})
+      return name
+    end
+    local nr = math.floor(background / 65536) % 256
+    local ng = math.floor(background / 256) % 256
+    local nb = background % 256
+    local alpha = fill_alpha(cursor.fill)
+    local function mix(fore, back)
+      return math.floor(fore * alpha + back * (1 - alpha) + 0.5)
+    end
+    api.nvim_set_hl(0, name, { bg = ('#%02x%02x%02x'):format(mix(r, nr), mix(g, ng), mix(b, nb)) })
   end
-  api.nvim_set_hl(0, name, { bg = ('#%02x%02x%02x'):format(mix(r, nr), mix(g, ng), mix(b, nb)) })
   return name
 end
 
@@ -343,73 +372,90 @@ end
 --- stays against the selection fill rather than beside it. A row of its own above the line reads
 --- the position wrong, as before: a virtual line starts at the text column, not the caret's.
 local function draw_presence(cursors)
-  state.cursors = cursors or {}
+  -- The report is the companion's, and a misshapen one must not wedge the drawing: `ipairs`
+  -- over a string errors inside the job callback, aborting the message with the follow and
+  -- go-to retries piggybacked on it. Anything but a table clears the drawing; a cursor entry
+  -- that is not a table is skipped where it stands.
+  if type(cursors) ~= 'table' then
+    cursors = {}
+  end
+  state.cursors = cursors
   state.peers = {}
   clear_presence()
   local ns = presence_namespace()
   for _, cursor in ipairs(state.cursors) do
-    local document = state.documents[cursor.path]
-    if document ~= nil and api.nvim_buf_is_valid(document.bufnr) then
-      local label = cursor.label or cursor.peerId or 'peer'
-      local name = peer_highlight(cursor)
-      -- What the gutter shows is built here, where it is drawn, so the list `:SelvagePeers`
-      -- prints is this session's own rendering of the peers rather than a second opinion on it.
-      state.peers[#state.peers + 1] = {
-        peerId = cursor.peerId,
-        label = label,
-        sign = peer_sign(label),
-        role = cursor.role,
-        path = cursor.path,
-        colour = cursor.colour,
-        highlight = name,
-      }
-      -- The selection first, so the caret block sits over it. `anchor` after `head` is a
-      -- selection made backwards, which is still a selection: the range is the two ends in
-      -- order, and a collapsed one is a caret with nothing to fill.
-      if cursor.anchor ~= cursor.head then
-        local from, to = cursor.anchor, cursor.head
-        if from > to then
-          from, to = to, from
+    if type(cursor) == 'table' then
+      -- The offsets are the companion's: a table cursor with a held path but missing or
+      -- non-numeric offsets would fail in the comparison and `position` calls below,
+      -- inside the job callback, aborting the message with the retries piggybacked on it.
+      local document = type(cursor.path) == 'string' and state.documents[cursor.path] or nil
+      if
+        document ~= nil
+        and api.nvim_buf_is_valid(document.bufnr)
+        and type(cursor.anchor) == 'number'
+        and type(cursor.head) == 'number'
+      then
+        local label = cursor.label or cursor.peerId or 'peer'
+        local name = peer_highlight(cursor)
+        -- What the gutter shows is built here, where it is drawn, so the list `:SelvagePeers`
+        -- prints is this session's own rendering of the peers rather than a second opinion on it.
+        state.peers[#state.peers + 1] = {
+          peerId = cursor.peerId,
+          label = label,
+          sign = peer_sign(label),
+          role = cursor.role,
+          path = cursor.path,
+          colour = cursor.colour,
+          highlight = name,
+        }
+        -- The selection first, so the caret block sits over it. `anchor` after `head` is a
+        -- selection made backwards, which is still a selection: the range is the two ends in
+        -- order, and a collapsed one is a caret with nothing to fill.
+        if cursor.anchor ~= cursor.head then
+          local from, to = cursor.anchor, cursor.head
+          if from > to then
+            from, to = to, from
+          end
+          local from_row, from_col = document:position(from)
+          local to_row, to_col = document:position(to)
+          local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, from_row, from_col, {
+            end_row = to_row,
+            end_col = to_col,
+            hl_group = peer_fill(cursor),
+            priority = 100,
+          })
+          if ok then
+            state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
+          end
         end
-        local from_row, from_col = document:position(from)
-        local to_row, to_col = document:position(to)
-        local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, from_row, from_col, {
-          end_row = to_row,
-          end_col = to_col,
-          hl_group = peer_fill(cursor),
-          priority = 100,
-        })
+        local row, col = document:position(cursor.head)
+        local line = document:line(row)
+        -- The offset names a position between two cells; the block goes on the one to the left.
+        -- The start of a line has none, so the block falls back to the cell the caret is on.
+        local from = cell_before(line, col)
+        if from == nil then
+          from = col
+        end
+        local caret = {
+          sign_text = peer_sign(label),
+          sign_hl_group = name,
+          -- Above the fill, so the first cell of a backwards selection reads as the caret.
+          priority = 110,
+        }
+        if from < #line then
+          caret.end_row = row
+          caret.end_col = cell_end(line, from)
+          caret.hl_group = name
+        else
+          -- No cell at the caret either — an empty line — so the block is the one drawn in the
+          -- empty cell. Nothing is inserted, so the line keeps its width.
+          caret.virt_text = { { ' ', name } }
+          caret.virt_text_pos = 'overlay'
+        end
+        local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, from, caret)
         if ok then
           state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
         end
-      end
-      local row, col = document:position(cursor.head)
-      local line = document:line(row)
-      -- The offset names a position between two cells; the block goes on the one to the left.
-      -- The start of a line has none, so the block falls back to the cell the caret is on.
-      local from = cell_before(line, col)
-      if from == nil then
-        from = col
-      end
-      local caret = {
-        sign_text = peer_sign(label),
-        sign_hl_group = name,
-        -- Above the fill, so the first cell of a backwards selection reads as the caret.
-        priority = 110,
-      }
-      if from < #line then
-        caret.end_row = row
-        caret.end_col = cell_end(line, from)
-        caret.hl_group = name
-      else
-        -- No cell at the caret either — an empty line — so the block is the one drawn in the
-        -- empty cell. Nothing is inserted, so the line keeps its width.
-        caret.virt_text = { { ' ', name } }
-        caret.virt_text_pos = 'overlay'
-      end
-      local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, from, caret)
-      if ok then
-        state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
       end
     end
   end
@@ -581,6 +627,16 @@ local function watch_presence()
     group = state.presence_group,
     callback = schedule_selection,
   })
+  -- A colorscheme runs `highlight clear`, which takes the peer groups the session made with
+  -- it: without this the paint cache would skip setting them ever again, leaving carets
+  -- and fills unstyled for the rest of the session.
+  api.nvim_create_autocmd('ColorScheme', {
+    group = state.presence_group,
+    callback = function()
+      state.peer_paints = {}
+      draw_presence(state.cursors)
+    end,
+  })
 end
 
 --- The folder this session's grant is rooted at: where the person stood when they started it.
@@ -632,6 +688,18 @@ local function refuse_unfiled(bufnr)
   )
 end
 
+--- Says, once per path, that a buffer's name is not a regular file and so is not the room's
+--- to share. The serve path a peer's ask takes refuses every link (`companion/grant.ts`
+--- reads with `O_NOFOLLOW`); the share path must not read straight through one and publish
+--- the target's bytes. The name is read with `lstat`, which reports the link itself.
+local function refuse_link(path)
+  if state.linked[path] ~= nil then
+    return
+  end
+  state.linked[path] = true
+  notify(('%s is not a regular file, so it is not shared.'):format(path), vim.log.levels.WARN)
+end
+
 --- The room path a buffer is shared under, and the absolute name it is refused for when it
 --- is not one to share.
 ---
@@ -670,6 +738,16 @@ local end_follow
 
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
+    return
+  end
+  -- The buffer's name is read with `lstat` before its text is: a link inside the grant
+  -- would otherwise be read straight through and its target's bytes published to the room,
+  -- which the serve path a peer's ask takes refuses. Anything but a regular file — a link,
+  -- a directory, a socket — is refused the way a file outside the grant is. A name with
+  -- nothing behind it is a file the person has not written yet, and shares empty.
+  local behind = uv.fs_lstat(api.nvim_buf_get_name(bufnr))
+  if behind ~= nil and behind.type ~= 'file' then
+    refuse_link(path)
     return
   end
   -- The same text `Document.new` will shadow, read once. The companion decodes its stdin as
@@ -1065,6 +1143,9 @@ end
 --- wait is for the file and not for a message: content is fetched when it is on disk and not
 --- before, and a search over the mirror sees exactly that.
 ---
+--- The command returns while the room answers: the completion is a later notice, said when
+--- the files are on disk or when the wait runs out, so a slow room never holds the editor.
+---
 --- @param path string|nil one path, a directory of them, or nil for the whole listing
 function M.fetch(path)
   if not in_session() then
@@ -1125,29 +1206,47 @@ function M.fetch(path)
     elseif not mirror.holds(target, document:text()) then
       -- A document this session already holds: the file is given what this client holds for the
       -- room, so that fetching a path whose file a tool overwrote is a fetch and not a no-op.
-      document:save()
+      -- The file is given what this client holds for the room, which is the room's text to
+      -- the fetch's own accounting: writing it counts as fetched.
+      document:save(true)
     end
   end
+  -- The wait is a deferred re-check, not a foreground one: a fetch of a whole project holds
+  -- the editor for up to a minute if the room is slow, and the command should return while
+  -- the room answers. What is already held is said at once; the rest is said when it arrives
+  -- or when the wait runs out.
   local timeout = fetch_timeout_ms(#targets)
-  vim.wait(timeout, function()
-    return not in_session() or #unfetched(pending) == 0
-  end, 50)
-  if not in_session() then
-    notify('The session ended before the files were fetched.', vim.log.levels.WARN)
-    return
+  local generation = state.generation
+  local deadline = uv.hrtime() + timeout * 1000000
+  local function revisit()
+    -- A fetch a later session outlived is that session's silence: the room it asked is gone,
+    -- and its deadline must not speak into the one that replaced it. A session that ended
+    -- with nothing after it still ends the wait the same way the foreground one did.
+    if state.generation ~= generation and in_session() then
+      return
+    end
+    if not in_session() then
+      notify('The session ended before the files were fetched.', vim.log.levels.WARN)
+      return
+    end
+    local left = unfetched(pending)
+    if #left == 0 then
+      notify('Fetched the files.')
+      return
+    end
+    if uv.hrtime() >= deadline then
+      notify(
+        ('Fetched the files; these had not arrived within %ds: %s.'):format(
+          seconds(timeout),
+          table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
+        ),
+        vim.log.levels.WARN
+      )
+      return
+    end
+    vim.defer_fn(revisit, 50)
   end
-  local left = unfetched(pending)
-  if #left == 0 then
-    notify('Fetched the files.')
-    return
-  end
-  notify(
-    ('Fetched the files; these had not arrived within %ds: %s.'):format(
-      seconds(timeout),
-      table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
-    ),
-    vim.log.levels.WARN
-  )
+  revisit()
 end
 
 -- -- going to a participant, and following one ------------------------------------
@@ -1347,6 +1446,10 @@ local function land(peer_id)
     if not opened then
       return false, 'open-failed', err
     end
+    -- A landing that opens takes a hold: the document joins the room's open set, so every
+    -- peer receives it, the way a fetch does. Said once, where the hold is taken, in the
+    -- fetch's own sentence shape — not on every frame that lands on it afterwards.
+    notify(('%s is opened in the room, so every peer receives it.'):format(cursor.path))
     if state.role ~= 'host' then
       return false, 'waiting'
     end
@@ -1576,8 +1679,9 @@ local function land_follow()
 end
 
 --- Lands the follow again on a new frame: the peer moved, or their text arrived. A frame
---- with nothing drawn for them is a frame with nothing to do — they may be between
---- documents, or in one this client does not hold — so the follow stands and stays silent.
+--- with nothing drawn for them is a frame with nothing to land on — they may be between
+--- documents, or in one this client does not hold — so the follow stands, saying so once on
+--- the first such frame and never per frame.
 local function follow_frame()
   local following = state.following
   if following == nil then
@@ -1585,6 +1689,8 @@ local function follow_frame()
   end
   local ok, reason, err = land_follow()
   if ok then
+    -- Drawable again: the next undrawable stretch is news again too.
+    following.gone_warned = false
     return true
   end
   if reason == 'open-failed' then
@@ -1599,6 +1705,14 @@ local function follow_frame()
         vim.log.levels.ERROR
       )
     end
+  end
+  if reason == 'unknown' and not following.gone_warned then
+    -- The first frame with no drawable caret: the indicator keeps saying Following and
+    -- the window stays put, so the change from somewhere to nowhere is said once rather
+    -- than never, and never per frame. A document opened here whose text still arrives is
+    -- 'waiting', not 'unknown', and stays silent: a frame away from landing.
+    following.gone_warned = true
+    notify(('%s is not in a document; still following.'):format(following.label))
   end
   return false
 end
@@ -1942,7 +2056,7 @@ local function remirror_documents()
           -- The file the buffer is now opened as holds what this client holds for the room. An
           -- empty placeholder is left alone: there is nothing to write that the file does not
           -- already hold.
-          replaced:save()
+          replaced:save(true)
         end
       end
     end
@@ -2107,6 +2221,7 @@ local function forget_documents()
   state.unshareable = {}
   state.outside = {}
   state.unfiled = {}
+  state.linked = {}
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
@@ -2126,6 +2241,7 @@ local function reset()
   end
   state.peer_groups = {}
   state.peer_fills = {}
+  state.peer_paints = {}
   state.peer_count = 0
   state.generation = state.generation + 1
   state.selection_armed = false
@@ -2472,10 +2588,33 @@ local function on_report(report)
   end
 end
 
+--- The companion message types this session already named as unknown, so the version-skew
+--- warning is said once per type rather than once per message.
+local warned_message_types = {}
 local function on_message(message)
+  -- The companion is the same user's own process, not a remote peer, so a misshapen message
+  -- is a bug rather than an attack — but one answered blindly fails inside the job callback,
+  -- aborting the message with the follow and go-to retries piggybacked on it. Anything
+  -- without a type is said and dropped; each arm below reads only the fields it needs.
+  if type(message) ~= 'table' or type(message.type) ~= 'string' then
+    notify('Unreadable message from the companion.', vim.log.levels.WARN)
+    return
+  end
   if message.type == 'applyEdit' then
-    local document = state.documents[message.path]
-    local ok = document ~= nil and document:apply(message) or false
+    local document = type(message.path) == 'string' and state.documents[message.path] or nil
+    -- The range is applied against counted text: a start, end, text or version of the wrong
+    -- type would fail inside the buffer arithmetic, aborting the message with the retries
+    -- piggybacked on it. Answered false, like a version the front-end has left.
+    local ok = false
+    if
+      document ~= nil
+      and type(message.start) == 'number'
+      and type(message['end']) == 'number'
+      and type(message.text) == 'string'
+      and type(message.version) == 'number'
+    then
+      ok = document:apply(message)
+    end
     state.process:send({ type = 'applied', id = message.id, ok = ok })
     -- The room's text moved under the follow: land again where the peer's caret resolves
     -- now. A remote edit is not a local one, so it never ends the follow.
@@ -2483,24 +2622,46 @@ local function on_message(message)
     -- The text a pending go-to waited on may have arrived with this edit.
     retry_go_to()
   elseif message.type == 'save' then
-    local document = state.documents[message.path]
-    local ok = document == nil or document:save()
+    local document = type(message.path) == 'string' and state.documents[message.path] or nil
+    -- A path this session holds nothing for answers false: the companion's save policy would
+    -- otherwise hear that a document reached the disk it never touched.
+    local ok = document ~= nil and document:save(true)
     state.process:send({ type = 'saved', id = message.id, ok = ok })
   elseif message.type == 'status' then
-    on_status(message)
+    -- The session's standing is a word from a fixed set: anything else leaves the guard
+    -- this session's liveness is read from holding whatever it held.
+    if type(message.state) == 'string' then
+      on_status(message)
+    else
+      notify('Unreadable status from the companion.', vim.log.levels.WARN)
+    end
   elseif message.type == 'refused' then
     -- This process did not open a second session: one is already live. The commands ask before
     -- they send one, so this is the answer when something else did not.
     local where = message.what == 'host' and 'hosting' or 'in'
     notify(('Already %s room %s; leave that session first.'):format(where, tostring(message.roomId)), vim.log.levels.WARN)
   elseif message.type == 'report' then
-    on_report(message.report)
+    if type(message.report) == 'table' then
+      on_report(message.report)
+    else
+      notify('Unreadable report from the companion.', vim.log.levels.WARN)
+    end
   elseif message.type == 'presence' then
     draw_presence(message.cursors)
     -- The peer may have moved, or arrived where this client can draw them: land again.
     follow_frame()
     -- ... or arrived where a pending go-to can land: the same frame unlocks both.
     retry_go_to()
+  else
+    -- A version-skewed companion's new message would otherwise desync the versions without
+    -- a word. Said once per type rather than per message, so a repeated one does not flood.
+    if not warned_message_types[message.type] then
+      warned_message_types[message.type] = true
+      notify(
+        ('Unknown message type from the companion: %s.'):format(message.type),
+        vim.log.levels.WARN
+      )
+    end
   end
 end
 
@@ -2803,6 +2964,13 @@ function M.host(url)
     end
     return
   end
+  -- A session being opened is one in flight: a second host behind it earns the companion's
+  -- refusal, whose sentence describes a live room rather than a double invocation half a
+  -- second apart.
+  if state.status == 'connecting' then
+    notify('A session is already being opened.', vim.log.levels.WARN)
+    return
+  end
   if in_session() then
     local can_leave = confirm_leave(
       ('You are in room %s; hosting a session means leaving it first.'):format(tostring(state.room)),
@@ -2842,6 +3010,12 @@ end
 --- room ends this one for everyone in it, and a mistyped link must not do that on its own.
 function M.join(invite)
   local wanted = vim.trim(invite or '')
+  -- As hosting one: a second join behind a session being opened earns the companion's
+  -- refusal for a room that was never live.
+  if state.status == 'connecting' then
+    notify('A session is already being opened.', vim.log.levels.WARN)
+    return
+  end
   if in_session() then
     local can_leave
     if state.role == 'host' then

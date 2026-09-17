@@ -247,6 +247,29 @@ vim.g.selvage_auto_save = nil
 vim.cmd('SelvageHost ws://127.0.0.1:1')
 check('  and an unset global puts nothing on the wire', vim.json.encode(last_of('host')):find('autoSave'), nil)
 
+
+-- -- a session being opened -----------------------------------------------------------
+--
+-- A second host or join half a second after the first is a double invocation, not a live
+-- room to refuse: the companion's refusal sentence describes the room still standing,
+-- so the commands hold the second one back while the first is in flight.
+
+vim.g.selvage_display_name = 'Test User'
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+local hosts_opening = count_type('host')
+handlers().on_message({ type = 'status', state = 'connecting' })
+local before_opening = #notices
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('a second host while connecting sends nothing', count_type('host'), hosts_opening)
+check(
+  '  and says a session is being opened',
+  said_since(before_opening, 'A session is already being opened.') ~= nil,
+  true
+)
+local joins_opening = count_type('join')
+vim.cmd('SelvageJoin ws://127.0.0.1:1/session?room=r&token=t')
+check('  and a join behind it sends nothing either', count_type('join'), joins_opening)
+handlers().on_message({ type = 'status', state = 'idle' })
 -- -- the name, as the read form reports it -------------------------------------------
 --
 -- Nothing configured is no name: the read form says so rather than naming the login name, which

@@ -171,7 +171,8 @@ end
 --- open, while the removal took the file and the directories that emptied with it. The save is
 --- what puts the directory back: the text is the room's already, the file is only a cache of it,
 --- and a `:w` that answered `E212` would leave the person with an error and a modified buffer.
-function Document:save()
+--- @param settled boolean|nil the buffer holds the room's text, so writing it counts as fetched
+function Document:save(settled)
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
     return false
   end
@@ -185,7 +186,15 @@ function Document:save()
     end)
   end)
   if ok then
-    mirror.wrote(self.path)
+    -- A write of an empty buffer over an empty placeholder proves nothing about the room:
+    -- an empty placeholder and an empty room document look exactly alike, so a `:w` before
+    -- the room's text arrives must not mark the path fetched, or the fetch claims files the
+    -- filesystem sees as empty. The save the room settles on marks regardless: the room's
+    -- text is in the buffer because the room put it there, even when it is empty.
+    local text = table.concat(api.nvim_buf_get_lines(self.bufnr, 0, -1, true), '\n')
+    if settled or text ~= '' or mirror.written(self.path) then
+      mirror.wrote(self.path)
+    end
   end
   return ok
 end

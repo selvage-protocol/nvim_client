@@ -99,10 +99,38 @@ end
 --- @param path string
 --- @return boolean
 local function ensure_dir(path)
-  if vim.fn.isdirectory(path) == 1 then
-    return true
+  -- One level at a time, reading each step with `fs_lstat`: `mkdir -p` resolves the path
+  -- through whatever it finds, so a link a tool planted where a directory of the mirror should
+  -- be would divert everything made under it outside the mirror. A step that is a link, or
+  -- anything but a directory, refuses the whole path.
+  local anchor, rest = path:match('^(%/)(.*)$')
+  if anchor == nil then
+    anchor, rest = path:match('^(%a:%/)(.*)$')
   end
-  return pcall(vim.fn.mkdir, path, 'p')
+  if anchor == nil then
+    return false
+  end
+  local current = anchor == '/' and '/' or anchor:sub(1, -2)
+  for part in rest:gmatch('[^/]+') do
+    if part == '..' then
+      return false
+    end
+    current = current == '/' and ('/' .. part) or (current .. '/' .. part)
+    local info = uv.fs_lstat(current)
+    if info == nil then
+      -- 0755 before the umask, as `mkdir -p` makes them.
+      if uv.fs_mkdir(current, 493) == nil then
+        return false
+      end
+    elseif info.type ~= 'directory' then
+      return false
+    end
+  end
+  if rest == '' then
+    local info = uv.fs_lstat(current)
+    return info ~= nil and info.type == 'directory'
+  end
+  return true
 end
 
 --- The kind of a directory entry, which a scan does not have to report.
@@ -190,13 +218,20 @@ end
 local function materialise(root, paths, blocked)
   local made = {}
   for _, path in ipairs(paths) do
-    local file = vim.fs.joinpath(root, path)
-    local dir = vim.fs.dirname(file)
+    -- Plain string work, not `vim.fs`: this loop runs once per path of the listing in the
+    -- editor's foreground as it arrives, and each `vim.fs` call crosses the Lua/Vimscript
+    -- boundary. A listed path never starts or ends with a separator, and the root this joins
+    -- onto never ends with one, so the join and its directory are exact.
+    local file = root .. '/' .. path
+    local dir = file:match('^(.*)/[^/]*$')
     if made[dir] == nil then
       made[dir] = ensure_dir(dir)
     end
     if made[dir] then
-      local info = uv.fs_stat(file)
+      -- `fs_lstat`, which reports the link itself: `fs_stat` follows one, so a link at a file
+      -- path looked like the file it points at and was left alone — read into the room on open,
+      -- written through on save.
+      local info = uv.fs_lstat(file)
       if info == nil then
         local fd = uv.fs_open(file, 'w', 420)
         if fd == nil or uv.fs_close(fd) == nil then

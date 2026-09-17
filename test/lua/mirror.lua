@@ -104,6 +104,16 @@ local function notice_at(from, needle)
   return nil
 end
 
+--- The completion a fetch says later: a fetch returns while the room answers, so what it
+--- finished with is a later notice the test waits for rather than the call's return. What the
+--- room answered at once is already said, so the wait is only ever for a slow room.
+local function fetched_since(from, needle)
+  vim.wait(2000, function()
+    return said_since(from, needle) ~= nil
+  end, 50)
+  return said_since(from, needle)
+end
+
 --- The content a file holds, which is the only thing a tool that reads the mirror sees.
 local function read(path)
   local ok, lines = pcall(vim.fn.readfile, path)
@@ -612,6 +622,34 @@ check('  and the path is no longer held', mirror.granted('escape/deep.txt'), fal
 selvage.leave()
 vim.fn.delete(outside, 'rf')
 
+-- -- a link planted where the mirror writes ----------------------------------------------
+--
+-- The removal side reads every step with `fs_lstat`; the creation side did not: a link where a
+-- room directory goes diverted every file materialised under it outside the mirror, and a link
+-- at a file path looked, through `fs_stat`, like a file and was left alone — read into the room
+-- on open, written through on save. Both are refused now, and said the way a path that cannot
+-- be written is.
+
+local planted_outside = vim.fn.getcwd() .. '/.tmp/lua-mirror-planted'
+vim.fn.delete(planted_outside, 'rf')
+vim.fn.mkdir(planted_outside, 'p')
+vim.fn.writefile({ 'the person keeps this' }, planted_outside .. '/secret.txt')
+
+local planted = join({}, { 'linked.txt', 'sub/inner.txt' }, 'r-planted')
+vim.fn.delete(planted .. '/linked.txt')
+uv.fs_symlink(planted_outside .. '/secret.txt', planted .. '/linked.txt')
+vim.fn.mkdir(planted .. '/sub', 'p')
+vim.fn.delete(planted .. '/sub', 'rf')
+uv.fs_symlink(planted_outside, planted .. '/sub')
+local before_planted = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'linked.txt', 'sub/inner.txt' } } })
+check('a link where a file goes is refused, not left alone', said_since(before_planted, 'could not be mirrored') ~= nil, true)
+check('  and the link is still a link', uv.fs_lstat(planted .. '/linked.txt').type, 'link')
+check('  and a link where a directory goes diverts nothing outside', read(planted_outside .. '/inner.txt'), nil)
+check('  and what was outside is untouched', read(planted_outside .. '/secret.txt'), 'the person keeps this\n')
+selvage.leave()
+vim.fn.delete(planted_outside, 'rf')
+
 -- -- content reaches the file ------------------------------------------------------------
 --
 -- A document the room changed is written by the save policy that already exists: the companion
@@ -921,15 +959,15 @@ responder = function(message)
 end
 before = #notices
 selvage.fetch('late.txt')
-check('a fetch waits for the room to answer', read(root .. '/late.txt'), 'answered late\n')
-check('  and says what arrived', said_since(before, 'Fetched the files') ~= nil, true)
+check('a fetch waits for the room to answer', fetched_since(before, 'Fetched the files') ~= nil, true)
+check('  and the file is what arrived', read(root .. '/late.txt'), 'answered late\n')
 
 responder = nil
 root = join({}, { 'quiet.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('quiet.txt')
-check('a fetch the room never answers reports what arrived', said_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
+check('a fetch the room never answers reports what arrived', fetched_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
 check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
 
 -- The room answering late is not a lost fetch: the document is still held, so the text arriving
@@ -940,6 +978,41 @@ before = #notices
 selvage.fetch('quiet.txt')
 check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'Fetched the files') ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
+
+-- A `:w` on a file the room has not answered is not a fetch: the empty buffer written over
+-- the empty placeholder leaves no trace of the room, so the fetch must report the file had
+-- not arrived rather than claim it.
+root = join({}, { 'unwritten.txt' })
+responder = nil
+before = #notices
+vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/unwritten.txt'))
+vim.cmd('write')
+check('the write left the placeholder empty', read(root .. '/unwritten.txt'), '')
+vim.g.selvage_fetch_timeout_ms = 200
+selvage.fetch('unwritten.txt')
+vim.g.selvage_fetch_timeout_ms = nil
+check(
+  'a :w on an unfetched buffer does not make the fetch claim it',
+  fetched_since(before, 'Fetched the files.') ~= nil,
+  false
+)
+check(
+  '  but reports what had not arrived',
+  fetched_since(before, 'these had not arrived within 0s: unwritten.txt') ~= nil,
+  true
+)
+
+-- A fetch returns while the room answers: holding the editor for the whole wait is what the
+-- foreground poll did, and a slow room held it for up to a minute. The deadline the chain
+-- still keeps speaks later, into no later test's window.
+root = join({}, { 'slowpoke.txt' })
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 800
+local started = uv.hrtime()
+selvage.fetch('slowpoke.txt')
+local waited_ms = (uv.hrtime() - started) / 1000000
+vim.g.selvage_fetch_timeout_ms = nil
+check('a fetch with a slow room returns without waiting out the room', waited_ms < 400, true)
 
 -- A word that names nothing is refused rather than fetched as nothing.
 before = #notices
@@ -999,7 +1072,7 @@ vim.g.selvage_fetch_timeout_ms = 300
 selvage.fetch('slow.txt')
 check(
   'a file closed mid-fetch is reported as not arrived',
-  said_since(before, 'had not arrived within') ~= nil,
+  fetched_since(before, 'had not arrived within') ~= nil,
   true
 )
 check('  and the close reached the room', sent_since('close', opened) ~= nil, true)
@@ -1019,7 +1092,7 @@ vim.schedule(function()
   handle({ type = 'status', state = 'idle' })
 end)
 selvage.fetch()
-check('a session that ends mid-fetch ends the wait', said_since(before, 'The session ended before the files were fetched') ~= nil, true)
+check('a session that ends mid-fetch ends the wait', fetched_since(before, 'The session ended before the files were fetched') ~= nil, true)
 check('  and the mirror went with it', selvage.session().mirror, nil)
 vim.g.selvage_fetch_timeout_ms = nil
 
@@ -1043,6 +1116,7 @@ check('  and the one whose listing shrank', vim.fn.isdirectory(CACHE .. '/r-shru
 check('  and the one whose listing lost a path', vim.fn.isdirectory(CACHE .. '/r-shrunk-path'), 0)
 check('  and the one whose path left with a buffer open on it', vim.fn.isdirectory(CACHE .. '/r-yanked'), 0)
 check('  and the one whose path reached through a link', vim.fn.isdirectory(CACHE .. '/r-symlinked'), 0)
+check('  and the one where a link was planted', vim.fn.isdirectory(CACHE .. '/r-planted'), 0)
 check('  and the one whose listing lost everything', vim.fn.isdirectory(CACHE .. '/r-shrunk-to-nothing'), 0)
 check('  and the one whose path was too long', vim.fn.isdirectory(CACHE .. '/r-bounded'), 0)
 check('  and the one with a listing past the bound', vim.fn.isdirectory(CACHE .. '/r-many'), 0)

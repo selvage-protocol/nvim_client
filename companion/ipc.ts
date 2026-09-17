@@ -96,13 +96,32 @@ export type Notification =
   /** The remote carets this replica can resolve, in buffer offsets. */
   | { type: 'presence'; cursors: Cursor[] };
 
+/**
+ * How many UTF-8 bytes a line may hold before it is dropped rather than accumulated
+ * without bound: a whole-document `open` is one JSON line, so a bound below that would
+ * refuse real work, while no bound lets one runaway write grow the buffer — and re-scan it
+ * per chunk — for the life of the process. Bytes, not code units: stdin is decoded as UTF-8,
+ * and a CJK line is three times what `String.length` says. Past it the reader sheds to the
+ * next newline and says so once per line, through `onDrop`; what was shed never reaches
+ * `onLine`.
+ */
+export const MAX_IPC_LINE_BYTES = 32 * 1024 * 1024;
+
 /** Reads newline-delimited JSON off a byte stream. */
 export class LineReader {
   private buffer = '';
+  // The buffer in UTF-8 bytes, not code units: stdin is decoded as UTF-8, so a CJK line
+  // is three times what `String.length` says, and the bound has to hold for it too. Counted
+  // as chunks land and lines leave, never re-scanned whole.
+  private bufferBytes = 0;
   private readonly onLine: (line: string) => void;
+  private readonly onDrop: (bytes: number) => void;
+  /** Whether the reader is shedding an overlong line, to its newline. */
+  private dropping = false;
 
-  constructor(onLine: (line: string) => void) {
+  constructor(onLine: (line: string) => void, onDrop: (bytes: number) => void = () => undefined) {
     this.onLine = onLine;
+    this.onDrop = onDrop;
   }
 
   /**
@@ -111,14 +130,93 @@ export class LineReader {
    */
   push(chunk: string): void {
     this.buffer += chunk;
+    // Past the bound with no newline in sight, the line is shed rather than kept, said the
+    // first time it sheds; a shed tail that runs past it again goes in silence.
+    this.bufferBytes += Buffer.byteLength(chunk, 'utf8');
+    if (this.bufferBytes > MAX_IPC_LINE_BYTES && !this.buffer.includes('\n')) {
+      if (!this.dropping) {
+        this.dropping = true;
+        this.onDrop(this.bufferBytes);
+      }
+      this.buffer = '';
+      this.bufferBytes = 0;
+      return;
+    }
     let newline = this.buffer.indexOf('\n');
     while (newline !== -1) {
       const line = this.buffer.slice(0, newline);
       this.buffer = this.buffer.slice(newline + 1);
-      if (line.trim() !== '') {
+      // The newline is ASCII, so a line and its terminator leave together.
+      const lineBytes = Buffer.byteLength(line, 'utf8');
+      this.bufferBytes -= lineBytes + 1;
+      if (this.dropping) {
+        // The newline the shed line ended at: shedding ends with it, and the tail with it.
+        this.dropping = false;
+      } else if (lineBytes > MAX_IPC_LINE_BYTES) {
+        // A whole line past the bound, delivered in fewer chunks than it takes to shed:
+        // nothing this process answers is that long, so it goes the way a shed one does.
+        this.onDrop(lineBytes);
+      } else if (line.trim() !== '') {
         this.onLine(line);
       }
       newline = this.buffer.indexOf('\n');
     }
+  }
+}
+
+/**
+ * Whether a parsed line is a request this process answers. The front-end is the same user's
+ * own editor, not a remote peer, so a misshapen message is a bug rather than an attack — but
+ * one answered blindly is a crash somewhere down the line (`request.serverUrl` read off a
+ * `join`, a `change` counted with a start that is a string), where the failure names nothing
+ * about the message that caused it. Anything here refuses is said on stderr and dropped
+ * before it is queued.
+ *
+ * The union above is what a front-end may send; anything else — a notification echoed back,
+ * a newer front-end's new message, a line that decoded to a bare string — is not one.
+ */
+export function isRequest(value: unknown): value is Request {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const fields = value as Record<string, unknown>;
+  if (typeof fields['type'] !== 'string') {
+    return false;
+  }
+  const text = (name: string): boolean => typeof fields[name] === 'string';
+  const count = (name: string): boolean => typeof fields[name] === 'number';
+  const flag = (name: string): boolean => typeof fields[name] === 'boolean';
+  const maybeText = (name: string): boolean =>
+    fields[name] === undefined || typeof fields[name] === 'string';
+  const maybeFlag = (name: string): boolean =>
+    fields[name] === undefined || typeof fields[name] === 'boolean';
+  switch (fields['type']) {
+    case 'host':
+      return (
+        text('serverUrl') &&
+        maybeText('displayName') &&
+        maybeFlag('autoSave') &&
+        maybeText('root')
+      );
+    case 'join':
+      return text('invite') && maybeText('displayName') && maybeFlag('autoSave');
+    case 'leave':
+    case 'selectionCleared':
+      return true;
+    case 'rename':
+      return text('displayName');
+    case 'open':
+      return text('path') && text('text');
+    case 'close':
+      return text('path');
+    case 'change':
+      return text('path') && count('start') && count('end') && text('text');
+    case 'applied':
+    case 'saved':
+      return count('id') && flag('ok');
+    case 'selection':
+      return text('path') && count('anchor') && count('head');
+    default:
+      return false;
   }
 }

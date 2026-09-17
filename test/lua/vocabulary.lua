@@ -113,6 +113,7 @@ local MESSAGES = {
   -- Hosting and joining.
   { 'INFO', 'Room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).' },
   { 'INFO', 'You are already hosting room %s; the invite link is on the clipboard.' },
+  { 'WARN', 'A session is already being opened.' },
   { 'INFO', 'Joined room %s; opening %s.' },
   { 'INFO', 'Joined room %s; opening %s; %d more, :SelvageOpen to choose.' },
   { 'INFO', 'Joined room %s.' },
@@ -137,6 +138,7 @@ local MESSAGES = {
   { 'WARN', 'Not in a session.' },
   -- Going to a participant, and following one.
   { 'INFO', 'Following %s.' },
+  { 'INFO', '%s is not in a document; still following.' },
   { 'INFO', 'Stopped following %s.' },
   { 'WARN', 'Not following anyone.' },
   { 'WARN', '%s left the room, so following stopped.' },
@@ -169,6 +171,12 @@ local MESSAGES = {
   { 'ERROR', '%s is not valid UTF-8, so it is not shared.' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared.' },
   { 'WARN', 'This buffer has no file, so it is not shared; the folder this session shares is %s.' },
+  { 'WARN', '%s is not a regular file, so it is not shared.' },
+  -- What a misspeaking companion earns: said, never obeyed blindly.
+  { 'WARN', 'Unknown message type from the companion: %s.' },
+  { 'WARN', 'Unreadable message from the companion.' },
+  { 'WARN', 'Unreadable report from the companion.' },
+  { 'WARN', 'Unreadable status from the companion.' },
   { 'ERROR', 'The companion exited with %s.' },
   { 'WARN', 'Already %s room %s; leave that session first.' },
   { 'ERROR', 'A server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.' },
@@ -187,6 +195,7 @@ local MESSAGES = {
   { 'INFO', 'The room lists no files to fetch.' },
   { 'INFO', 'Fetching opens them in the room, so every peer receives them.' },
   { 'INFO', 'Fetching opens %s in the room, so every peer receives it.' },
+  { 'INFO', '%s is opened in the room, so every peer receives it.' },
   { 'WARN', 'No file the room lists matches "%s"; :SelvageOpen and completion name them.' },
   { 'INFO', 'Fetched the files.' },
   { 'WARN', 'Fetched the files; these had not arrived within %ds: %s.' },

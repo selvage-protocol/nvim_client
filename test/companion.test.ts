@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { LineReader } from '../companion/ipc.ts';
+import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { Companion } from '../companion/session.ts';
@@ -788,6 +788,74 @@ test('the line reader reassembles a message split across chunks', () => {
   assert.deepEqual(lines, ['{"type":"leave"}', '{"type":"close","path":"a"}']);
 });
 
+test('a line past the bound is shed with a word, and the next line still arrives', () => {
+  // A whole-document `open` is one JSON line, so the bound has to clear real work; a runaway
+  // write past it is shed to its newline instead of growing the buffer — and re-scanning
+  // it per chunk — for the life of the process.
+  const lines: string[] = [];
+  const drops: number[] = [];
+  const reader = new LineReader(
+    (line) => lines.push(line),
+    (bytes) => drops.push(bytes),
+  );
+  const overlong = 'x'.repeat(MAX_IPC_LINE_BYTES + 1);
+  reader.push(`${overlong}\n{"type":"leave"}\n`.slice(0, MAX_IPC_LINE_BYTES + 1));
+  reader.push(`${overlong}\n{"type":"leave"}\n`.slice(MAX_IPC_LINE_BYTES + 1));
+  assert.equal(drops.length, 1, 'the runaway line was shed once');
+  assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
+});
+
+test('the bound counts UTF-8 bytes, not code units', () => {
+  // `String.length` counts UTF-16 code units and stdin is decoded as UTF-8: 12M `€` are
+  // 12M units but 36M bytes on the wire — under a unit-counted bound, over a byte one.
+  const lines: string[] = [];
+  const drops: number[] = [];
+  const reader = new LineReader(
+    (line) => lines.push(line),
+    (bytes) => drops.push(bytes),
+  );
+  reader.push(`${'€'.repeat(12 * 1024 * 1024)}\n{"type":"leave"}\n`);
+  assert.equal(drops.length, 1, 'the wide line was shed');
+  assert.ok(drops[0] as number > MAX_IPC_LINE_BYTES, 'and told in bytes');
+  assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
+});
+
+// -- the IPC mouth, both directions ----------------------------------------------------
+//
+// A misshapen message answered blindly is a crash down the line, where the failure names
+// nothing about the message that caused it. The stdin mouth drops what is not a request;
+// `handle` drops it too, for the caller that did not come through stdin.
+
+test('a line that is not a request is refused before it is queued', () => {
+  // A notification echoed back, a newer front-end's new message, a `host` with nowhere to
+  // host, a `change` whose offsets are strings, a line that decoded to a bare value.
+  for (const line of [
+    '{"type":"presence","cursors":[]}',
+    '{"type":"frobnicate"}',
+    '{"type":"host"}',
+    '{"type":"change","path":"a","start":"0","end":1,"text":"x"}',
+    '{"type":"save","id":7}',
+    '7',
+    '"leave"',
+    '{}',
+  ]) {
+    assert.equal(isRequest(JSON.parse(line) as unknown), false, line);
+  }
+  assert.equal(
+    isRequest({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: 'proj' }),
+    true,
+    'a whole request still passes',
+  );
+  assert.equal(isRequest({ type: 'leave' }), true, 'and a bare one too');
+});
+
+test('a misshapen request handled directly is dropped, not answered', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host' } as unknown as Request);
+  assert.deepEqual(it.hosts, [], 'no room was opened for a host with no server');
+  assert.deepEqual(it.sent, [], 'and nothing was answered');
+});
+
 // -- the grant, host-side ------------------------------------------------------------
 //
 // The folder the front-end names with `host` is the one a path a peer asks for is read out of.
@@ -1132,6 +1200,46 @@ test('a file created under the host root is republished', async (t) => {
     () => it.engine.grants,
   );
   assert.deepEqual(it.engine.grants, [['notes.txt'], ['created.txt', 'notes.txt']]);
+});
+
+test('a file created in a subdirectory is republished', async (t) => {
+  // `fs.watch` honours `recursive` only on macOS and Windows: on Linux a watcher on the
+  // root alone never fires for anything under a subdirectory, so the room's listing would go
+  // stale for the whole tree below it.
+  const { root, it } = await hosting(t, { 'notes.txt': 'a note\n', 'src/main.rs': 'fn main() {}\n' });
+  assert.deepEqual(it.engine.grants, [['notes.txt', 'src/main.rs']]);
+
+  tree(root, 'src/created.rs', 'made while hosting\n');
+
+  await until(
+    'the created path to be published',
+    () => it.engine.grants.at(-1)?.includes('src/created.rs') === true,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [
+    ['notes.txt', 'src/main.rs'],
+    ['notes.txt', 'src/created.rs', 'src/main.rs'],
+  ]);
+});
+
+test('a directory created while hosting is watched', async (t) => {
+  // A directory that did not exist when the session started has no watcher yet: the mkdir
+  // fires its parent, the republish that follows learns the new directory, and only a watcher
+  // set rebuilt after that republish sees what lands inside it afterwards.
+  const { root, it } = await hosting(t);
+
+  mkdirSync(join(root, 'later'));
+  await delay(QUIET_MS);
+  assert.deepEqual(it.engine.grants, [['notes.txt']], 'an empty directory names no paths');
+
+  tree(root, 'later/inside.rs', 'made after the directory\n');
+
+  await until(
+    'the path in the new directory to be published',
+    () => it.engine.grants.at(-1)?.includes('later/inside.rs') === true,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [['notes.txt'], ['later/inside.rs', 'notes.txt']]);
 });
 
 test('a file deleted under the host root is republished', async (t) => {
