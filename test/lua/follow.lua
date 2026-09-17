@@ -827,9 +827,17 @@ check(
 )
 
 -- The indicator doubles as the stop control: what a click on it runs is the stop command's
--- own handler. A click needs 'mouse' in a live window; here the handler is called the way
+-- own handler, looked up by the Vim function name the winbar's `%0@...@` label names. A click
+-- reaches Neovim when 'mouse' is set, and Neovim — unlike Vim — sets it by default (`nvi`),
+-- so a mouse-reporting terminal stops the follow with no configuration; a terminal without
+-- one still has `:SelvageStopFollowing` and typing. Here the handler is called the way
 -- the click would call it.
 selvage.follow('Ada')
+check(
+  'the click label names a Vim function that exists',
+  vim.fn.exists('*SelvageStopFollowing'),
+  1
+)
 local before_click = #notices
 local clicked = pcall(function()
   return vim.fn.SelvageStopFollowing(0, 1, 'l', '')
