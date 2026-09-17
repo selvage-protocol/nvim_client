@@ -691,7 +691,7 @@ local function arrive(path, text)
     id = applied_ids,
     path = path,
     start = 0,
-    ['end'] = 1,
+    ['end'] = 0,
     text = text,
     version = 0,
   })
@@ -761,7 +761,7 @@ check(
 -- A remote edit is not a local one: the room's text moving under the follow re-lands it
 -- and never ends it.
 local two_text = table.concat(vim.api.nvim_buf_get_lines(vim.fn.bufnr('selvage://g/two.txt'), 0, -1, true), '\n')
-check('the room text is what the follow holds', two_text, 'one\ntwo')
+check('the room text is what the follow holds', two_text, 'one\ntwo\n')
 applied_ids = applied_ids + 1
 local before_remote = #notices
 handlers().on_message({

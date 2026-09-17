@@ -36,7 +36,7 @@ local function document(lines)
 end
 
 local function buffer_text(bufnr)
-  return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n') .. '\n'
+  return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, true), '\n')
 end
 
 local function change(message)
@@ -51,7 +51,7 @@ end
 -- -- a local edit, reported in UTF-16 code units ------------------------------
 
 local shared, bufnr, sent = document({ 'héllo', 'wörld' })
-check('the document text has the trailing newline', shared:text(), 'héllo\nwörld\n')
+check('the document text invents no trailing newline', shared:text(), 'héllo\nwörld')
 
 vim.api.nvim_buf_set_text(bufnr, 0, 3, 0, 3, { 'X' })
 check('an insert after a two-byte character', change(sent[1]), '2..2 "X"')
@@ -60,18 +60,17 @@ vim.api.nvim_buf_set_text(bufnr, 1, 1, 1, 3, {})
 check('a delete of a two-byte character', change(sent[2]), '8..9 ""')
 
 vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'tail' })
-check('a line appended past the final newline', change(sent[3]), '12..12 "tail\\n"')
+check('a line appended past the last line', change(sent[3]), '11..11 "\\ntail"')
 check('the shadow tracks the buffer', shared:text(), buffer_text(bufnr))
 
 -- -- a whole-buffer clear ------------------------------------------------------
 --
 -- Clearing the whole buffer through the API reports the row past the last line as the end of the
--- change, and a buffer cannot lose its final newline. Publishing the removal lands the room on a
--- text the buffer cannot hold, so the deleted text ends before that newline instead.
+-- change, and the removed text is the document's whole text.
 local cleared, cleared_buf, cleared_sent = document({ 'one', 'two', 'three' })
 vim.api.nvim_buf_set_lines(cleared_buf, 0, -1, true, {})
 check('a clear keeps the buffer and the shadow together', cleared:text(), buffer_text(cleared_buf))
-check('  both being one empty line', cleared:text(), '\n')
+check('  both being one empty line', cleared:text(), '')
 check(
   '  and the published change stops before the final newline',
   change(cleared_sent[#cleared_sent]),
@@ -105,7 +104,7 @@ check('  and past the astral pair, at the byte column of the next', select(2, ca
 local appended, appended_buf = document({ 'a' })
 check(
   'an edit appending a line',
-  apply(appended, { start = 2, ['end'] = 2, text = 'b\n' }) and buffer_text(appended_buf),
+  apply(appended, { start = 1, ['end'] = 1, text = '\nb\n' }) and buffer_text(appended_buf),
   'a\nb\n'
 )
 check('  and the shadow with it', appended:text(), 'a\nb\n')
@@ -113,7 +112,7 @@ check('  and the shadow with it', appended:text(), 'a\nb\n')
 local replaced, replaced_buf = document({ 'a', 'b' })
 check(
   'an edit replacing the last line',
-  apply(replaced, { start = 2, ['end'] = 4, text = 'c\n' }) and buffer_text(replaced_buf),
+  apply(replaced, { start = 2, ['end'] = 3, text = 'c\n' }) and buffer_text(replaced_buf),
   'a\nc\n'
 )
 
@@ -121,27 +120,34 @@ local empty, empty_buf = document({ '' })
 check(
   'an empty buffer filled from the room',
   apply(empty, { start = 0, ['end'] = 0, text = 'hello' }) and buffer_text(empty_buf),
-  'hello\n'
+  'hello'
 )
 
 local two, two_buf = document({ '' })
 check(
   'an empty buffer filled with two lines',
   apply(two, { start = 0, ['end'] = 0, text = 'a\nb' }) and buffer_text(two_buf),
-  'a\nb\n'
+  'a\nb'
 )
 
 local multibyte, multibyte_buf = document({ 'héllo' })
 check(
   'a range inside multibyte text',
   apply(multibyte, { start = 1, ['end'] = 2, text = 'E' }) and buffer_text(multibyte_buf),
-  'hEllo\n'
+  'hEllo'
 )
 
 local unterminated, unterminated_buf = document({ 'a' })
 check(
-  'a room text with no final newline gains one',
-  apply(unterminated, { start = 0, ['end'] = 2, text = 'xyz' }) and buffer_text(unterminated_buf),
+  'a room text with no final newline stays without one',
+  apply(unterminated, { start = 0, ['end'] = 1, text = 'xyz' }) and unterminated:text(),
+  'xyz'
+)
+
+local terminated, terminated_buf = document({ 'a' })
+check(
+  'a room text with a final newline keeps it',
+  apply(terminated, { start = 0, ['end'] = 1, text = 'xyz\n' }) and terminated:text(),
   'xyz\n'
 )
 
@@ -162,7 +168,7 @@ local left, left_buf, left_sent = document({ 'a' })
 left:detach()
 vim.api.nvim_buf_set_text(left_buf, 0, 0, 0, 0, { 'X' })
 check('a detached document reports nothing', #left_sent, 0)
-check('  and stops tracking the buffer', left:text(), 'a\n')
+check('  and stops tracking the buffer', left:text(), 'a')
 check(
   '  and a remote edit is not applied to it',
   left:apply({ start = 0, ['end'] = 0, text = 'y', version = left.version }),

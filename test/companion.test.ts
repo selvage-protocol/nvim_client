@@ -433,9 +433,9 @@ test('a guest does not reconcile a buffer against a replica that has not arrived
 
   // The handshake names the room's documents; their text arrives with the sync, which is a
   // later message. Until it does the replica holds nothing for the path, and a buffer
-  // reconciled against nothing is asked to hold the empty document — which a Neovim buffer
-  // cannot, because its text always ends in a newline.
-  await it.companion.handle({ type: 'open', path: 'notes.txt', text: '\n' });
+  // reconciled against nothing is asked to hold the empty document — while the room may yet
+  // send a seed, which the buffer would publish as its own content.
+  await it.companion.handle({ type: 'open', path: 'notes.txt', text: '' });
   assert.deepEqual(it.applies, [], 'nothing is asked of a buffer with no replica to be reconciled with');
   assert.deepEqual(
     it.engine.opened,
@@ -443,12 +443,12 @@ test('a guest does not reconcile a buffer against a replica that has not arrived
     'and it is held in the room, which is what makes its arrival something this process hears',
   );
 
-  // The room's text lands, and the buffer is opened against it: the edit is the seed, not a
-  // removal of the newline the buffer has and the room's document does not.
+  // The room's text lands, and the buffer is opened against it: the edit is the seed, newline
+  // and all — an empty buffer holds the empty text, so the room's text arrives whole.
   it.engine.remote('notes.txt', 'from the room\n');
   await settle();
   assert.deepEqual(it.applies, [
-    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room', version: 0 },
+    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room\n', version: 0 },
   ]);
 });
 
@@ -460,19 +460,19 @@ test('a guest whose text arrived before the hold was answered is opened too', as
   // that carries the text are two messages on one connection: which arrives first is the
   // server's to decide. This is the text arriving first — the engine has nothing left to report
   // an arrival for, so the answer to the hold is the moment the document is opened.
-  const opened = it.companion.handle({ type: 'open', path: 'notes.txt', text: '\n' });
+  const opened = it.companion.handle({ type: 'open', path: 'notes.txt', text: '' });
   it.engine.texts.set('notes.txt', 'from the room\n');
   await opened;
   await settle();
 
   assert.deepEqual(it.applies, [
-    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room', version: 0 },
+    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room\n', version: 0 },
   ]);
 });
 test("a guest's edit before the room's text arrives keeps the two counts together", async () => {
   const it = harness('guest', ['notes.txt']);
   const toCompanion: Request[] = [];
-  const front = new FrontEnd(toCompanion, '\n');
+  const front = new FrontEnd(toCompanion, '');
   let delivered = 0;
 
   /** Runs the two sides against each other until neither has anything left to say. */
@@ -513,7 +513,7 @@ test("a guest's edit before the room's text arrives keeps the two counts togethe
   assert.equal(it.applies.length, 1, 'the buffer is seeded once the text arrives');
   assert.deepEqual(
     change(it.applies[0]),
-    { start: 0, end: 1, text: 'from the room', version: 1 },
+    { start: 0, end: 1, text: 'from the room\n', version: 1 },
     "the seed is offered against the count the front-end's own document has reached",
   );
   const complaints = it.sent.filter(
