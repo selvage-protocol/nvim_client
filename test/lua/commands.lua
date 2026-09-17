@@ -161,8 +161,9 @@ raised = pcall(vim.cmd, 'SelvageJoin')
 check('a bare :SelvageJoin does not raise E471 either', raised, true)
 check('  and says what is missing', said_since(before, 'An invite link is needed') ~= nil, true)
 
--- With somebody to ask, the same command asks. The address is a value only the person knows, and
--- there is no default for it in this plugin.
+-- With somebody to ask, the same command asks. With nothing configured and nothing
+-- remembered, the question starts from the demo default — a suggestion the question still
+-- asks for, unlike the setting.
 --
 -- The hosts below own the state they read: the data home is sandboxed to this checkout, so the
 -- address they write is nowhere the person's own Neovim would read.
@@ -172,6 +173,7 @@ answer_with('ws://127.0.0.1:7777')
 vim.cmd('SelvageHost')
 check('a bare :SelvageHost asks for an address', prompted ~= nil, true)
 check('  in the plugin\u{2019}s words', prompted and prompted.prompt:find('Selvage server to host on', 1, true) ~= nil, true)
+check('  starting from the demo default', prompted and prompted.default, 'ws://100.64.0.3:8080')
 check('  and hosts on the answer', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
 
 -- The answer is remembered for this Neovim, so the next question starts from it rather than from
@@ -201,6 +203,18 @@ end)
 vim.cmd('SelvageHost')
 check('  a restart still starts from the address last used', prompted and prompted.default, 'ws://127.0.0.1:7778')
 check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
+
+-- An explicit address beats the remembered one: nothing is asked, and what was explicit
+-- is what the next question starts from.
+prompted = nil
+vim.cmd('SelvageHost ws://127.0.0.1:5555')
+check('an explicit address is not asked about', prompted, nil)
+check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+answer_with(function(opts)
+  return opts.default
+end)
+vim.cmd('SelvageHost')
+check('  and the next question starts from it', prompted and prompted.default, 'ws://127.0.0.1:5555')
 
 -- A configured address is not asked about at all, as it is in the other client.
 vim.g.selvage_server_url = 'ws://127.0.0.1:9999'

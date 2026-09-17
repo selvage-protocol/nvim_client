@@ -2818,6 +2818,12 @@ local function resolve_display_name(callback)
   ask()
 end
 
+--- The server a bare `:SelvageHost` starts its question from when nothing was configured
+--- and nothing was remembered: the Pi demo from `ai_notes/docs/runbook-pi-demo.md`. An
+--- overridable prefill, never a commitment — the question is still asked, an explicit
+--- argument and `vim.g.selvage_server_url` always win — so moving the demo is this one line.
+local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
+
 --- The last server address a host was started on, so the question the next bare `:SelvageHost`
 --- asks starts from it. The file below is what outlives this Neovim; this is what answers
 --- without reading it twice in one process. `vim.g.selvage_server_url` is the setting that
@@ -2878,8 +2884,9 @@ local function confirm_leave(question, button)
 end
 
 --- The server to mint a room on: the configured address, else a question starting from the last
---- one typed. An answer is remembered across restarts and the question is still asked next time,
---- as it is in the other client: a value baked in would be an endpoint nobody chose.
+--- one typed, else the demo default (`DEFAULT_SERVER_URL`). An answer is remembered across
+--- restarts and the question is still asked next time, as it is in the other client: the default
+--- is a prefill the person can still edit, never an endpoint chosen for them.
 local function resolve_server_url(callback)
   local configured = vim.g.selvage_server_url
   if configured ~= nil and vim.trim(tostring(configured)) ~= '' then
@@ -2892,7 +2899,7 @@ local function resolve_server_url(callback)
   end
   vim.ui.input({
     prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (set vim.g.selvage_server_url to stop being asked): ',
-    default = last_server or read_last_server() or '',
+    default = last_server or read_last_server() or DEFAULT_SERVER_URL,
   }, function(input)
     local address = vim.trim(input or '')
     if address == '' then
