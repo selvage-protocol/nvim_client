@@ -102,6 +102,12 @@ local state = {
   -- landing did with the room's documents, which is only known once they are named — so it is
   -- said over the first `documents` report rather than when the handshake arrives.
   join_said = false,
+  -- What the join's own listing materialised: how many files, and where. The companion
+  -- reports the listing before the documents, so the first grant lands before the join is
+  -- said, and its counts join that one summary instead of arriving as a second sentence.
+  -- A listing that arrives after the join was said keeps its own sentence: the summary
+  -- already went out, and where the mirror lives is still news.
+  join_mirror = nil,
 }
 
 --- Whether a session is live. The companion process is not the thing to ask: it outlives the
@@ -696,6 +702,23 @@ local function share(bufnr, path)
   schedule_selection()
 end
 
+--- How many of `documents` this session has already written into the mirror: content the
+--- room answered the join's holds with, which is what makes a landing fetched rather than
+--- merely opened. Read when the join is said, after the holds went out, so a companion
+--- that answers at once counts its answers and one that answers later counts none yet.
+---
+--- @param documents string[] the room paths of the landing
+--- @return integer fetched
+local function fetched_count(documents)
+  local count = 0
+  for _, path in ipairs(documents) do
+    if mirror.written(path) then
+      count = count + 1
+    end
+  end
+  return count
+end
+
 --- The buffer a guest holds the room's document in.
 ---
 --- For a path the room's grant names, that is the mirror's file: a real path on disk, so that a
@@ -802,12 +825,19 @@ end
 --- Says, once per path, that a mirror file opened empty holds nothing yet because its content
 --- has not been fetched: the shape is materialised and the content is not, so an empty file is
 --- the expected sight, and `:SelvageFetch` is what fills it.
+---
+--- Said for the first such file in a session and never again: the sentence is for the shape,
+--- and the shape is the same on every empty file, so one hint per file is a flood with
+--- the file count. The paths are all still recorded, so a file fetched later is not news.
 local function notice_unfetched(path)
   if state.unfetched[path] ~= nil then
     return
   end
+  local first = next(state.unfetched) == nil
   state.unfetched[path] = true
-  notify(('this file is empty until fetched; :SelvageFetch %s fills it'):format(path))
+  if first then
+    notify(('this file is empty until fetched; :SelvageFetch %s fills it'):format(path))
+  end
 end
 
 --- Whether a buffer holds nothing: one empty line, the way an empty file reads.
@@ -2111,6 +2141,7 @@ local function reset()
   state.invite = nil
   state.auto_open = false
   state.join_said = false
+  state.join_mirror = nil
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
   -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
@@ -2213,23 +2244,74 @@ local function on_report(report)
         end
         if not state.join_said then
           state.join_said = true
+          local mirror_summary = state.join_mirror
           if not lands then
-            notify(('joined room %s'):format(tostring(state.room)))
-          elseif #report.documents > 1 then
-            notify(
-              ('joined room %s; opening %s; %d more, :SelvageOpen to choose'):format(
-                tostring(state.room),
-                report.documents[1],
-                #report.documents - 1
+            if mirror_summary ~= nil then
+              notify(
+                ('joined room %s; %d files mirrored at %s; %d of %d fetched'):format(
+                  tostring(state.room),
+                  mirror_summary.count,
+                  mirror_summary.root,
+                  fetched_count(report.documents),
+                  #report.documents
+                )
               )
-            )
+            else
+              notify(('joined room %s'):format(tostring(state.room)))
+            end
+          elseif #report.documents > 1 then
+            if mirror_summary ~= nil then
+              notify(
+                ('joined room %s; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched'):format(
+                  tostring(state.room),
+                  report.documents[1],
+                  #report.documents - 1,
+                  mirror_summary.count,
+                  mirror_summary.root,
+                  fetched_count(report.documents),
+                  #report.documents
+                )
+              )
+            else
+              notify(
+                ('joined room %s; opening %s; %d more, :SelvageOpen to choose'):format(
+                  tostring(state.room),
+                  report.documents[1],
+                  #report.documents - 1
+                )
+              )
+            end
           else
-            notify(('joined room %s; opening %s'):format(tostring(state.room), report.documents[1]))
+            if mirror_summary ~= nil then
+              notify(
+                ('joined room %s; opening %s; %d files mirrored at %s; %d of %d fetched'):format(
+                  tostring(state.room),
+                  report.documents[1],
+                  mirror_summary.count,
+                  mirror_summary.root,
+                  fetched_count(report.documents),
+                  #report.documents
+                )
+              )
+            else
+              notify(('joined room %s; opening %s'):format(tostring(state.room), report.documents[1]))
+            end
           end
         end
       elseif state.auto_open and not state.join_said then
         state.join_said = true
-        notify(('joined room %s; the room has no open documents yet'):format(tostring(state.room)))
+        local mirror_summary = state.join_mirror
+        if mirror_summary ~= nil then
+          notify(
+            ('joined room %s; the room has no open documents yet; %d files mirrored at %s'):format(
+              tostring(state.room),
+              mirror_summary.count,
+              mirror_summary.root
+            )
+          )
+        else
+          notify(('joined room %s; the room has no open documents yet'):format(tostring(state.room)))
+        end
       end
     end
     -- The room's document set is one of the frames a pending landing waits on: a buffer a
@@ -2242,7 +2324,9 @@ local function on_report(report)
     -- error. The listing is what `:SelvageOpen` completes over, and a room that lists five
     -- hundred files has nothing worth interrupting a person for; what a *guest* does with it is
     -- materialise it, and the one sentence that says where is said over the session's first
-    -- listing rather than over every republish.
+    -- listing rather than over every republish. The join's own listing is the exception:
+    -- the summary said over the documents report carries where the mirror lives, so the
+    -- first listing before the join is said records its counts and stays silent.
     local previous = {}
     for _, path in ipairs(state.grant) do
       previous[path] = true
@@ -2260,6 +2344,10 @@ local function on_report(report)
       if root ~= nil then
         if created then
           watch_mirror()
+        end
+        if state.join_mirror == nil and not state.join_said then
+          state.join_mirror = { count = #state.grant - #blocked, root = root }
+        elseif created then
           notify(
             ('the room\'s files are mirrored at %s; :SelvageFetch fetches their content'):format(root)
           )
