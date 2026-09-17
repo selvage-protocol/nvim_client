@@ -157,10 +157,11 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 
 Hosting starts outside the editor: start `selvaged`, note the address it prints, and give that
 address to `:SelvageHost` — or set `vim.g.selvage_server_url` to stop being asked for it.
+With neither, the question starts from the demo server `ws://100.64.0.3:8080`.
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the address is asked for, starting from the one last used — remembered across restarts — and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the address is asked for, starting from the one last used — remembered across restarts — else the demo default `ws://100.64.0.3:8080`, and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
@@ -331,10 +332,10 @@ creates, deletes or renames under the folder it shares is republished as the roo
 guest's mirror gains a file for a path that appeared and loses one for a path that went. The mirror
 is where a person reads and edits what the room holds, not where they restructure a project.
 
-The mirror is a Neovim answer to a Neovim problem, which is why `:SelvageFetch` has no counterpart
-in the VS Code client: there the room is a `FileSystemProvider`, a read fetches a document on
-demand, and no extension can be pointed at a provider — there is nothing to fill in. Here the room
-is a directory that ripgrep and a language server read for themselves, so it has to be filled.
+The mirror is a Neovim answer to a Neovim problem: here the room is a directory that
+ripgrep and a language server read for themselves, so it has to be filled — which is what
+`:SelvageFetch` does. The VS Code client has the twin command (`Selvage: Fetch a path from
+the room`) since its room became a real directory too.
 
 ## Requirements
 

@@ -85,11 +85,10 @@ end
 --- The canonical English phrase for each command, as `nvim_create_user_command`'s `desc`. The
 --- command names are this editor's idiom; the phrase is the one both clients name the intent by.
 ---
---- `SelvageFetch` is the one command the other client has no counterpart for, and the divergence
---- is deliberate: the mirror is a real directory that this editor's own extensions — ripgrep,
---- ctags, a language server — read for themselves, and the other client, whose filesystem
---- provider fetches a file when it is read, has nothing of the kind to name. The README says why;
---- `AGENTS.md` §4 is the rule.
+--- `SelvageFetch` names what the mirror needs: a real directory that this editor's own
+--- extensions — ripgrep, ctags, a language server — read for themselves, so it has to be
+--- filled. The other client has the twin command since its room became a real directory too.
+--- The README says why; `AGENTS.md` §4 is the rule.
 local TITLES = {
   SelvageHost = 'Host a session',
   SelvageJoin = 'Join a session from an invite link',
