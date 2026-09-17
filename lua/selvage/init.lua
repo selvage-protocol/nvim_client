@@ -1159,7 +1159,9 @@ function M.fetch(path)
     elseif not mirror.holds(target, document:text()) then
       -- A document this session already holds: the file is given what this client holds for the
       -- room, so that fetching a path whose file a tool overwrote is a fetch and not a no-op.
-      document:save()
+      -- The file is given what this client holds for the room, which is the room's text to
+      -- the fetch's own accounting: writing it counts as fetched.
+      document:save(true)
     end
   end
   local timeout = fetch_timeout_ms(#targets)
@@ -1976,7 +1978,7 @@ local function remirror_documents()
           -- The file the buffer is now opened as holds what this client holds for the room. An
           -- empty placeholder is left alone: there is nothing to write that the file does not
           -- already hold.
-          replaced:save()
+          replaced:save(true)
         end
       end
     end
@@ -2544,7 +2546,7 @@ local function on_message(message)
     local document = type(message.path) == 'string' and state.documents[message.path] or nil
     -- A path this session holds nothing for answers false: the companion's save policy would
     -- otherwise hear that a document reached the disk it never touched.
-    local ok = document ~= nil and document:save()
+    local ok = document ~= nil and document:save(true)
     state.process:send({ type = 'saved', id = message.id, ok = ok })
   elseif message.type == 'status' then
     -- The session's standing is a word from a fixed set: anything else leaves the guard

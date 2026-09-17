@@ -969,6 +969,29 @@ selvage.fetch('quiet.txt')
 check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'Fetched the files') ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
 
+-- A `:w` on a file the room has not answered is not a fetch: the empty buffer written over
+-- the empty placeholder leaves no trace of the room, so the fetch must report the file had
+-- not arrived rather than claim it.
+root = join({}, { 'unwritten.txt' })
+responder = nil
+before = #notices
+vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/unwritten.txt'))
+vim.cmd('write')
+check('the write left the placeholder empty', read(root .. '/unwritten.txt'), '')
+vim.g.selvage_fetch_timeout_ms = 200
+selvage.fetch('unwritten.txt')
+vim.g.selvage_fetch_timeout_ms = nil
+check(
+  'a :w on an unfetched buffer does not make the fetch claim it',
+  said_since(before, 'Fetched the files.') ~= nil,
+  false
+)
+check(
+  '  but reports what had not arrived',
+  said_since(before, 'these had not arrived within 0s: unwritten.txt') ~= nil,
+  true
+)
+
 -- A word that names nothing is refused rather than fetched as nothing.
 before = #notices
 selvage.fetch('nothing-here')
