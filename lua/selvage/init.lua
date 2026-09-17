@@ -2824,6 +2824,12 @@ end
 --- argument and `vim.g.selvage_server_url` always win — so moving the demo is this one line.
 local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 
+--- The page CopyInvite links to when nothing is configured: the Pi page served
+--- next to the demo from `ai_notes/docs/runbook-pi-demo.md`. An overridable default,
+--- never a commitment — `vim.g.selvage_web_origin` always wins — so moving the
+--- page is this one line.
+local DEFAULT_WEB_ORIGIN = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443'
+
 --- The last server address a host was started on, so the question the next bare `:SelvageHost`
 --- asks starts from it. The file below is what outlives this Neovim; this is what answers
 --- without reading it twice in one process. `vim.g.selvage_server_url` is the setting that
@@ -2909,6 +2915,121 @@ local function resolve_server_url(callback)
   end)
 end
 
+--- The page CopyInvite links to: `vim.g.selvage_web_origin` when one is set, else
+--- the Pi page default (`DEFAULT_WEB_ORIGIN`). A trailing slash is not a second
+--- page, so it is stripped before the link is built.
+local function web_origin()
+  local configured = vim.g.selvage_web_origin
+  local origin = DEFAULT_WEB_ORIGIN
+  if configured ~= nil and vim.trim(tostring(configured)) ~= '' then
+    origin = vim.trim(tostring(configured))
+  end
+  return (origin:gsub('/+$', ''))
+end
+
+--- Percent-encodes a query value the way the page builds its link: the unreserved
+--- characters stand, everything else rides as uppercase `%XX`.
+local function encode_component(text)
+  return (tostring(text):gsub('[^A-Za-z0-9%.%-%_~]', function(char)
+    return ('%%%02X'):format(string.byte(char))
+  end))
+end
+
+--- Percent-decodes a query value, turning `+` into a space as a form would.
+local function decode_component(text)
+  local spaced = tostring(text):gsub('+', ' ')
+  return (spaced:gsub('%%(%x%x)', function(hex)
+    return string.char(tonumber(hex, 16))
+  end))
+end
+
+--- Reads the room, its token and any server out of a query string. Keys match
+--- whole, so a `bedroom=` lookalike does not pass, and empty values do not count.
+local function query_parts(query)
+  local found = {}
+  for pair in tostring(query):gmatch('[^&]+') do
+    local key, value = pair:match('^([^=]*)=(.*)$')
+    if (key == 'room' or key == 'token' or key == 'server') and found[key] == nil then
+      if value ~= nil and value ~= '' then
+        found[key] = decode_component(value)
+      end
+    end
+  end
+  if found.room == nil or found.room == '' or found.token == nil or found.token == '' then
+    return nil
+  end
+  return found
+end
+
+--- Splits a wire invite into the server base and the room/token it carries, or
+--- answers nil when the value has no wire-invite shape.
+local function parse_wire_invite(text)
+  local trimmed = vim.trim(text or '')
+  if trimmed:match('^wss?://%S+$') == nil then
+    return nil
+  end
+  local mark = trimmed:find('?', 1, true)
+  if mark == nil then
+    return nil
+  end
+  local parts = query_parts(trimmed:sub(mark + 1))
+  if parts == nil then
+    return nil
+  end
+  return { base = (trimmed:sub(1, mark - 1):gsub('/session$', '')), room = parts.room, token = parts.token }
+end
+
+--- Reads a pasted page link back into the room, its token, and any server — the
+--- page's own parsing, mirrored so a copied link joins the same way it loads.
+local function parse_page_link(text)
+  local trimmed = vim.trim(text or '')
+  if trimmed:match('^https?://%S+$') == nil then
+    return nil
+  end
+  local mark = trimmed:find('?', 1, true)
+  if mark == nil then
+    return nil
+  end
+  local parts = query_parts(trimmed:sub(mark + 1))
+  if parts == nil then
+    return nil
+  end
+  return { room = parts.room, token = parts.token, server = parts.server }
+end
+
+--- The guest link for a room: the page URL carrying room and token, with `server`
+--- only when the room lives off the page default — the shape the page itself
+--- offers and reads back.
+local function build_page_link(room, token, server)
+  local link = web_origin() .. '/?room=' .. encode_component(room) .. '&token=' .. encode_component(token)
+  if server ~= DEFAULT_SERVER_URL then
+    link = link .. '&server=' .. encode_component(server)
+  end
+  return link
+end
+
+--- The wire URL an invite joins on: a page link resolves to its room's server (the
+--- page default when the link carries none), while a `ws://` invite — the fallback
+--- for rooms off the page default — joins as it always has.
+local function resolve_invite_to_wire(link)
+  local page = parse_page_link(link)
+  if page == nil then
+    return link
+  end
+  local server = page.server
+  if server == nil or server == '' then
+    server = DEFAULT_SERVER_URL
+  end
+  return (server:gsub('/+$', '')) .. '/session?room=' .. encode_component(page.room) .. '&token=' .. encode_component(page.token)
+end
+
+--- Whether a typed value has an invite link's shape: the page link the host copies,
+--- or a WebSocket address naming a room and its token. The names match whole with a
+--- non-empty value, so a `bedroom=` lookalike or an empty value does not pass.
+local function is_invite_link(text)
+  return parse_wire_invite(text) ~= nil or parse_page_link(text) ~= nil
+end
+
 --- What the clipboard holds, when it holds an invite: the host has just sent the link and pasting
 --- it is the next thing the person does. Only a link that names a room is offered, so a stray
 --- address in the clipboard is not joined by mistake.
@@ -2921,25 +3042,17 @@ local function clipboard_invite()
     return ''
   end
   text = vim.trim(text)
-  if text:match('^wss?://%S+$') ~= nil and text:find('room=', 1, true) ~= nil then
+  if is_invite_link(text) then
     return text
   end
   return ''
 end
 
---- Whether a typed value has an invite link's shape: a WebSocket address naming a room
---- and its token. The names match at a query boundary (`?`/`&`) with a non-empty value,
---- so a `bedroom=` lookalike or an empty value does not pass. A truncated paste fails here, in the other client's words, rather than
+--- The invite to join on, asked for when the command was given none. A truncated
+--- paste fails here, in the other client's words, rather than
 --- later as whatever the engine said: nobody can tell "bad paste" from "server down"
 --- from an ECONNREFUSED. A link that arrives by argument still goes to the engine, the
 --- way the other client sends one past its own box.
-local function is_invite_link(text)
-  return text:match('^wss?://%S+$') ~= nil
-    and text:match('[?&]room=[^&]+') ~= nil
-    and text:match('[?&]token=[^&]+') ~= nil
-end
-
---- The invite to join on, asked for when the command was given none.
 local function resolve_invite(callback)
   if not can_prompt() then
     notify('An invite link is needed.', vim.log.levels.ERROR)
@@ -2952,7 +3065,7 @@ local function resolve_invite(callback)
     end
     if not is_invite_link(invite) then
       notify(
-        'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like ws://host:8080/session?room=…&token=….',
+        'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.',
         vim.log.levels.ERROR
       )
       return
@@ -2961,15 +3074,21 @@ local function resolve_invite(callback)
   end)
 end
 
---- Puts this session's invite on the clipboard and the unnamed register, or answers false when
---- there is none to put there. Two moments reach for the invite — hosting again, and
---- `:SelvageCopyInvite` — and each has its own sentence about it.
+--- Puts this session's page link on the clipboard and the unnamed register, or answers
+--- false when there is none to put there. Two moments reach for the invite — hosting
+--- again, and `:SelvageCopyInvite` — and each has its own sentence about it. What is
+--- copied is never the wire address: only the page link leaves this editor.
 local function take_invite()
   if state.invite == nil then
     return false
   end
-  vim.fn.setreg('"', state.invite)
-  pcall(vim.fn.setreg, '+', state.invite)
+  local wire = parse_wire_invite(state.invite)
+  if wire == nil then
+    return false
+  end
+  local link = build_page_link(wire.room, wire.token, wire.base)
+  vim.fn.setreg('"', link)
+  pcall(vim.fn.setreg, '+', link)
   return true
 end
 
@@ -3069,7 +3188,9 @@ function M.join(invite)
         capture_root()
         process:send({
           type = 'join',
-          invite = link,
+          -- The companion dials the wire URL: a pasted page link resolves to its
+          -- room's server here, while a `ws://` link joins as it always has.
+          invite = resolve_invite_to_wire(link),
           displayName = display_name,
           autoSave = auto_save(),
         })
