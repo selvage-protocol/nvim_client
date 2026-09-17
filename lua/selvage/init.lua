@@ -52,6 +52,9 @@ local state = {
   --- The buffers with no file this session already named, so the refusal is said once per
   --- buffer: entering and leaving an untitled buffer is ordinary editing, not news.
   unfiled = {},
+  --- The room paths this session refused to share because the buffer's name is not a
+  --- regular file, so the refusal is said once per path.
+  linked = {},
   group = nil,
   --- The augroup the guest's mirror is watched with: reading one of its files shares it with the
   --- room, and saving one is the session's to route rather than the editor's to write.
@@ -632,6 +635,18 @@ local function refuse_unfiled(bufnr)
   )
 end
 
+--- Says, once per path, that a buffer's name is not a regular file and so is not the room's
+--- to share. The serve path a peer's ask takes refuses every link (`companion/grant.ts`
+--- reads with `O_NOFOLLOW`); the share path must not read straight through one and publish
+--- the target's bytes. The name is read with `lstat`, which reports the link itself.
+local function refuse_link(path)
+  if state.linked[path] ~= nil then
+    return
+  end
+  state.linked[path] = true
+  notify(('%s is not a regular file, so it is not shared.'):format(path), vim.log.levels.WARN)
+end
+
 --- The room path a buffer is shared under, and the absolute name it is refused for when it
 --- is not one to share.
 ---
@@ -670,6 +685,16 @@ local end_follow
 
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
+    return
+  end
+  -- The buffer's name is read with `lstat` before its text is: a link inside the grant
+  -- would otherwise be read straight through and its target's bytes published to the room,
+  -- which the serve path a peer's ask takes refuses. Anything but a regular file — a link,
+  -- a directory, a socket — is refused the way a file outside the grant is. A name with
+  -- nothing behind it is a file the person has not written yet, and shares empty.
+  local behind = uv.fs_lstat(api.nvim_buf_get_name(bufnr))
+  if behind ~= nil and behind.type ~= 'file' then
+    refuse_link(path)
     return
   end
   -- The same text `Document.new` will shadow, read once. The companion decodes its stdin as
@@ -2107,6 +2132,7 @@ local function forget_documents()
   state.unshareable = {}
   state.outside = {}
   state.unfiled = {}
+  state.linked = {}
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end

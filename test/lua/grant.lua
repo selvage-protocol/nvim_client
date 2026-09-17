@@ -250,5 +250,26 @@ check(
 
 selvage.leave()
 
+-- A link inside the grant is not a file of it: the serve path a peer's ask takes refuses
+-- every link, and the share path must not read straight through one and publish the target's
+-- bytes. Said once per path, the way a file outside the grant is.
+vim.fn.writefile({ 'not the room\'s' }, outside .. '/secret.txt')
+vim.fn.delete(grant .. '/linked.txt')
+local luv = vim.uv or vim.loop
+luv.fs_symlink(outside .. '/secret.txt', grant .. '/linked.txt')
+set_cwd(grant)
+open(grant .. '/linked.txt')
+local before_link = #notices
+local before_link_sends = #sent
+start_hosting('r-grant-5')
+check('a link inside the grant is not shared', opens_of('linked.txt', before_link_sends), 0)
+check('  and says it is not a regular file', said_since(before_link, 'linked.txt is not a regular file'), 1)
+check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+local before_revisit_link = #notices
+open(grant .. '/one.txt')
+open(grant .. '/linked.txt')
+check('  once per path, not once per visit', said_since(before_revisit_link, 'is not a regular file'), 0)
+selvage.leave()
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
