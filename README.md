@@ -140,7 +140,7 @@ their own statusline. A typed jump to a peer in no document waits for the frame 
 them rather than refusing — a presence update one frame away reads exactly the same — while
 the picker refuses its own rows where the row says they are in no document. A host opens a
 peer's document only when it resolves to a readable file inside the shared folder, never
-creating it; anything else says `could not open <path> from the room: <reason>`.
+creating it; anything else says `Could not open <path> from the room: <reason>`.
 
 ### The vendored engine
 

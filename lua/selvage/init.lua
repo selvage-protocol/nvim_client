@@ -1270,7 +1270,7 @@ end
 --- is refused rather than opened into being, which `autoSave` would then write to disk.
 --- Returns true once the document is held here — a guest's text still arrives over the
 --- sync, so a landing waits a frame for it — or false with the reason, said as
---- `could not open <path> from the room: <reason>`.
+--- `Could not open <path> from the room: <reason>`.
 local function open_room_path(path)
   if state.role ~= 'host' then
     local made, bufnr_or_err = pcall(guest_buffer, path)
