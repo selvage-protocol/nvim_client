@@ -193,6 +193,7 @@ local MESSAGES = {
   { 'INFO', 'The room lists no files to fetch.' },
   { 'INFO', 'Fetching opens them in the room, so every peer receives them.' },
   { 'INFO', 'Fetching opens %s in the room, so every peer receives it.' },
+  { 'INFO', '%s is opened in the room, so every peer receives it.' },
   { 'WARN', 'No file the room lists matches "%s"; :SelvageOpen and completion name them.' },
   { 'INFO', 'Fetched the files.' },
   { 'WARN', 'Fetched the files; these had not arrived within %ds: %s.' },

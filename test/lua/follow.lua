@@ -494,7 +494,12 @@ check(
   true
 )
 check('  on their caret', cursor(), '2,1')
-check('  saying nothing', #notices, before_stale)
+check(
+  '  saying the hold the re-open takes, the way a fetch does',
+  said_since(before_stale, path1 .. ' is opened in the room, so every peer receives it.') ~= nil,
+  true
+)
+check('  and only that', #notices, before_stale + 1)
 buf1 = vim.api.nvim_get_current_buf()
 
 -- A host never creates on a peer's behalf: a caret drawn where the file has since gone is
@@ -1171,16 +1176,22 @@ local before_heal = #notices
 selvage.go_to('Ada Lovelace')
 check(
   'a jump to a wiped buffer opens it and pends',
-  vim.fn.bufname('%') ~= 'selvage://g/one.txt' and #notices == before_heal,
+  vim.fn.bufname('%') ~= 'selvage://g/one.txt',
   true
 )
+check(
+  '  saying the hold the opening takes, the way a fetch does',
+  said_since(before_heal, 'g/one.txt is opened in the room, so every peer receives it.') ~= nil,
+  true
+)
+check('  and only that', #notices, before_heal + 1)
 arrive('g/one.txt', 'alpha\nbeta\ngamma\n')
 check(
   'landing when the text arrives with no new frame',
   vim.fn.bufname('%'),
   'selvage://g/one.txt'
 )
-check('  saying nothing', #notices, before_heal)
+check('  saying nothing new on arrival', #notices, before_heal + 1)
 
 -- The marks go with the membership: a peer the room no longer names leaves no caret
 -- behind even before the next presence frame redraws.

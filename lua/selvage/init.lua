@@ -1402,6 +1402,10 @@ local function land(peer_id)
     if not opened then
       return false, 'open-failed', err
     end
+    -- A landing that opens takes a hold: the document joins the room's open set, so every
+    -- peer receives it, the way a fetch does. Said once, where the hold is taken, in the
+    -- fetch's own sentence shape — not on every frame that lands on it afterwards.
+    notify(('%s is opened in the room, so every peer receives it.'):format(cursor.path))
     if state.role ~= 'host' then
       return false, 'waiting'
     end
