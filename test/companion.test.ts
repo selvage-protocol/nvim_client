@@ -805,6 +805,21 @@ test('a line past the bound is shed with a word, and the next line still arrives
   assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
 });
 
+test('the bound counts UTF-8 bytes, not code units', () => {
+  // `String.length` counts UTF-16 code units and stdin is decoded as UTF-8: 12M `€` are
+  // 12M units but 36M bytes on the wire — under a unit-counted bound, over a byte one.
+  const lines: string[] = [];
+  const drops: number[] = [];
+  const reader = new LineReader(
+    (line) => lines.push(line),
+    (bytes) => drops.push(bytes),
+  );
+  reader.push(`${'€'.repeat(12 * 1024 * 1024)}\n{"type":"leave"}\n`);
+  assert.equal(drops.length, 1, 'the wide line was shed');
+  assert.ok(drops[0] as number > MAX_IPC_LINE_BYTES, 'and told in bytes');
+  assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
+});
+
 // -- the IPC mouth, both directions ----------------------------------------------------
 //
 // A misshapen message answered blindly is a crash down the line, where the failure names

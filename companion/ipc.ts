@@ -97,17 +97,23 @@ export type Notification =
   | { type: 'presence'; cursors: Cursor[] };
 
 /**
- * A line longer than this is dropped rather than accumulated without bound: a whole-document
- * `open` is one JSON line, so a bound below that would refuse real work, while no bound lets
- * one runaway write grow the buffer — and re-scan it per chunk — for the life of the process.
- * Past it the reader sheds to the next newline and says so once per line, through `onDrop`;
- * what was shed never reaches `onLine`.
+ * How many UTF-8 bytes a line may hold before it is dropped rather than accumulated
+ * without bound: a whole-document `open` is one JSON line, so a bound below that would
+ * refuse real work, while no bound lets one runaway write grow the buffer — and re-scan it
+ * per chunk — for the life of the process. Bytes, not code units: stdin is decoded as UTF-8,
+ * and a CJK line is three times what `String.length` says. Past it the reader sheds to the
+ * next newline and says so once per line, through `onDrop`; what was shed never reaches
+ * `onLine`.
  */
 export const MAX_IPC_LINE_BYTES = 32 * 1024 * 1024;
 
 /** Reads newline-delimited JSON off a byte stream. */
 export class LineReader {
   private buffer = '';
+  // The buffer in UTF-8 bytes, not code units: stdin is decoded as UTF-8, so a CJK line
+  // is three times what `String.length` says, and the bound has to hold for it too. Counted
+  // as chunks land and lines leave, never re-scanned whole.
+  private bufferBytes = 0;
   private readonly onLine: (line: string) => void;
   private readonly onDrop: (bytes: number) => void;
   /** Whether the reader is shedding an overlong line, to its newline. */
@@ -124,29 +130,32 @@ export class LineReader {
    */
   push(chunk: string): void {
     this.buffer += chunk;
-    // Past the bound with no newline in sight, the line is shed rather than kept: holding
-    // it would grow the buffer — and re-scan it per chunk — for a line nothing will answer.
-    // Said the first time a line sheds; a shed tail that runs past the bound again is shed
-    // in silence, because it is the same line still ending.
-    if (this.buffer.length > MAX_IPC_LINE_BYTES && !this.buffer.includes('\n')) {
+    // Past the bound with no newline in sight, the line is shed rather than kept, said the
+    // first time it sheds; a shed tail that runs past it again goes in silence.
+    this.bufferBytes += Buffer.byteLength(chunk, 'utf8');
+    if (this.bufferBytes > MAX_IPC_LINE_BYTES && !this.buffer.includes('\n')) {
       if (!this.dropping) {
         this.dropping = true;
-        this.onDrop(this.buffer.length);
+        this.onDrop(this.bufferBytes);
       }
       this.buffer = '';
+      this.bufferBytes = 0;
       return;
     }
     let newline = this.buffer.indexOf('\n');
     while (newline !== -1) {
       const line = this.buffer.slice(0, newline);
       this.buffer = this.buffer.slice(newline + 1);
+      // The newline is ASCII, so a line and its terminator leave together.
+      const lineBytes = Buffer.byteLength(line, 'utf8');
+      this.bufferBytes -= lineBytes + 1;
       if (this.dropping) {
         // The newline the shed line ended at: shedding ends with it, and the tail with it.
         this.dropping = false;
-      } else if (line.length > MAX_IPC_LINE_BYTES) {
+      } else if (lineBytes > MAX_IPC_LINE_BYTES) {
         // A whole line past the bound, delivered in fewer chunks than it takes to shed:
         // nothing this process answers is that long, so it goes the way a shed one does.
-        this.onDrop(line.length);
+        this.onDrop(lineBytes);
       } else if (line.trim() !== '') {
         this.onLine(line);
       }
