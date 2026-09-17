@@ -385,8 +385,16 @@ local function draw_presence(cursors)
   local ns = presence_namespace()
   for _, cursor in ipairs(state.cursors) do
     if type(cursor) == 'table' then
-      local document = state.documents[cursor.path]
-      if document ~= nil and api.nvim_buf_is_valid(document.bufnr) then
+      -- The offsets are the companion's: a table cursor with a held path but missing or
+      -- non-numeric offsets would fail in the comparison and `position` calls below,
+      -- inside the job callback, aborting the message with the retries piggybacked on it.
+      local document = type(cursor.path) == 'string' and state.documents[cursor.path] or nil
+      if
+        document ~= nil
+        and api.nvim_buf_is_valid(document.bufnr)
+        and type(cursor.anchor) == 'number'
+        and type(cursor.head) == 'number'
+      then
         local label = cursor.label or cursor.peerId or 'peer'
         local name = peer_highlight(cursor)
         -- What the gutter shows is built here, where it is drawn, so the list `:SelvagePeers`
@@ -618,6 +626,16 @@ local function watch_presence()
   }, {
     group = state.presence_group,
     callback = schedule_selection,
+  })
+  -- A colorscheme runs `highlight clear`, which takes the peer groups the session made with
+  -- it: without this the paint cache would skip setting them ever again, leaving carets
+  -- and fills unstyled for the rest of the session.
+  api.nvim_create_autocmd('ColorScheme', {
+    group = state.presence_group,
+    callback = function()
+      state.peer_paints = {}
+      draw_presence(state.cursors)
+    end,
   })
 end
 

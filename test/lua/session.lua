@@ -1384,6 +1384,17 @@ check(
   true
 )
 check(
+  '  and a held-path entry with offsets of the wrong type is skipped too',
+  pcall(handlers().on_message, {
+    type = 'presence',
+    cursors = {
+      { peerId = 'p-bad', label = 'Bad', path = shared_path, anchor = 'x' },
+      { peerId = 'p-worse', label = 'Worse', path = shared_path, anchor = 0 },
+    },
+  }),
+  true
+)
+check(
   '  and the next well-shaped presence still draws',
   pcall(handlers().on_message, { type = 'presence', cursors = {} }),
   true
@@ -1497,6 +1508,36 @@ check('a report that changed nothing sets no highlight', hl_sets, sets_after_fir
 paint_cursor.colour = '#98c379'
 handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
 check('  while a colour that moved repaints', hl_sets > sets_after_first, true)
+-- A selection to fill, so the fill has something to lose: caret-only reports never call it.
+paint_cursor.anchor = 0
+paint_cursor.head = 3
+handlers().on_message({ type = 'presence', cursors = { paint_cursor } })
+local paint_ns = vim.api.nvim_get_namespaces()['selvage.presence']
+local fill_name = nil
+for _, mark in ipairs(
+  vim.api.nvim_buf_get_extmarks(vim.api.nvim_get_current_buf(), paint_ns, 0, -1, { details = true })
+) do
+  if mark[4].end_row ~= nil and mark[4].sign_text == nil then
+    fill_name = mark[4].hl_group
+  end
+end
+check(
+  'the selection is filled',
+  fill_name ~= nil and vim.api.nvim_get_hl(0, { name = fill_name }).bg ~= nil,
+  true
+)
+vim.cmd('highlight clear')
+check(
+  '  until a colorscheme clears it',
+  fill_name ~= nil and vim.api.nvim_get_hl(0, { name = fill_name }).bg == nil,
+  true
+)
+vim.api.nvim_exec_autocmds('ColorScheme', {})
+check(
+  '  and the session repaints it',
+  fill_name ~= nil and vim.api.nvim_get_hl(0, { name = fill_name }).bg ~= nil,
+  true
+)
 vim.api.nvim_set_hl = real_set_hl
 
 selvage.leave()
