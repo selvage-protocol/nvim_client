@@ -1635,8 +1635,9 @@ local function land_follow()
 end
 
 --- Lands the follow again on a new frame: the peer moved, or their text arrived. A frame
---- with nothing drawn for them is a frame with nothing to do — they may be between
---- documents, or in one this client does not hold — so the follow stands and stays silent.
+--- with nothing drawn for them is a frame with nothing to land on — they may be between
+--- documents, or in one this client does not hold — so the follow stands, saying so once on
+--- the first such frame and never per frame.
 local function follow_frame()
   local following = state.following
   if following == nil then
@@ -1644,6 +1645,8 @@ local function follow_frame()
   end
   local ok, reason, err = land_follow()
   if ok then
+    -- Drawable again: the next undrawable stretch is news again too.
+    following.gone_warned = false
     return true
   end
   if reason == 'open-failed' then
@@ -1658,6 +1661,14 @@ local function follow_frame()
         vim.log.levels.ERROR
       )
     end
+  end
+  if reason == 'unknown' and not following.gone_warned then
+    -- The first frame with no drawable caret: the indicator keeps saying Following and
+    -- the window stays put, so the change from somewhere to nowhere is said once rather
+    -- than never, and never per frame. A document opened here whose text still arrives is
+    -- 'waiting', not 'unknown', and stays silent: a frame away from landing.
+    following.gone_warned = true
+    notify(('%s is not in a document; still following.'):format(following.label))
   end
   return false
 end
@@ -2908,6 +2919,13 @@ function M.host(url)
     end
     return
   end
+  -- A session being opened is one in flight: a second host behind it earns the companion's
+  -- refusal, whose sentence describes a live room rather than a double invocation half a
+  -- second apart.
+  if state.status == 'connecting' then
+    notify('A session is already being opened.', vim.log.levels.WARN)
+    return
+  end
   if in_session() then
     local can_leave = confirm_leave(
       ('You are in room %s; hosting a session means leaving it first.'):format(tostring(state.room)),
@@ -2947,6 +2965,12 @@ end
 --- room ends this one for everyone in it, and a mistyped link must not do that on its own.
 function M.join(invite)
   local wanted = vim.trim(invite or '')
+  -- As hosting one: a second join behind a session being opened earns the companion's
+  -- refusal for a room that was never live.
+  if state.status == 'connecting' then
+    notify('A session is already being opened.', vim.log.levels.WARN)
+    return
+  end
   if in_session() then
     local can_leave
     if state.role == 'host' then

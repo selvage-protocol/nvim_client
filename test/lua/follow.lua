@@ -171,6 +171,35 @@ selvage.go_to('p-bob')
 check('a peer id names the peer too', vim.api.nvim_get_current_buf(), buf2)
 check('  with the cursor on their caret', cursor(), '2,0')
 
+
+-- A follow whose target leaves every document says so once: the indicator keeps saying
+-- Following and the window stays put, so the change from somewhere to nowhere is news —
+-- once, not per frame, and again after they came back and left.
+local before_undrawn = #notices
+selvage.follow('Ada')
+check('following a peer lands on them', selvage.following(), 'Ada')
+presence({})
+check(
+  'a target with no drawable caret is said once',
+  said_since(before_undrawn, 'Ada is not in a document; still following.') ~= nil,
+  true
+)
+local before_second_blank = #notices
+presence({})
+check('  and not per frame', said_since(before_second_blank, 'still following') ~= nil, false)
+check('  while the follow stands', selvage.following(), 'Ada')
+presence({ cursor_for('p-ada', path1, 7) })
+check('  landing again where they came back to', cursor(), '2,1')
+local before_relapse = #notices
+presence({})
+check(
+  '  but again after they came back and left',
+  said_since(before_relapse, 'Ada is not in a document; still following.') ~= nil,
+  true
+)
+selvage.stop_following()
+-- The landings above moved the window; the tests below start from where the go-to left it.
+vim.api.nvim_set_current_buf(buf2)
 local before_unknown = #notices
 selvage.go_to('Nobody')
 check(

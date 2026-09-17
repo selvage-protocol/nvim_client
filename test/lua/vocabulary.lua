@@ -113,6 +113,7 @@ local MESSAGES = {
   -- Hosting and joining.
   { 'INFO', 'Room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).' },
   { 'INFO', 'You are already hosting room %s; the invite link is on the clipboard.' },
+  { 'WARN', 'A session is already being opened.' },
   { 'INFO', 'Joined room %s; opening %s.' },
   { 'INFO', 'Joined room %s; opening %s; %d more, :SelvageOpen to choose.' },
   { 'INFO', 'Joined room %s.' },
@@ -137,6 +138,7 @@ local MESSAGES = {
   { 'WARN', 'Not in a session.' },
   -- Going to a participant, and following one.
   { 'INFO', 'Following %s.' },
+  { 'INFO', '%s is not in a document; still following.' },
   { 'INFO', 'Stopped following %s.' },
   { 'WARN', 'Not following anyone.' },
   { 'WARN', '%s left the room, so following stopped.' },
