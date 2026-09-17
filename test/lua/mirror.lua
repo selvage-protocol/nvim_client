@@ -720,7 +720,7 @@ before = #notices
 vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/created-by-hand.txt'))
 check(
   'creating a file in the mirror says the room has no frame for it',
-  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  said_since(before, 'The room carries no file mutations yet') ~= nil,
   true
 )
 local created_repeated = #notices
@@ -733,7 +733,7 @@ vim.cmd('enew')
 vim.cmd('file ' .. vim.fn.fnameescape(root .. '/renamed-by-hand.txt'))
 check(
   'renaming a buffer onto a mirror name says the room has no frame for it',
-  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  said_since(before, 'The room carries no file mutations yet') ~= nil,
   true
 )
 vim.cmd('bwipeout!')
@@ -746,7 +746,7 @@ before = #notices
 vim.api.nvim_exec_autocmds('BufEnter', { buffer = listed_buf })
 check(
   'deleting a listed file says the room has no frame for it',
-  said_since(before, 'the room carries no file mutations yet') ~= nil,
+  said_since(before, 'The room carries no file mutations yet') ~= nil,
   true
 )
 check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(listed_buf), true)
@@ -821,7 +821,7 @@ root = join({}, GRANT)
 responder = nil
 before = #notices
 vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/README.md'))
-local hint_at = notice_at(before, 'this file is empty until fetched')
+local hint_at = notice_at(before, 'This file is empty until fetched')
 check('opening a file nobody fetched says it is empty until fetched', hint_at ~= nil, true)
 check(
   '  pointing at the command that fills it',
@@ -859,10 +859,10 @@ responder = room_holding({
 before = #notices
 selvage.fetch('deep.txt')
 check('a fetch of one path writes its file', read(root .. '/notes/deep.txt'), 'deep\n')
-check('  and says what it did', said_since(before, 'fetched the files') ~= nil, true)
+check('  and says what it did', said_since(before, 'Fetched the files') ~= nil, true)
 check(
   '  and scopes the consent to that one path',
-  said_since(before, 'fetching opens notes/deep.txt in the room, so every peer receives it') ~= nil,
+  said_since(before, 'Fetching opens notes/deep.txt in the room, so every peer receives it') ~= nil,
   true
 )
 
@@ -870,20 +870,20 @@ before = #notices
 selvage.fetch('src')
 check('a fetch of a directory writes every file of it', read(root .. '/src/main.rs'), 'fn main() {}\n')
 check('  and the other one too', read(root .. '/src/util.rs'), 'fn util() {}\n')
-check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
+check('  and says it finished', said_since(before, 'Fetched the files') ~= nil, true)
 
 before = #notices
 selvage.fetch()
 check('a fetch of nothing fetches the whole listing', read(root .. '/README.md'), 'readme\n')
-check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
+check('  and says it finished', said_since(before, 'Fetched the files') ~= nil, true)
 check(
   '  and keeps the whole-listing consent plural',
-  said_since(before, 'fetching opens them in the room, so every peer receives them') ~= nil,
+  said_since(before, 'Fetching opens them in the room, so every peer receives them') ~= nil,
   true
 )
 check('  and every file it names is held in the room', #selvage.documents(), 4)
 local opened_at = notice_at(before, 'opens them in the room, so every peer receives them')
-local fetched_at = notice_at(before, 'fetched the files')
+local fetched_at = notice_at(before, 'Fetched the files')
 check(
   '  and said it would open them in the room before it did',
   opened_at ~= nil and fetched_at ~= nil and opened_at < fetched_at,
@@ -899,7 +899,7 @@ local already = root .. '/README.md'
 uv.fs_utime(already, 1000, 1000)
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('README.md')
-check('a path fetched already answers without waiting', said_since(before, 'fetched the files') ~= nil, true)
+check('a path fetched already answers without waiting', said_since(before, 'Fetched the files') ~= nil, true)
 check('  and is not written again', uv.fs_stat(already).mtime.sec, 1000)
 check(
   '  and says nothing about opening what the room already holds',
@@ -922,7 +922,7 @@ end
 before = #notices
 selvage.fetch('late.txt')
 check('a fetch waits for the room to answer', read(root .. '/late.txt'), 'answered late\n')
-check('  and says what arrived', said_since(before, 'fetched the files') ~= nil, true)
+check('  and says what arrived', said_since(before, 'Fetched the files') ~= nil, true)
 
 responder = nil
 root = join({}, { 'quiet.txt' })
@@ -938,19 +938,19 @@ room_text('quiet.txt', 'at last\n', 0)
 check('  and content that arrives after the deadline is written all the same', read(root .. '/quiet.txt'), 'at last\n')
 before = #notices
 selvage.fetch('quiet.txt')
-check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched the files') ~= nil, true)
+check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'Fetched the files') ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
 
 -- A word that names nothing is refused rather than fetched as nothing.
 before = #notices
 selvage.fetch('nothing-here')
-check('a fetch of a path nothing matches is refused', said_since(before, 'no file the room lists matches "nothing-here"') ~= nil, true)
+check('a fetch of a path nothing matches is refused', said_since(before, 'No file the room lists matches "nothing-here"') ~= nil, true)
 
 responder = nil
 selvage.leave()
 before = #notices
 selvage.fetch()
-check('a fetch with no session says so', said_since(before, 'join a session first') ~= nil, true)
+check('a fetch with no session says so', said_since(before, 'Join a session first') ~= nil, true)
 
 selvage.host('ws://127.0.0.1:1')
 handle({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-mirror' })
@@ -964,7 +964,7 @@ before = #notices
 selvage.fetch()
 check(
   'a fetch in a room that lists nothing says so',
-  said_since(before, 'the room lists no files to fetch') ~= nil,
+  said_since(before, 'The room lists no files to fetch') ~= nil,
   true
 )
 
@@ -976,7 +976,7 @@ handle({ type = 'report', report = { kind = 'grant', paths = {} } })
 before = #notices
 selvage.fetch()
 check('a fetch after the listing shrank to nothing says so', selvage.session().mirror, root)
-check('  and the fetch says it too', said_since(before, 'the room lists no files to fetch') ~= nil, true)
+check('  and the fetch says it too', said_since(before, 'The room lists no files to fetch') ~= nil, true)
 
 -- -- a file closed while it is being fetched ----------------------------------------------
 --
@@ -1019,7 +1019,7 @@ vim.schedule(function()
   handle({ type = 'status', state = 'idle' })
 end)
 selvage.fetch()
-check('a session that ends mid-fetch ends the wait', said_since(before, 'the session ended before the files were fetched') ~= nil, true)
+check('a session that ends mid-fetch ends the wait', said_since(before, 'The session ended before the files were fetched') ~= nil, true)
 check('  and the mirror went with it', selvage.session().mirror, nil)
 vim.g.selvage_fetch_timeout_ms = nil
 

@@ -127,7 +127,7 @@ when there is no shared document in front of the user.
 
 Following moves the follower's caret: Neovim has no viewport-only state that survives a redraw,
 so being where a peer is means the cursor is there, and the next keystroke lands there too. That
-is why a local edit of a shared document ends the follow, saying `stopped following <name>` —
+is why a local edit of a shared document ends the follow, saying `Stopped following <name>.` —
 while a remote edit only re-lands it. Going somewhere deliberately ends one the same way, the
 peer's leaving ends it with their name on it, and a rename keeps it, since the target is the
 peer id. While a follow stands, the window shows a `winbar` row naming the peer and the command
@@ -140,7 +140,7 @@ their own statusline. A typed jump to a peer in no document waits for the frame 
 them rather than refusing — a presence update one frame away reads exactly the same — while
 the picker refuses its own rows where the row says they are in no document. A host opens a
 peer's document only when it resolves to a readable file inside the shared folder, never
-creating it; anything else says `could not open <path> from the room: <reason>`.
+creating it; anything else says `Could not open <path> from the room: <reason>`.
 
 ### The vendored engine
 
@@ -326,7 +326,7 @@ Three things the mirror does not do, all deliberately:
 for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
 shared; a file deleted or renamed in it does not reach the room, and the room's copy comes back the
 next time the path is fetched. Trying one says so where it happens: creating a file in the mirror,
-renaming a buffer onto a mirror name, or deleting a listed file's cache each say `the room carries no file mutations yet`, once per path. What does follow a host's folder is its **listing**: a file the host
+renaming a buffer onto a mirror name, or deleting a listed file's cache each say `The room carries no file mutations yet.`, once per path. What does follow a host's folder is its **listing**: a file the host
 creates, deletes or renames under the folder it shares is republished as the room's grant, and a
 guest's mirror gains a file for a path that appeared and loses one for a path that went. The mirror
 is where a person reads and edits what the room holds, not where they restructure a project.

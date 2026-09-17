@@ -102,6 +102,12 @@ local state = {
   -- landing did with the room's documents, which is only known once they are named — so it is
   -- said over the first `documents` report rather than when the handshake arrives.
   join_said = false,
+  -- What the join's own listing materialised: how many files, and where. The companion
+  -- reports the listing before the documents, so the first grant lands before the join is
+  -- said, and its counts join that one summary instead of arriving as a second sentence.
+  -- A listing that arrives after the join was said keeps its own sentence: the summary
+  -- already went out, and where the mirror lives is still news.
+  join_mirror = nil,
 }
 
 --- Whether a session is live. The companion process is not the thing to ask: it outlives the
@@ -464,12 +470,12 @@ end
 --- document for has no sign and no colour, and is listed by name and role alone.
 function M.list_peers()
   if not in_session() then
-    notify('join a session first', vim.log.levels.WARN)
+    notify('Join a session first.', vim.log.levels.WARN)
     return
   end
   local peers = M.peers()
   if #peers == 0 then
-    notify('no other participants yet', vim.log.levels.WARN)
+    notify('No other participants yet.', vim.log.levels.WARN)
     return
   end
   local chunks = {}
@@ -598,7 +604,7 @@ local function refuse_outside(path)
   end
   state.outside[path] = true
   notify(
-    ('%s is outside %s, the folder this session shares, so it is not shared'):format(
+    ('%s is outside %s, the folder this session shares, so it is not shared.'):format(
       path,
       state.root == '' and '/' or state.root
     ),
@@ -619,7 +625,7 @@ local function refuse_unfiled(bufnr)
   end
   state.unfiled[bufnr] = true
   notify(
-    ('this buffer has no file, so it is not shared; the folder this session shares is %s'):format(
+    ('This buffer has no file, so it is not shared; the folder this session shares is %s.'):format(
       root == '' and '/' or root
     ),
     vim.log.levels.WARN
@@ -673,7 +679,7 @@ local function share(bufnr, path)
   if not utf16.valid(text) then
     if state.unshareable[path] == nil then
       state.unshareable[path] = true
-      notify(('%s is not valid UTF-8, so it is not shared'):format(path), vim.log.levels.ERROR)
+      notify(('%s is not valid UTF-8, so it is not shared.'):format(path), vim.log.levels.ERROR)
     end
     return
   end
@@ -694,6 +700,23 @@ local function share(bufnr, path)
   -- caret is worth publishing the moment the room holds it.
   draw_presence(state.cursors)
   schedule_selection()
+end
+
+--- How many of `documents` this session has already written into the mirror: content the
+--- room answered the join's holds with, which is what makes a landing fetched rather than
+--- merely opened. Read when the join is said, after the holds went out, so a companion
+--- that answers at once counts its answers and one that answers later counts none yet.
+---
+--- @param documents string[] the room paths of the landing
+--- @return integer fetched
+local function fetched_count(documents)
+  local count = 0
+  for _, path in ipairs(documents) do
+    if mirror.written(path) then
+      count = count + 1
+    end
+  end
+  return count
 end
 
 --- The buffer a guest holds the room's document in.
@@ -749,7 +772,7 @@ local function refuse_unlisted(path)
   end
   state.unlisted[path] = true
   notify(
-    ('%s is not in the room, so it is not shared; the mirror holds the room\'s files and is removed when the session ends'):format(path),
+    ('%s is not in the room, so it is not shared; the mirror holds the room\'s files and is removed when the session ends.'):format(path),
     vim.log.levels.WARN
   )
 end
@@ -765,7 +788,7 @@ local function refuse_mirror_write(path)
   end
   state.unwritable[path] = true
   notify(
-    ('%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it'):format(path),
+    ('%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it.'):format(path),
     vim.log.levels.WARN
   )
 end
@@ -779,7 +802,7 @@ local function refuse_mutation(path)
     return
   end
   state.unmutated[path] = true
-  notify('the room carries no file mutations yet', vim.log.levels.WARN)
+  notify('The room carries no file mutations yet.', vim.log.levels.WARN)
 end
 
 --- Says, once per path, that a freshly opened document never arrived because the listing left
@@ -794,7 +817,7 @@ local function notice_gone(path)
   end
   state.gone[path] = true
   notify(
-    ('%s is no longer in the room; the host no longer has it'):format(path),
+    ('%s is no longer in the room; the host no longer has it.'):format(path),
     vim.log.levels.WARN
   )
 end
@@ -802,12 +825,19 @@ end
 --- Says, once per path, that a mirror file opened empty holds nothing yet because its content
 --- has not been fetched: the shape is materialised and the content is not, so an empty file is
 --- the expected sight, and `:SelvageFetch` is what fills it.
+---
+--- Said for the first such file in a session and never again: the sentence is for the shape,
+--- and the shape is the same on every empty file, so one hint per file is a flood with
+--- the file count. The paths are all still recorded, so a file fetched later is not news.
 local function notice_unfetched(path)
   if state.unfetched[path] ~= nil then
     return
   end
+  local first = next(state.unfetched) == nil
   state.unfetched[path] = true
-  notify(('this file is empty until fetched; :SelvageFetch %s fills it'):format(path))
+  if first then
+    notify(('This file is empty until fetched; :SelvageFetch %s fills it.'):format(path))
+  end
 end
 
 --- Whether a buffer holds nothing: one empty line, the way an empty file reads.
@@ -907,16 +937,16 @@ end
 --- lost — `:SelvagePeers` and `require('selvage').session()` still report it.
 function M.open(path)
   if not in_session() then
-    notify('join a session first', vim.log.levels.WARN)
+    notify('Join a session first.', vim.log.levels.WARN)
     return
   end
   if state.role == 'host' then
-    notify('you are hosting, so the files you open are the ones the room has', vim.log.levels.INFO)
+    notify('You are hosting, so the files you open are the ones the room has.', vim.log.levels.INFO)
     return
   end
   local paths = M.offered()
   if #paths == 0 then
-    notify('the room has no open documents yet', vim.log.levels.INFO)
+    notify('The room has no open documents yet.', vim.log.levels.INFO)
     return
   end
   local wanted = vim.trim(path or '')
@@ -932,12 +962,12 @@ function M.open(path)
   if resolved == nil then
     if #candidates > 1 then
       notify(
-        ('"%s" matches several: %s'):format(wanted, table.concat(candidates, ', ')),
+        ('"%s" matches several: %s.'):format(wanted, table.concat(candidates, ', ')),
         vim.log.levels.WARN
       )
     else
       notify(
-        ('no shared document matches "%s"; :SelvageOpen alone offers them'):format(wanted),
+        ('No shared document matches "%s"; :SelvageOpen alone offers them.'):format(wanted),
         vim.log.levels.WARN
       )
     end
@@ -1038,15 +1068,15 @@ end
 --- @param path string|nil one path, a directory of them, or nil for the whole listing
 function M.fetch(path)
   if not in_session() then
-    notify('join a session first', vim.log.levels.WARN)
+    notify('Join a session first.', vim.log.levels.WARN)
     return
   end
   if state.role == 'host' then
-    notify('you are hosting, so the files a mirror would hold are already on your disk', vim.log.levels.INFO)
+    notify('You are hosting, so the files a mirror would hold are already on your disk.', vim.log.levels.INFO)
     return
   end
   if mirror.root() == nil then
-    notify('the room lists no files to fetch', vim.log.levels.INFO)
+    notify('The room lists no files to fetch.', vim.log.levels.INFO)
     return
   end
   local wanted = vim.trim(path or '')
@@ -1054,19 +1084,19 @@ function M.fetch(path)
   if targets == nil then
     if candidates ~= nil and #candidates > 1 then
       notify(
-        ('"%s" matches several: %s'):format(wanted, table.concat(candidates, ', ')),
+        ('"%s" matches several: %s.'):format(wanted, table.concat(candidates, ', ')),
         vim.log.levels.WARN
       )
     else
       notify(
-        ('no file the room lists matches "%s"; :SelvageOpen and completion name them'):format(wanted),
+        ('No file the room lists matches "%s"; :SelvageOpen and completion name them.'):format(wanted),
         vim.log.levels.WARN
       )
     end
     return
   end
   if #targets == 0 then
-    notify('the room lists no files to fetch', vim.log.levels.INFO)
+    notify('The room lists no files to fetch.', vim.log.levels.INFO)
     return
   end
   local pending = {}
@@ -1082,9 +1112,9 @@ function M.fetch(path)
     -- a whole listing is a whole project published and the sentence after it is too late to be a
     -- choice (`DESIGN.md` §4.2). A single path names itself; the plural is for the listing.
     if #targets == 1 then
-      notify(('fetching opens %s in the room, so every peer receives it'):format(targets[1]))
+      notify(('Fetching opens %s in the room, so every peer receives it.'):format(targets[1]))
     else
-      notify('fetching opens them in the room, so every peer receives them')
+      notify('Fetching opens them in the room, so every peer receives them.')
     end
   end
   for _, target in ipairs(targets) do
@@ -1103,16 +1133,16 @@ function M.fetch(path)
     return not in_session() or #unfetched(pending) == 0
   end, 50)
   if not in_session() then
-    notify('the session ended before the files were fetched', vim.log.levels.WARN)
+    notify('The session ended before the files were fetched.', vim.log.levels.WARN)
     return
   end
   local left = unfetched(pending)
   if #left == 0 then
-    notify('fetched the files')
+    notify('Fetched the files.')
     return
   end
   notify(
-    ('fetched the files; these had not arrived within %ds: %s'):format(
+    ('Fetched the files; these had not arrived within %ds: %s.'):format(
       seconds(timeout),
       table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
     ),
@@ -1240,7 +1270,7 @@ end
 --- is refused rather than opened into being, which `autoSave` would then write to disk.
 --- Returns true once the document is held here — a guest's text still arrives over the
 --- sync, so a landing waits a frame for it — or false with the reason, said as
---- `could not open <path> from the room: <reason>`.
+--- `Could not open <path> from the room: <reason>`.
 local function open_room_path(path)
   if state.role ~= 'host' then
     local made, bufnr_or_err = pcall(guest_buffer, path)
@@ -1348,7 +1378,7 @@ local function indicator_text(label)
   -- The row is evaluated like a statusline, where `%` starts an item: a name carrying
   -- one has to arrive doubled.
   local safe = tostring(label or ''):gsub('%%', '%%%%')
-  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(safe)
+  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(safe)
 end
 
 -- What the indicator's click label calls: a Vim function by name. A Lua `_G` function is
@@ -1369,7 +1399,7 @@ end
 --- Whether `text` is the indicator's own row: only the indicator writes that framing, so a
 --- buffer showing it with no row saved is residue rather than someone's own row.
 local function is_indicator_row(text)
-  return tostring(text):find('%#SelvageFollow#%0@SelvageStopFollowing@ following ', 1, true) == 1
+  return tostring(text):find('%#SelvageFollow#%0@SelvageStopFollowing@ Following ', 1, true) == 1
 end
 
 --- Puts back the winbar rows the indicator replaced, wherever they stand: every window
@@ -1513,9 +1543,9 @@ end_follow = function(why)
   state.following = nil
   clear_indicator()
   if why == 'stopped' then
-    notify(('stopped following %s'):format(following.label))
+    notify(('Stopped following %s.'):format(following.label))
   elseif why == 'left' then
-    notify(('%s left the room, so following stopped'):format(following.label), vim.log.levels.WARN)
+    notify(('%s left the room, so following stopped.'):format(following.label), vim.log.levels.WARN)
   end
 end
 
@@ -1539,7 +1569,7 @@ local function land_follow()
     -- The first landing is said out loud.
     if not following.said then
       following.said = true
-      notify(('following %s'):format(following.label))
+      notify(('Following %s.'):format(following.label))
     end
   end
   return ok, reason, err
@@ -1565,7 +1595,7 @@ local function follow_frame()
     if following.open_warned_for ~= path then
       following.open_warned_for = path
       notify(
-        ('could not open %s from the room: %s'):format(tostring(path), tostring(err)),
+        ('Could not open %s from the room: %s.'):format(tostring(path), tostring(err)),
         vim.log.levels.ERROR
       )
     end
@@ -1591,7 +1621,7 @@ local function begin_follow(row)
   -- refusal is this client's honest answer to the same row, per the study's no-document
   -- vocabulary.
   if row.path == nil then
-    notify(('nothing to follow: %s is not in a document'):format(row.label), vim.log.levels.WARN)
+    notify(('Nothing to follow: %s is not in a document.'):format(row.label), vim.log.levels.WARN)
     return
   end
   -- A pending go-to is superseded: the follow is the newer navigation, and a late frame
@@ -1613,11 +1643,11 @@ local function begin_follow(row)
       local cursor = cursor_for(row.peerId)
       local path = cursor ~= nil and cursor.path or row.path
       notify(
-        ('could not open %s from the room: %s'):format(tostring(path), tostring(err)),
+        ('Could not open %s from the room: %s.'):format(tostring(path), tostring(err)),
         vim.log.levels.ERROR
       )
     else
-      notify(("nothing to follow: %s's caret does not resolve here"):format(row.label), vim.log.levels.WARN)
+      notify(("Nothing to follow: %s's caret does not resolve here."):format(row.label), vim.log.levels.WARN)
     end
   end
 end
@@ -1645,7 +1675,7 @@ local function retry_go_to()
     -- The room no longer names them: a peer who left between the command and the text
     -- matches nobody now, the same refusal a stale picker choice reads.
     state.pending_go_to = nil
-    notify(('no participant matches "%s"'):format(pending.label), vim.log.levels.WARN)
+    notify(('No participant matches "%s".'):format(pending.label), vim.log.levels.WARN)
     return
   end
   pending.label = row.label
@@ -1658,12 +1688,12 @@ local function retry_go_to()
   elseif reason == 'open-failed' then
     state.pending_go_to = nil
     notify(
-      ('could not open %s from the room: %s'):format(row.path, tostring(err)),
+      ('Could not open %s from the room: %s.'):format(row.path, tostring(err)),
       vim.log.levels.ERROR
     )
   elseif reason ~= 'unknown' and reason ~= 'waiting' then
     state.pending_go_to = nil
-    notify(("nothing to go to: %s's caret does not resolve here"):format(row.label), vim.log.levels.WARN)
+    notify(("Nothing to go to: %s's caret does not resolve here."):format(row.label), vim.log.levels.WARN)
   end
 end
 
@@ -1691,11 +1721,11 @@ local function go_to_row(row)
     pend_go_to(row)
   elseif reason == 'open-failed' then
     notify(
-      ('could not open %s from the room: %s'):format(row.path, tostring(err)),
+      ('Could not open %s from the room: %s.'):format(row.path, tostring(err)),
       vim.log.levels.ERROR
     )
   else
-    notify(("nothing to go to: %s's caret does not resolve here"):format(row.label), vim.log.levels.WARN)
+    notify(("Nothing to go to: %s's caret does not resolve here."):format(row.label), vim.log.levels.WARN)
   end
 end
 
@@ -1730,12 +1760,12 @@ end
 --- With no name and one participant, that one; with several, the user is asked which.
 function M.go_to(name)
   if not in_session() then
-    notify('join a session first', vim.log.levels.WARN)
+    notify('Join a session first.', vim.log.levels.WARN)
     return
   end
   local peers = M.peers()
   if #peers == 0 then
-    notify('no other participants yet', vim.log.levels.WARN)
+    notify('No other participants yet.', vim.log.levels.WARN)
     return
   end
   local wanted = vim.trim(name or '')
@@ -1750,10 +1780,10 @@ function M.go_to(name)
           -- where the row itself says so; a typed name pends on the frames instead.
           local fresh = peer_row(row.peerId)
           if fresh == nil then
-            notify(('no participant matches "%s"'):format(row.label), vim.log.levels.WARN)
+            notify(('No participant matches "%s".'):format(row.label), vim.log.levels.WARN)
           elseif fresh.path == nil then
             notify(
-              ('nothing to go to: %s is not in a document'):format(fresh.label),
+              ('Nothing to go to: %s is not in a document.'):format(fresh.label),
               vim.log.levels.WARN
             )
           else
@@ -1768,9 +1798,9 @@ function M.go_to(name)
   if row ~= nil then
     go_to_row(row)
   elseif err == 'several' then
-    notify(('"%s" matches several: %s'):format(wanted, table.concat(several_rows(wanted, matches), ', ')), vim.log.levels.WARN)
+    notify(('"%s" matches several: %s.'):format(wanted, table.concat(several_rows(wanted, matches), ', ')), vim.log.levels.WARN)
   else
-    notify(('no participant matches "%s"'):format(wanted), vim.log.levels.WARN)
+    notify(('No participant matches "%s".'):format(wanted), vim.log.levels.WARN)
   end
 end
 
@@ -1778,12 +1808,12 @@ end
 --- their own, the peer leaving, or the session going.
 function M.follow(name)
   if not in_session() then
-    notify('join a session first', vim.log.levels.WARN)
+    notify('Join a session first.', vim.log.levels.WARN)
     return
   end
   local peers = M.peers()
   if #peers == 0 then
-    notify('no other participants yet', vim.log.levels.WARN)
+    notify('No other participants yet.', vim.log.levels.WARN)
     return
   end
   local wanted = vim.trim(name or '')
@@ -1798,9 +1828,9 @@ function M.follow(name)
           -- it, the same refusal the typed name reads.
           local fresh = peer_row(row.peerId)
           if fresh == nil then
-            notify(('no participant matches "%s"'):format(row.label), vim.log.levels.WARN)
+            notify(('No participant matches "%s".'):format(row.label), vim.log.levels.WARN)
           elseif fresh.path == nil then
-            notify(('nothing to follow: %s is not in a document'):format(fresh.label), vim.log.levels.WARN)
+            notify(('Nothing to follow: %s is not in a document.'):format(fresh.label), vim.log.levels.WARN)
           else
             begin_follow(fresh)
           end
@@ -1812,9 +1842,9 @@ function M.follow(name)
   local row, err, matches = resolve_peer(wanted)
   if row == nil then
     if err == 'several' then
-      notify(('"%s" matches several: %s'):format(wanted, table.concat(several_rows(wanted, matches), ', ')), vim.log.levels.WARN)
+      notify(('"%s" matches several: %s.'):format(wanted, table.concat(several_rows(wanted, matches), ', ')), vim.log.levels.WARN)
     else
-      notify(('no participant matches "%s"'):format(wanted), vim.log.levels.WARN)
+      notify(('No participant matches "%s".'):format(wanted), vim.log.levels.WARN)
     end
     return
   end
@@ -1824,7 +1854,7 @@ end
 --- Stops following, or says there is nothing to stop.
 function M.stop_following()
   if state.following == nil then
-    notify('not following anyone', vim.log.levels.WARN)
+    notify('Not following anyone.', vim.log.levels.WARN)
     return
   end
   end_follow('stopped')
@@ -1843,7 +1873,7 @@ function M.statusline()
   if following == nil then
     return ''
   end
-  return 'following ' .. tostring(following.label or '')
+  return 'Following ' .. tostring(following.label or '')
 end
 
 
@@ -1981,7 +2011,7 @@ local function watch_mirror()
         return
       end
       if not document:save() then
-        notify(('%s could not be written into the mirror'):format(path), vim.log.levels.ERROR)
+        notify(('%s could not be written into the mirror.'):format(path), vim.log.levels.ERROR)
       end
     end,
   })
@@ -1997,7 +2027,7 @@ local function watch_mirror()
           target = target:sub(#root + 2)
         end
         notify(
-          ('%s is inside the mirror, which holds the room\'s files, so it is not written; write outside the mirror to keep it'):format(target),
+          ('%s is inside the mirror, which holds the room\'s files, so it is not written; write outside the mirror to keep it.'):format(target),
           vim.log.levels.WARN
         )
       end,
@@ -2111,6 +2141,7 @@ local function reset()
   state.invite = nil
   state.auto_open = false
   state.join_said = false
+  state.join_mirror = nil
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
   -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
@@ -2166,7 +2197,7 @@ local function on_status(message)
     reset()
   elseif message.state == 'hosting' then
     notify(
-      ('room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite)'):format(
+      ('Room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).'):format(
         tostring(message.roomId),
         state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
       )
@@ -2213,23 +2244,74 @@ local function on_report(report)
         end
         if not state.join_said then
           state.join_said = true
+          local mirror_summary = state.join_mirror
           if not lands then
-            notify(('joined room %s'):format(tostring(state.room)))
-          elseif #report.documents > 1 then
-            notify(
-              ('joined room %s; opening %s; %d more, :SelvageOpen to choose'):format(
-                tostring(state.room),
-                report.documents[1],
-                #report.documents - 1
+            if mirror_summary ~= nil then
+              notify(
+                ('Joined room %s; %d files mirrored at %s; %d of %d fetched.'):format(
+                  tostring(state.room),
+                  mirror_summary.count,
+                  mirror_summary.root,
+                  fetched_count(report.documents),
+                  #report.documents
+                )
               )
-            )
+            else
+              notify(('Joined room %s.'):format(tostring(state.room)))
+            end
+          elseif #report.documents > 1 then
+            if mirror_summary ~= nil then
+              notify(
+                ('Joined room %s; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.'):format(
+                  tostring(state.room),
+                  report.documents[1],
+                  #report.documents - 1,
+                  mirror_summary.count,
+                  mirror_summary.root,
+                  fetched_count(report.documents),
+                  #report.documents
+                )
+              )
+            else
+              notify(
+                ('Joined room %s; opening %s; %d more, :SelvageOpen to choose.'):format(
+                  tostring(state.room),
+                  report.documents[1],
+                  #report.documents - 1
+                )
+              )
+            end
           else
-            notify(('joined room %s; opening %s'):format(tostring(state.room), report.documents[1]))
+            if mirror_summary ~= nil then
+              notify(
+                ('Joined room %s; opening %s; %d files mirrored at %s; %d of %d fetched.'):format(
+                  tostring(state.room),
+                  report.documents[1],
+                  mirror_summary.count,
+                  mirror_summary.root,
+                  fetched_count(report.documents),
+                  #report.documents
+                )
+              )
+            else
+              notify(('Joined room %s; opening %s.'):format(tostring(state.room), report.documents[1]))
+            end
           end
         end
       elseif state.auto_open and not state.join_said then
         state.join_said = true
-        notify(('joined room %s; the room has no open documents yet'):format(tostring(state.room)))
+        local mirror_summary = state.join_mirror
+        if mirror_summary ~= nil then
+          notify(
+            ('Joined room %s; the room has no open documents yet; %d files mirrored at %s.'):format(
+              tostring(state.room),
+              mirror_summary.count,
+              mirror_summary.root
+            )
+          )
+        else
+          notify(('Joined room %s; the room has no open documents yet.'):format(tostring(state.room)))
+        end
       end
     end
     -- The room's document set is one of the frames a pending landing waits on: a buffer a
@@ -2242,7 +2324,9 @@ local function on_report(report)
     -- error. The listing is what `:SelvageOpen` completes over, and a room that lists five
     -- hundred files has nothing worth interrupting a person for; what a *guest* does with it is
     -- materialise it, and the one sentence that says where is said over the session's first
-    -- listing rather than over every republish.
+    -- listing rather than over every republish. The join's own listing is the exception:
+    -- the summary said over the documents report carries where the mirror lives, so the
+    -- first listing before the join is said records its counts and stays silent.
     local previous = {}
     for _, path in ipairs(state.grant) do
       previous[path] = true
@@ -2260,13 +2344,17 @@ local function on_report(report)
       if root ~= nil then
         if created then
           watch_mirror()
+        end
+        if state.join_mirror == nil and not state.join_said then
+          state.join_mirror = { count = #state.grant - #blocked, root = root }
+        elseif created then
           notify(
-            ('the room\'s files are mirrored at %s; :SelvageFetch fetches their content'):format(root)
+            ('The room\'s files are mirrored at %s; :SelvageFetch fetches their content.'):format(root)
           )
         end
         if #blocked > 0 then
           notify(
-            ('%d of the room\'s files could not be mirrored, starting with %s'):format(
+            ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
               #blocked,
               blocked[1]
             ),
@@ -2338,27 +2426,27 @@ local function on_report(report)
   elseif report.kind == 'roomGone' then
     -- The room is over and the companion has let the engine go, so the session here ends with
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
-    notify(('the room is gone (%s)'):format(tostring(report.reason)), vim.log.levels.WARN)
+    notify(('The room is gone (%s).'):format(tostring(report.reason)), vim.log.levels.WARN)
     reset()
   elseif report.kind == 'hostDetached' then
     notify(
-      ('the host left the room; it closes in %ds unless they come back'):format(seconds(report.graceMs)),
+      ('The host left the room; it closes in %ds unless they come back.'):format(seconds(report.graceMs)),
       vim.log.levels.WARN
     )
   elseif report.kind == 'hostAttached' then
-    notify(('%s is hosting again'):format(tostring((report.peer or {}).display_name or 'the host')))
+    notify(('%s is hosting again.'):format(tostring((report.peer or {}).display_name or 'the host')))
   elseif report.kind == 'sessionError' then
-    notify(('%s (%s)'):format(tostring(report.message), tostring(report.code)), vim.log.levels.ERROR)
+    notify(('%s (%s).'):format(tostring(report.message), tostring(report.code)), vim.log.levels.ERROR)
   elseif report.kind == 'applyRefused' then
     notify(
-      ('the editor would not apply the room\'s change to %s; the file may be read-only'):format(
+      ('The editor would not apply the room\'s change to %s; the file may be read-only.'):format(
         tostring(report.path)
       ),
       vim.log.levels.ERROR
     )
   elseif report.kind == 'divergence' then
     notify(
-      ('%s was out of step with the room; the room\'s copy has been put back'):format(
+      ('%s was out of step with the room; the room\'s copy has been put back.'):format(
         tostring(report.path)
       ),
       vim.log.levels.WARN
@@ -2368,7 +2456,7 @@ local function on_report(report)
     -- fact and the parenthetical is why.
     local why = report.message
     notify(
-      ('could not save %s; the file on disk is behind the room%s'):format(
+      ('Could not save %s; the file on disk is behind the room%s.'):format(
         tostring(report.path),
         why == nil and '' or (' (' .. tostring(why) .. ')')
       ),
@@ -2379,7 +2467,7 @@ local function on_report(report)
     -- the session is over and typing would accumulate in a replica nobody hears. The
     -- companion process is deliberately left running — `ensure` reuses it on the next host
     -- or join, and the engine on the other side of it has already finished.
-    notify('the connection ended and the session is over; it could not be re-established', vim.log.levels.ERROR)
+    notify('The connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
     reset()
   end
 end
@@ -2404,7 +2492,7 @@ local function on_message(message)
     -- This process did not open a second session: one is already live. The commands ask before
     -- they send one, so this is the answer when something else did not.
     local where = message.what == 'host' and 'hosting' or 'in'
-    notify(('already %s room %s; leave that session first'):format(where, tostring(message.roomId)), vim.log.levels.WARN)
+    notify(('Already %s room %s; leave that session first.'):format(where, tostring(message.roomId)), vim.log.levels.WARN)
   elseif message.type == 'report' then
     on_report(message.report)
   elseif message.type == 'presence' then
@@ -2446,7 +2534,7 @@ local function ensure()
       state.process = nil
       reset()
       if code ~= 0 then
-        notify(('the companion exited with %s'):format(tostring(code)), vim.log.levels.ERROR)
+        notify(('The companion exited with %s.'):format(tostring(code)), vim.log.levels.ERROR)
       end
     end,
   })
@@ -2476,7 +2564,7 @@ local function acceptable(name, source, did)
     return true
   end
   notify(
-    ('this name is %s; a name is refused rather than shortened (from %s, so %s; set a shorter one)'):format(
+    ('This name is %s; a name is refused rather than shortened (from %s, so %s; set a shorter one).'):format(
       over_long(name),
       source,
       did
@@ -2542,7 +2630,7 @@ local function resolve_display_name(callback)
   end
   if not can_prompt() then
     notify(
-      'no display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName',
+      'No display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.',
       vim.log.levels.ERROR
     )
     return
@@ -2551,12 +2639,12 @@ local function resolve_display_name(callback)
     vim.ui.input({ prompt = 'The name other participants see: ', default = login_name() }, function(input)
       local name = vim.trim(input or '')
       if name == '' then
-        notify('a name is needed; the session was not started', vim.log.levels.ERROR)
+        notify('A name is needed; the session was not started.', vim.log.levels.ERROR)
         return
       end
       if utf16.len(name) > MAX_DISPLAY_NAME then
         notify(
-          ('this name is %s; a name is refused rather than shortened'):format(over_long(name)),
+          ('This name is %s; a name is refused rather than shortened.'):format(over_long(name)),
           vim.log.levels.ERROR
         )
         ask()
@@ -2638,7 +2726,7 @@ local function resolve_server_url(callback)
     return
   end
   if not can_prompt() then
-    notify('a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080', vim.log.levels.ERROR)
+    notify('A server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.', vim.log.levels.ERROR)
     return
   end
   vim.ui.input({
@@ -2674,7 +2762,7 @@ end
 --- The invite to join on, asked for when the command was given none.
 local function resolve_invite(callback)
   if not can_prompt() then
-    notify('an invite link is needed', vim.log.levels.ERROR)
+    notify('An invite link is needed.', vim.log.levels.ERROR)
     return
   end
   vim.ui.input({ prompt = 'Join a Selvage session: ', default = clipboard_invite() }, function(input)
@@ -2708,7 +2796,7 @@ function M.host(url)
   if state.status == 'hosting' then
     if take_invite() then
       notify(
-        ('you are already hosting room %s; the invite link is on the clipboard'):format(
+        ('You are already hosting room %s; the invite link is on the clipboard.'):format(
           tostring(state.room)
         )
       )
@@ -2717,7 +2805,7 @@ function M.host(url)
   end
   if in_session() then
     local can_leave = confirm_leave(
-      ('you are in room %s; hosting a session means leaving it first'):format(tostring(state.room)),
+      ('You are in room %s; hosting a session means leaving it first.'):format(tostring(state.room)),
       'Leave and host'
     )
     if not can_leave then
@@ -2758,14 +2846,14 @@ function M.join(invite)
     local can_leave
     if state.role == 'host' then
       can_leave = confirm_leave(
-        ('you are hosting room %s; joining another session ends this room for everyone'):format(
+        ('You are hosting room %s; joining another session ends this room for everyone.'):format(
           tostring(state.room)
         ),
         'Leave and join'
       )
     else
       can_leave = confirm_leave(
-        ('you are in room %s; joining another session leaves it'):format(tostring(state.room)),
+        ('You are in room %s; joining another session leaves it.'):format(tostring(state.room)),
         'Leave and join'
       )
     end
@@ -2798,10 +2886,10 @@ end
 --- Puts the invite on the clipboard and the unnamed register, and says where it is.
 function M.copy_invite()
   if not take_invite() then
-    notify('there is no invite link: only the connection that opened the room has one', vim.log.levels.WARN)
+    notify('There is no invite link: only the connection that opened the room has one.', vim.log.levels.WARN)
     return
   end
-  notify('the invite link is on the clipboard')
+  notify('The invite link is on the clipboard.')
 end
 
 --- Leaves the session and stops the companion.
@@ -2811,7 +2899,7 @@ end
 --- or join — so a process alone would say there was something left to leave.
 function M.leave()
   if not in_session() then
-    notify('not in a session', vim.log.levels.WARN)
+    notify('Not in a session.', vim.log.levels.WARN)
     return
   end
   local process = state.process
@@ -2821,7 +2909,7 @@ function M.leave()
     process:stop()
   end
   reset()
-  notify('left the session')
+  notify('Left the session.')
 end
 
 --- The name other participants see, when one is set: the plugin's global, or the environment's
@@ -2851,21 +2939,21 @@ function M.set_display_name(name)
       return
     end
     if configured == nil then
-      notify('no display name is set yet')
+      notify('No display name is set yet.')
     else
-      notify(('the name others see is "%s"; :SelvageDisplayName <name> to change it'):format(configured))
+      notify(('The name others see is "%s"; :SelvageDisplayName <name> to change it.'):format(configured))
     end
     return
   end
   if utf16.len(wanted) > MAX_DISPLAY_NAME then
-    notify(('this name is %s; a name is refused rather than shortened'):format(over_long(wanted)), vim.log.levels.ERROR)
+    notify(('This name is %s; a name is refused rather than shortened.'):format(over_long(wanted)), vim.log.levels.ERROR)
     return
   end
   vim.g.selvage_display_name = wanted
   if state.process ~= nil then
     state.process:send({ type = 'rename', displayName = wanted })
   end
-  notify(('display name set to "%s"'):format(wanted))
+  notify(('Display name set to "%s".'):format(wanted))
 end
 
 return M
