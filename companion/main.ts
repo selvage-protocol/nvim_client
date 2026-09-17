@@ -69,6 +69,8 @@ const reader = new LineReader((line) => {
   queue = queue.then(() => companion.handle(request)).catch((error: unknown) => {
     warn(`handling ${request.type} failed: ${error instanceof Error ? error.message : String(error)}`);
   });
+}, (bytes) => {
+  warn(`ignoring a line past ${bytes} bytes without a newline: dropping it`);
 });
 
 process.stdin.setEncoding('utf8');

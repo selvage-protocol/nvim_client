@@ -96,13 +96,26 @@ export type Notification =
   /** The remote carets this replica can resolve, in buffer offsets. */
   | { type: 'presence'; cursors: Cursor[] };
 
+/**
+ * A line longer than this is dropped rather than accumulated without bound: a whole-document
+ * `open` is one JSON line, so a bound below that would refuse real work, while no bound lets
+ * one runaway write grow the buffer — and re-scan it per chunk — for the life of the process.
+ * Past it the reader sheds to the next newline and says so once per line, through `onDrop`;
+ * what was shed never reaches `onLine`.
+ */
+export const MAX_IPC_LINE_BYTES = 32 * 1024 * 1024;
+
 /** Reads newline-delimited JSON off a byte stream. */
 export class LineReader {
   private buffer = '';
   private readonly onLine: (line: string) => void;
+  private readonly onDrop: (bytes: number) => void;
+  /** Whether the reader is shedding an overlong line, to its newline. */
+  private dropping = false;
 
-  constructor(onLine: (line: string) => void) {
+  constructor(onLine: (line: string) => void, onDrop: (bytes: number) => void = () => undefined) {
     this.onLine = onLine;
+    this.onDrop = onDrop;
   }
 
   /**
@@ -111,11 +124,30 @@ export class LineReader {
    */
   push(chunk: string): void {
     this.buffer += chunk;
+    // Past the bound with no newline in sight, the line is shed rather than kept: holding
+    // it would grow the buffer — and re-scan it per chunk — for a line nothing will answer.
+    // Said the first time a line sheds; a shed tail that runs past the bound again is shed
+    // in silence, because it is the same line still ending.
+    if (this.buffer.length > MAX_IPC_LINE_BYTES && !this.buffer.includes('\n')) {
+      if (!this.dropping) {
+        this.dropping = true;
+        this.onDrop(this.buffer.length);
+      }
+      this.buffer = '';
+      return;
+    }
     let newline = this.buffer.indexOf('\n');
     while (newline !== -1) {
       const line = this.buffer.slice(0, newline);
       this.buffer = this.buffer.slice(newline + 1);
-      if (line.trim() !== '') {
+      if (this.dropping) {
+        // The newline the shed line ended at: shedding ends with it, and the tail with it.
+        this.dropping = false;
+      } else if (line.length > MAX_IPC_LINE_BYTES) {
+        // A whole line past the bound, delivered in fewer chunks than it takes to shed:
+        // nothing this process answers is that long, so it goes the way a shed one does.
+        this.onDrop(line.length);
+      } else if (line.trim() !== '') {
         this.onLine(line);
       }
       newline = this.buffer.indexOf('\n');

@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { LineReader, isRequest } from '../companion/ipc.ts';
+import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { Companion } from '../companion/session.ts';
@@ -786,6 +786,23 @@ test('the line reader reassembles a message split across chunks', () => {
   assert.deepEqual(lines, ['{"type":"leave"}']);
   reader.push('se","path":"a"}\n\n');
   assert.deepEqual(lines, ['{"type":"leave"}', '{"type":"close","path":"a"}']);
+});
+
+test('a line past the bound is shed with a word, and the next line still arrives', () => {
+  // A whole-document `open` is one JSON line, so the bound has to clear real work; a runaway
+  // write past it is shed to its newline instead of growing the buffer — and re-scanning
+  // it per chunk — for the life of the process.
+  const lines: string[] = [];
+  const drops: number[] = [];
+  const reader = new LineReader(
+    (line) => lines.push(line),
+    (bytes) => drops.push(bytes),
+  );
+  const overlong = 'x'.repeat(MAX_IPC_LINE_BYTES + 1);
+  reader.push(`${overlong}\n{"type":"leave"}\n`.slice(0, MAX_IPC_LINE_BYTES + 1));
+  reader.push(`${overlong}\n{"type":"leave"}\n`.slice(MAX_IPC_LINE_BYTES + 1));
+  assert.equal(drops.length, 1, 'the runaway line was shed once');
+  assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
 });
 
 // -- the IPC mouth, both directions ----------------------------------------------------
