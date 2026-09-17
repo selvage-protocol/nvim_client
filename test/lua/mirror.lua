@@ -612,6 +612,34 @@ check('  and the path is no longer held', mirror.granted('escape/deep.txt'), fal
 selvage.leave()
 vim.fn.delete(outside, 'rf')
 
+-- -- a link planted where the mirror writes ----------------------------------------------
+--
+-- The removal side reads every step with `fs_lstat`; the creation side did not: a link where a
+-- room directory goes diverted every file materialised under it outside the mirror, and a link
+-- at a file path looked, through `fs_stat`, like a file and was left alone — read into the room
+-- on open, written through on save. Both are refused now, and said the way a path that cannot
+-- be written is.
+
+local planted_outside = vim.fn.getcwd() .. '/.tmp/lua-mirror-planted'
+vim.fn.delete(planted_outside, 'rf')
+vim.fn.mkdir(planted_outside, 'p')
+vim.fn.writefile({ 'the person keeps this' }, planted_outside .. '/secret.txt')
+
+local planted = join({}, { 'linked.txt', 'sub/inner.txt' }, 'r-planted')
+vim.fn.delete(planted .. '/linked.txt')
+uv.fs_symlink(planted_outside .. '/secret.txt', planted .. '/linked.txt')
+vim.fn.mkdir(planted .. '/sub', 'p')
+vim.fn.delete(planted .. '/sub', 'rf')
+uv.fs_symlink(planted_outside, planted .. '/sub')
+local before_planted = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'linked.txt', 'sub/inner.txt' } } })
+check('a link where a file goes is refused, not left alone', said_since(before_planted, 'could not be mirrored') ~= nil, true)
+check('  and the link is still a link', uv.fs_lstat(planted .. '/linked.txt').type, 'link')
+check('  and a link where a directory goes diverts nothing outside', read(planted_outside .. '/inner.txt'), nil)
+check('  and what was outside is untouched', read(planted_outside .. '/secret.txt'), 'the person keeps this\n')
+selvage.leave()
+vim.fn.delete(planted_outside, 'rf')
+
 -- -- content reaches the file ------------------------------------------------------------
 --
 -- A document the room changed is written by the save policy that already exists: the companion
@@ -1043,6 +1071,7 @@ check('  and the one whose listing shrank', vim.fn.isdirectory(CACHE .. '/r-shru
 check('  and the one whose listing lost a path', vim.fn.isdirectory(CACHE .. '/r-shrunk-path'), 0)
 check('  and the one whose path left with a buffer open on it', vim.fn.isdirectory(CACHE .. '/r-yanked'), 0)
 check('  and the one whose path reached through a link', vim.fn.isdirectory(CACHE .. '/r-symlinked'), 0)
+check('  and the one where a link was planted', vim.fn.isdirectory(CACHE .. '/r-planted'), 0)
 check('  and the one whose listing lost everything', vim.fn.isdirectory(CACHE .. '/r-shrunk-to-nothing'), 0)
 check('  and the one whose path was too long', vim.fn.isdirectory(CACHE .. '/r-bounded'), 0)
 check('  and the one with a listing past the bound', vim.fn.isdirectory(CACHE .. '/r-many'), 0)
