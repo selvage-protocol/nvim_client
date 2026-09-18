@@ -25,6 +25,19 @@ import type { Notification, Request } from './ipc.ts';
  */
 const GRANT_SETTLE_MS = 250;
 
+/**
+ * How long a guest join waits for the listing the handshake carried before it reports the
+ * session as started without one.
+ *
+ * The server queues `doc.granted` straight after `room.joined`, and only when the room grants
+ * something; the engine reads the two frames off one socket, so the second may land a turn after
+ * `join()` resolves. Reading the replica without waiting would hand the front-end an empty listing
+ * for a room that has one, and — because the join's summary is said over the documents report —
+ * the real listing would then arrive after that summary, where the front-end deliberately stays
+ * silent. A room that grants nothing pays this bound once, at the join.
+ */
+const HANDSHAKE_GRANT_MS = 250;
+
 /** The engine, plus the members the lifecycle needs and the bridge does not. */
 export interface CompanionEngine extends Engine {
   inviteUrl(): string | undefined;
@@ -101,6 +114,13 @@ export class Companion {
   private stopListening?: () => void;
   /** The shared folder, watched while this process is hosting and closed with the session. */
   private grantWatcher?: FSWatcher;
+  /**
+   * Whether the room's listing has already reached the front-end through the bridge's own
+   * `grant` report. The bridge is constructed before the handshake's listing is read, so an
+   * event it forwards is the same listing the snapshot below would carry, and one of the two
+   * has to stand down.
+   */
+  private grantReported = false;
   /** The rereading a burst has scheduled, if one is outstanding. */
   private grantRepublish?: NodeJS.Timeout;
   /** The listing last handed to the room, so a folder that has not changed publishes nothing. */
@@ -368,6 +388,33 @@ export class Companion {
   }
 
   /**
+   * Waits for the handshake's `doc.granted` when the room grants anything, or the bound.
+   *
+   * The event is the bridge's as much as this listener's — the bridge was constructed above and
+   * forwards it either way — so this is a wait on a real arrival and not a delay: a room that
+   * grants nothing simply never emits it, and the bound is that case's price.
+   */
+  private async settleGrant(engine: CompanionEngine): Promise<void> {
+    if (engine.grantedPaths().length > 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const stop = engine.on((event) => {
+        if (event.type === 'grantChanged') {
+          finish();
+        }
+      });
+      function finish(): void {
+        clearTimeout(timer);
+        stop();
+        resolve();
+      }
+      timer = setTimeout(finish, HANDSHAKE_GRANT_MS);
+    });
+  }
+
+  /**
    * Opens a session, unless one is live.
    *
    * Which session a person gives up, and whether they meant to, is a question only the
@@ -403,6 +450,8 @@ export class Companion {
     // The peer id this connection seated with: a reconnect seats again under a new one,
     // which is what tells a reclaim apart from later room news below.
     this.seatedPeer = engine.session().peer.peer_id;
+    // Which listing reports this session has produced is the session's, not the process's.
+    this.grantReported = false;
     this.bridge = new SessionBridge({
       engine,
       host: this.editor,
@@ -419,6 +468,12 @@ export class Companion {
     // left with an engine it cannot use. The bridge's own report of them reaches the front-end
     // first — `leave` here does not know the reason, so the reason is the bridge's to say.
     const stop = engine.on((event) => {
+      if (event.type === 'grantChanged') {
+        // The bridge forwards this itself, and it was constructed above, so its `grant` report
+        // is already on its way: the snapshot below must not write the same listing again.
+        this.grantReported = true;
+        return;
+      }
       if (event.type === 'documentChanged') {
         this.arrive(event.path);
         return;
@@ -449,15 +504,27 @@ export class Companion {
     });
     // The room's grant is a fact of that handshake too, and it is not a member of the join reply:
     // the server restates it in a `doc.granted` straight after `room.joined`, and only when the
-    // room grants something. The bridge was not listening when that arrived, so the listing the
-    // replica already holds is read here — the way the other client reads it as its session is
-    // built. A later change is the bridge's `grant` report.
+    // room grants something. The engine reads the two frames off one socket, so the listing may
+    // land a turn after `join()` resolves: a guest with no document in front of it waits for that
+    // frame here rather than reporting an empty listing and letting the real one arrive after the
+    // join's summary, where the front-end deliberately stays silent. A later change is the bridge's
+    // `grant` report.
     //
     // It is sent *before* the documents, and the order is the front-end's to rely on: a guest
     // materialises the listing as a directory and names a document's buffer after the file it
     // was materialised at, so the listing has to be in front of the front-end before the first
     // document is opened. Both are sent in one turn, so nothing is waiting on the wire.
-    this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
+    //
+    // A listing the bridge already forwarded needs no snapshot: it is the same listing, it is
+    // already in front of the documents, and writing it twice would put a whole grant on the pipe
+    // for nothing. The wait is what gives the bridge that chance; a room with nothing to list has
+    // no report to stand down for, and the empty snapshot below is its answer.
+    if (session.role === 'guest' && session.documents.length === 0 && !this.grantReported) {
+      await this.settleGrant(engine);
+    }
+    if (!this.grantReported) {
+      this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
+    }
     // The room's open-document set at the moment of joining arrives in the handshake rather
     // than as an event, so a guest would otherwise hear about the room's documents only if
     // one changed after it arrived. The peers are the same fact about the same handshake: the
