@@ -84,6 +84,191 @@ check(
   '0..13 ""'
 )
 
+-- -- a change at the end of the document ---------------------------------------
+--
+-- The row past the last line is where a buffer's byte positions and the text's part. A buffer
+-- counts a newline after every row, its last one included, and the text — the lines joined —
+-- has none after its last; every shape that appends, replaces or removes a line at the end
+-- lands on that row. What the room does with a change is apply its range to the text it
+-- holds, so that is what these assert: the text a room holding the old one is left with.
+
+--- The text a room holding `before` is left with after applying `message`.
+local function followed(before, message)
+  return before:sub(1, utf16.to_byte(before, message.start))
+    .. message.text
+    .. before:sub(utf16.to_byte(before, message['end']) + 1)
+end
+
+--- A document whose buffer `edit` changes, and the room's copy of its text carried along.
+local function ends(name, lines, edit)
+  local shared_end, end_buf, end_sent = document(lines)
+  local before = shared_end:text()
+  edit(end_buf)
+  local delta = end_sent[#end_sent]
+  check(name, delta and followed(before, delta), buffer_text(end_buf))
+  check('  and the shadow with it', shared_end:text(), buffer_text(end_buf))
+end
+
+-- The reported shape: a room text that ends in a newline is a buffer whose last line is
+-- empty, and replacing that line is the one change whose published range must not carry the
+-- buffer's newline after it.
+local reported, reported_buf, reported_sent = document({ 'a file', '' })
+vim.api.nvim_buf_set_lines(reported_buf, 1, 2, true, { 'MARK' })
+check('replacing the empty last line', change(reported_sent[1]), '7..7 "MARK"')
+check('  leaves the room holding what the buffer holds', followed('a file\n', reported_sent[1]), buffer_text(reported_buf))
+
+local end_shapes = {
+  { 'the empty last line replaced', { 'a file', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { 'MARK' })
+  end },
+  { 'the empty last line replaced by two', { 'a file', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { 'M1', 'M2' })
+  end },
+  { 'a line appended after a trailing empty line', { 'a file', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'MARK' })
+  end },
+  { 'two lines appended after a trailing empty line', { 'a file', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'M1', 'M2' })
+  end },
+  { 'the last empty line deleted', { 'a file', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, {})
+  end },
+  { 'the last line of content deleted', { 'a file', 'x' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, {})
+  end },
+  { 'the last empty line replaced by an empty one', { 'a', '', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 2, 3, true, { '' })
+  end },
+  { 'the last empty line replaced by two empty ones', { 'a', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { '', '' })
+  end },
+  { 'the last content line replaced', { 'a', 'b', 'c' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 2, 3, true, { 'C' })
+  end },
+  { 'the last line made empty', { 'a', 'b' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { '' })
+  end },
+  { 'a line appended past a line of content', { 'HOST', 'seed' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'MARK' })
+  end },
+  { 'every line replaced by more of them', { 'a', 'b' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, true, { 'x', 'y', 'z' })
+  end },
+  { 'every line replaced by one', { 'a', 'b' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, true, { 'z' })
+  end },
+  { 'the only line cleared', { 'a' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 0, 1, true, {})
+  end },
+  { 'the only line deleted as text', { 'a' }, function(bufnr)
+    vim.api.nvim_buf_set_text(bufnr, 0, 0, 0, 1, {})
+  end },
+  { 'the empty buffer filled', { '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, true, { 'only' })
+  end },
+  { 'the empty buffer filled with two lines', { '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, true, { 'a', 'b' })
+  end },
+  -- A replacement that ends at column 0 of the line after it, which is the same row past the
+  -- last one written the other way round.
+  { 'a replacement spanning to the next line\'s column 0', { 'a file', 'tail', '' }, function(bufnr)
+    vim.api.nvim_buf_set_text(bufnr, 0, 2, 1, 0, { 'M' })
+  end },
+  { 'a deletion spanning to the next line\'s column 0', { 'a file', 'tail', '' }, function(bufnr)
+    vim.api.nvim_buf_set_text(bufnr, 0, 2, 1, 0, {})
+  end },
+  { 'a replacement spanning into the empty last line', { 'a', '' }, function(bufnr)
+    vim.api.nvim_buf_set_text(bufnr, 0, 0, 1, 0, { 'M' })
+  end },
+  { 'a two-byte empty last line replaced', { 'héllo', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { 'wörld' })
+  end },
+  { 'a two-byte last line of content replaced', { 'a', 'héllo' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { 'x' })
+  end },
+  { 'an astral last line of content replaced', { 'a', '😀b' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { 'x' })
+  end },
+  { 'an astral empty last line appended past', { '😀', '' }, function(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'x' })
+  end },
+}
+
+for _, shape in ipairs(end_shapes) do
+  ends(shape[1], shape[2], shape[3])
+end
+
+-- -- the end of the document, over many shapes ----------------------------------
+--
+-- The shapes above are the ones worth naming; this is the guard that they are all of them. A
+-- deterministic walk over small buffers of empty, ASCII, two-byte and astral lines, editing
+-- each at a character boundary through both APIs and carrying the room's own copy of the text
+-- along with every published change, comparing the two after each edit. The generator stays
+-- inside what a double holds exactly, so the walk is the same on every run and a failure
+-- reproduces from the seed.
+local seed = 20260918
+local span = 16777216
+local state = seed % span
+local function next_random(n)
+  state = (state * 48271 + 1) % span
+  return math.floor(state * n / span)
+end
+
+local pool = { '', 'a', 'ab', 'abc', 'é', 'xé', '😀', 'a😀' }
+local function some_lines(count)
+  local lines = {}
+  for index = 1, count do
+    lines[index] = pool[next_random(#pool) + 1]
+  end
+  return lines
+end
+
+local walked = 0
+local diverged = 0
+for round = 1, 120 do
+  local walk_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(walk_buf, 0, -1, true, some_lines(next_random(4) + 1))
+  local walk_sent = {}
+  local walk = Document.new(walk_buf, 'walk.txt', function(message)
+    walk_sent[#walk_sent + 1] = message
+  end)
+  walk:attach()
+  local room = walk:text()
+  for _ = 1, 8 do
+    local before_count = #walk_sent
+    local row_count = vim.api.nvim_buf_line_count(walk_buf)
+    local start_row = next_random(row_count)
+    local start_line = vim.api.nvim_buf_get_lines(walk_buf, start_row, start_row + 1, true)[1]
+    -- A column inside a character splits it into bytes no text can carry, so the columns are
+    -- character boundaries, named in the units the text counts.
+    local start_col = utf16.to_byte(start_line, next_random(utf16.len(start_line) + 1))
+    if next_random(2) == 0 then
+      local end_row = start_row + next_random(row_count - start_row)
+      local end_line = vim.api.nvim_buf_get_lines(walk_buf, end_row, end_row + 1, true)[1]
+      local end_col = utf16.to_byte(end_line, next_random(utf16.len(end_line) + 1))
+      if end_row == start_row and end_col < start_col then
+        start_col, end_col = end_col, start_col
+      end
+      local replacement = next_random(4) == 0 and {} or some_lines(next_random(3) + 1)
+      vim.api.nvim_buf_set_text(walk_buf, start_row, start_col, end_row, end_col, replacement)
+    else
+      local end_row = start_row + next_random(row_count - start_row + 1)
+      local replacement = next_random(5) == 0 and {} or some_lines(next_random(3) + 1)
+      vim.api.nvim_buf_set_lines(walk_buf, start_row, end_row, true, replacement)
+    end
+    if #walk_sent > before_count then
+      walked = walked + 1
+      room = followed(room, walk_sent[#walk_sent])
+    end
+    if room ~= buffer_text(walk_buf) or walk:text() ~= buffer_text(walk_buf) then
+      diverged = diverged + 1
+    end
+  end
+  vim.api.nvim_buf_delete(walk_buf, { force = true })
+end
+check('a walk over small buffers leaves the room holding the buffer', diverged, 0)
+check('  over the edits it generates', walked > 300, true)
+
 local pair, pair_buf, pair_sent = document({ 'a😀b' })
 vim.api.nvim_buf_set_text(pair_buf, 0, 6, 0, 6, { '!' })
 check('a character outside the BMP counts two', change(pair_sent[1]), '4..4 "!"')
