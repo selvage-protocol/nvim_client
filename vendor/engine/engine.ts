@@ -22,6 +22,7 @@ import {
   helloParams,
   isTerminalCode,
   method,
+  numberField,
   parsePeer,
   parsePeerEvent,
   parsePeerRenamed,
@@ -119,6 +120,32 @@ const DEFAULT_RECONNECT: ReconnectPolicy = {
   maxDelayMs: 10_000,
   maxAttempts: 5,
 };
+
+/**
+ * The most attempts a grace-derived budget asks for: an hour of the default backoff. A retry
+ * loop has to end, and a server that advertises a grace past this one is advertising a window
+ * the client does not keep retrying through — the budget is capped rather than unbounded, which
+ * is the shape §9.1 fixes for every policy.
+ */
+const MAX_GRACE_ATTEMPTS = 360;
+
+/**
+ * How many attempts a policy needs before the wait in front of them adds up to `graceMs`
+ * (§9.1). The grace is the room's own deadline and the backoff is what the policy fixes, so
+ * this is the count of delays whose sum first reaches it; the count is capped, so a policy
+ * with a tiny delay cannot turn a large advertised grace into an unbounded loop.
+ */
+function attemptsForGrace(graceMs: number, policy: ReconnectPolicy): number {
+  const initial = Math.max(policy.initialDelayMs, 1);
+  const ceiling = Math.max(policy.maxDelayMs, 1);
+  let waited = 0;
+  let attempts = 0;
+  while (waited < graceMs && attempts < MAX_GRACE_ATTEMPTS) {
+    waited += Math.min(initial * 2 ** attempts, ceiling);
+    attempts += 1;
+  }
+  return attempts;
+}
 
 export interface ConnectOptions {
   /** Scheme and authority, without the `/session` path. */
@@ -272,6 +299,14 @@ export class SelvageEngine {
   private timer?: ReturnType<typeof setInterval>;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private attempts = 0;
+  /**
+   * Attempts a reconnect makes before it gives up. The policy's number, raised in
+   * `negotiate()` to cover the room's advertised grace — but never lowered, and not touched
+   * at all when the caller named the number itself.
+   */
+  private retryBudget: number;
+  /** Whether the caller set `maxAttempts`: an explicit number is the caller's to choose. */
+  private readonly maxAttemptsGiven: boolean;
 
   private constructor(options: ConnectOptions) {
     this.options = options;
@@ -279,6 +314,9 @@ export class SelvageEngine {
       options.reconnect === false
         ? { ...DEFAULT_RECONNECT, enabled: false }
         : { ...DEFAULT_RECONNECT, ...options.reconnect };
+    this.retryBudget = this.reconnect.maxAttempts;
+    this.maxAttemptsGiven =
+      options.reconnect !== false && options.reconnect?.maxAttempts !== undefined;
     this.factory = options.webSocketFactory ?? defaultFactory;
     this.clock = {
       renewMs: options.keepalive?.renewMs ?? DEFAULT_KEEPALIVE.awareness_renew_ms,
@@ -334,13 +372,16 @@ export class SelvageEngine {
     options: JoinOptions = {},
   ): Promise<SelvageEngine> {
     const parsed = parseSessionUrl(invite);
-    if (
-      parsed === undefined ||
-      parsed.join.room === undefined ||
-      parsed.join.token === undefined
-    ) {
+    // A truncated paste's error must not echo the paste: the invite carries the room's
+    // token, so the refusal names the missing part rather than the link.
+    if (parsed === undefined) {
       return Promise.reject(
-        new ProtocolError(errCode.badParams, `not an invite URL: ${invite}`),
+        new ProtocolError(errCode.badParams, 'not an invite URL: it has no session address'),
+      );
+    }
+    if (parsed.join.room === undefined || parsed.join.token === undefined) {
+      return Promise.reject(
+        new ProtocolError(errCode.badParams, 'not an invite URL: it names no room to join'),
       );
     }
     return SelvageEngine.connect({
@@ -383,6 +424,19 @@ export class SelvageEngine {
       throw new ProtocolError(
         errCode.unsupportedVersion,
         `${this.options.baseUrl} speaks ${offered}, not ${WIRE_VERSION}`,
+      );
+    }
+    // §9.1: a client that knows the room's grace keeps retrying at least until the window has
+    // passed, because a room survives its host's absence for exactly that long. The grace is
+    // read here, before the first session — it is the one number a host needs and the one its
+    // own `host.detached` never reaches it with. A number the caller gave for `maxAttempts`
+    // stands: the fields of `reconnect` are the caller's policy, and this only sizes the
+    // default the caller left to the engine.
+    const graceMs = numberField(meta.keepalive, 'room_grace_ms');
+    if (!this.maxAttemptsGiven && graceMs !== undefined && graceMs > 0) {
+      this.retryBudget = Math.max(
+        this.reconnect.maxAttempts,
+        attemptsForGrace(graceMs, this.reconnect),
       );
     }
   }
@@ -808,7 +862,7 @@ export class SelvageEngine {
     if (this.disposed || this.finished) {
       return;
     }
-    if (!this.reconnect.enabled || this.attempts >= this.reconnect.maxAttempts) {
+    if (!this.reconnect.enabled || this.attempts >= this.retryBudget) {
       this.finish();
       return;
     }
@@ -817,6 +871,13 @@ export class SelvageEngine {
       this.reconnect.maxDelayMs,
     );
     this.attempts += 1;
+    // Said out loud, so an adapter can show the retry without inferring it from silence.
+    this.emit({ type: 'reconnecting' });
+    // A listener may have ended the session from the event above; scheduling the retry
+    // after it would reopen a destroyed engine.
+    if (this.disposed || this.finished) {
+      return;
+    }
     this.retryTimer = setTimeout(() => {
       void this.reopen();
     }, delay);
@@ -1267,7 +1328,9 @@ export class SelvageEngine {
       }
       case eventName.hostDetached: {
         const graceMs = numberParam(message.params, 'grace_ms') ?? 0;
-        this.emit({ type: 'hostDetached', graceMs });
+        // A grace of 1e15 renders as a 31-million-second tooltip: the room rejoins in
+        // seconds or not at all, so the wait is clamped to the hour it never needs.
+        this.emit({ type: 'hostDetached', graceMs: Math.min(Math.max(graceMs, 0), 3_600_000) });
         break;
       }
       case eventName.hostAttached: {
@@ -1281,20 +1344,24 @@ export class SelvageEngine {
       }
       case eventName.roomGone: {
         this.terminal = true;
-        const reason = textParam(message.params, 'reason') ?? 'room gone';
+        const reason = boundedText(textParam(message.params, 'reason') ?? 'room gone');
+        // A room gone mid-handshake settles the seat waiter now: the session is already
+        // known-terminal, and waiting out the handshake timeout would lie about it.
+        this.rejectSeat(new ProtocolError(errCode.roomGone, reason));
         this.emit({ type: 'roomGone', reason });
         break;
       }
       case eventName.sessionError: {
         const refusal: Refusal = {
-          code: textParam(message.params, 'code') ?? 'error',
-          message:
-            textParam(message.params, 'message') ??
-            'the server reported a fault',
+          code: boundedText(textParam(message.params, 'code') ?? 'error'),
+          message: boundedText(
+            textParam(message.params, 'message') ?? 'the server reported a fault',
+          ),
         };
         this.refusal = refusal;
         if (isTerminalCode(refusal.code)) {
           this.terminal = true;
+          this.rejectSeat(new ProtocolError(refusal.code, refusal.message));
         }
         if (this.seatWaiter === undefined) {
           this.emit({
@@ -1365,12 +1432,20 @@ export class SelvageEngine {
     const peer = this.peerMap.get(peerId);
     this.peerMap.delete(peerId);
     if (peer?.awareness_client_id !== undefined) {
-      // The peer's cursor is gone with the peer (§8.4).
-      removeAwarenessStates(
-        this.awareness,
-        [peer.awareness_client_id],
-        'peer-left',
+      // §8.4: the id is not an identity and nothing requires it to be unique in a room, so a
+      // peer that reuses one after reconnecting makes two peers speak for one replica. The
+      // state is the room's, not the departure's: it goes only once no other seated peer still
+      // claims the id, or the first of two claimants to leave erases the other's cursor.
+      const claimed = [...this.peerMap.values()].some(
+        (other) => other.awareness_client_id === peer.awareness_client_id,
       );
+      if (!claimed) {
+        removeAwarenessStates(
+          this.awareness,
+          [peer.awareness_client_id],
+          'peer-left',
+        );
+      }
     }
     this.emit({ type: 'peersChanged', peers: this.peers() });
   }
@@ -1510,6 +1585,16 @@ function textParam(params: unknown, key: string): string | undefined {
       ? (params as Record<string, unknown>)[key]
       : undefined;
   return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * A server diagnostic cut to what a dialog can show: a hostile relay can put megabytes
+ * in `message`/`reason`, shown verbatim by the adapter, so these are truncated rather
+ * than passed whole. Server diagnostics, not owner-chosen names, so truncation with an
+ * ellipsis is honest where it would not be for a display name.
+ */
+function boundedText(text: string): string {
+  return text.length > 500 ? `${text.slice(0, 497)}...` : text;
 }
 
 /**

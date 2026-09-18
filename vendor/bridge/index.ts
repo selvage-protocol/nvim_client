@@ -21,18 +21,31 @@ export {
   toReplicaOffset,
 } from './editing.ts';
 export type { LineEnding, TextChange } from './editing.ts';
-export { cursorFor, peerColour, translucent } from './cursors.ts';
+export { cursorFor, PEER_PALETTE, peerColour, peerColourIndex, translucent } from './cursors.ts';
+export { ANONYMOUS_INITIALS, INITIALS_LIMIT, initials } from './initials.ts';
 export type { Cursor, CursorPeer, ResolvedCursor } from './cursors.ts';
+export {
+  badgeFiles,
+  describeParticipants,
+  participantLabel,
+  peerColourId,
+  peerName,
+  viewRows,
+} from './participants.ts';
+export type {
+  FileBadge,
+  FilePeer,
+  FilePresence,
+  ParticipantEntry,
+  ParticipantRow,
+  RosterRow,
+} from './participants.ts';
 export {
   GRANT_EXCLUDED_DIRS,
   MAX_GRANT_FILE_BYTES,
   MAX_GRANT_PATHS,
   MAX_GRANT_PATH_BYTES,
-  grantChildren,
   grantUnion,
   isGrantedPath,
   sortGrant,
 } from './grant.ts';
-export type { GrantChild } from './grant.ts';
-export { SCHEME, roomFromQuery, virtualDocument, virtualUri } from './virtual.ts';
-export type { VirtualDocument } from './virtual.ts';
