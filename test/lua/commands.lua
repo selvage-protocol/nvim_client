@@ -142,6 +142,12 @@ local function report_status(state, roomId, invite)
   })
 end
 
+-- The hosts below own the state they read: the data home is sandboxed to this checkout
+-- from the start, so a bare command never answers from the person's own remembered
+-- addresses, and what they write is nowhere the person's own Neovim would read.
+vim.env.XDG_DATA_HOME = vim.fn.getcwd() .. '/.tmp/lua-commands-data'
+vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
+
 -- -- a bare command reaches the plugin's own guard ---------------------------------
 --
 -- `:SelvageHost` and `:SelvageJoin` take an optional argument. With none, they ask for it, and
@@ -161,14 +167,9 @@ raised = pcall(vim.cmd, 'SelvageJoin')
 check('a bare :SelvageJoin does not raise E471 either', raised, true)
 check('  and says what is missing', said_since(before, 'An invite link is needed') ~= nil, true)
 
--- With somebody to ask, the same command asks. With nothing configured and nothing
--- remembered, the question starts from the demo default — a suggestion the question still
--- asks for, unlike the setting.
---
--- The hosts below own the state they read: the data home is sandboxed to this checkout, so the
--- address they write is nowhere the person's own Neovim would read.
-vim.env.XDG_DATA_HOME = vim.fn.getcwd() .. '/.tmp/lua-commands-data'
-vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
+-- With somebody to ask, an unremembered command asks once, starting from the demo
+-- default. The answer is then reused without asking — across restarts — until an
+-- explicit address or the setting uses another.
 answer_with('ws://127.0.0.1:7777')
 vim.cmd('SelvageHost')
 check('a bare :SelvageHost asks for an address', prompted ~= nil, true)
@@ -176,20 +177,16 @@ check('  in the plugin\u{2019}s words', prompted and prompted.prompt:find('Selva
 check('  starting from the demo default', prompted and prompted.default, 'ws://100.64.0.3:8080')
 check('  and hosts on the answer', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
 
--- The answer is remembered for this Neovim, so the next question starts from it rather than from
--- nothing — a suggestion that the question still asks for, unlike the setting.
-answer_with(function(opts)
-  return opts.default
-end)
+-- The answer is remembered, so the next bare host proceeds on it with no question.
+prompted = nil
 vim.cmd('SelvageHost')
-check('  the next question starts from the address just used', prompted and prompted.default, 'ws://127.0.0.1:7777')
+check('  a remembered address is not asked about', prompted, nil)
 check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
 
 -- The address outlives this Neovim: it is written when a host starts, so a restart — a fresh
--- plugin with no memory of its own — starts its question from the file rather than from nothing,
--- as the other client does from its global state.
-answer_with('ws://127.0.0.1:7778')
-vim.cmd('SelvageHost')
+-- plugin with no memory of its own — proceeds on the file with no question either. Another
+-- address arrives explicitly, which is the escape hatch that changes what is remembered.
+vim.cmd('SelvageHost ws://127.0.0.1:7778')
 check('a host writes the address down', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
 -- A restart loads the plugin with the real prompt in place, not this file's stand-in, so the
 -- input is put back before the reload: otherwise the fresh plugin mistakes the stand-in for
@@ -197,24 +194,23 @@ check('a host writes the address down', last_of('host') and last_of('host').serv
 vim.ui.input = builtin_input
 package.loaded['selvage'] = nil
 selvage = require('selvage')
-answer_with(function(opts)
-  return opts.default
-end)
+prompted = nil
 vim.cmd('SelvageHost')
-check('  a restart still starts from the address last used', prompted and prompted.default, 'ws://127.0.0.1:7778')
+check('  a restart proceeds on the address last used', prompted, nil)
 check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
 
 -- An explicit address beats the remembered one: nothing is asked, and what was explicit
--- is what the next question starts from.
-prompted = nil
-vim.cmd('SelvageHost ws://127.0.0.1:5555')
-check('an explicit address is not asked about', prompted, nil)
-check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+-- becomes what the next bare host reuses.
 answer_with(function(opts)
   return opts.default
 end)
+vim.cmd('SelvageHost ws://127.0.0.1:5555')
+check('an explicit address is not asked about', prompted, nil)
+check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+prompted = nil
 vim.cmd('SelvageHost')
-check('  and the next question starts from it', prompted and prompted.default, 'ws://127.0.0.1:5555')
+check('  and the next bare host reuses it without asking', prompted, nil)
+check('    and hosts on it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
 
 -- A configured address is not asked about at all, as it is in the other client.
 vim.g.selvage_server_url = 'ws://127.0.0.1:9999'
@@ -391,11 +387,12 @@ check('  and a join behind it sends nothing either', count_type('join'), joins_o
 handlers().on_message({ type = 'status', state = 'idle' })
 -- -- the name, as the read form reports it -------------------------------------------
 --
--- Nothing configured is no name: the read form says so rather than naming the login name, which
--- is only ever what the prompt starts from.
+-- Nothing configured and nothing remembered is no name: the read form says so rather than
+-- naming the login name, which is only ever what the prompt starts from.
 
 vim.g.selvage_display_name = nil
 vim.env.SELVAGE_DISPLAY_NAME = nil
+vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 check('the name in force is nil when nothing is configured', selvage.display_name(), nil)
 
 vim.cmd('SelvageDisplayName')
@@ -406,6 +403,29 @@ check(
 )
 check('  rather than reporting a name nobody chose', said_since(before, 'The name others see is') == nil, true)
 check('  and the global is left unset', vim.g.selvage_display_name, nil)
+
+-- A prompted name is written down, so a restart is not asked again. The file is the name's
+-- memory across restarts; the global is this Neovim's.
+answer_with('  Ada  ')
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('a prompted name names the session, trimmed', last_of('host') and last_of('host').displayName, 'Ada')
+check('  and becomes the global', vim.g.selvage_display_name, 'Ada')
+local remembered_file = vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_display_name')
+check('  and is written down', table.concat(vim.fn.readfile(remembered_file), '\n'), 'Ada')
+check('  and the read form reports it', selvage.display_name(), 'Ada')
+
+-- A fresh process has no global of its own: with nothing configured it proceeds on the file
+-- with no question.
+vim.g.selvage_display_name = nil
+check('  and the read form reports the remembered one', selvage.display_name(), 'Ada')
+prompted = nil
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  a restart is not asked about the name', prompted, nil)
+check('    and goes under the remembered one', last_of('host') and last_of('host').displayName, 'Ada')
+
+-- The explicit change writes through: setting the name replaces what is remembered.
+vim.cmd('SelvageDisplayName Grace')
+check('  an explicit change is remembered too', table.concat(vim.fn.readfile(remembered_file), '\n'), 'Grace')
 vim.g.selvage_display_name = 'Test User'
 
 -- -- giving up a session is the person's call ---------------------------------------

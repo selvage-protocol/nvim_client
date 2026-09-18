@@ -157,12 +157,13 @@ then diffs the result, so a run either brings `vendor/` into agreement or says w
 ## Commands
 
 Hosting starts outside the editor: start `selvaged`, note the address it prints, and give that
-address to `:SelvageHost` — or set `vim.g.selvage_server_url` to stop being asked for it.
-With neither, the question starts from the demo server `ws://100.64.0.3:8080`.
+address to `:SelvageHost` — or set `vim.g.selvage_server_url` to always use it. The address is
+asked for once and remembered across restarts; later bare `:SelvageHost` calls reuse it
+without asking. With neither, the one question starts from the demo server `ws://100.64.0.3:8080`.
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so — `:SelvageCopyInvite` is for later copies. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the address is asked for, starting from the one last used — remembered across restarts — else the demo default `ws://100.64.0.3:8080`, and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so — `:SelvageCopyInvite` is for later copies. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking — the demo default `ws://100.64.0.3:8080` until one is used — and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the https page link the host copies; a `ws://` link still joins as the advanced fallback for rooms off the page default. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
@@ -181,14 +182,16 @@ does nothing at all when the answer is no. A process with nobody to answer the q
 asked, so it says what the command would have done and leaves the session alone.
 
 The name other participants see is resolved when a session starts, in this order:
-`vim.g.selvage_display_name`, then the `SELVAGE_DISPLAY_NAME` environment variable, then a
-`vim.ui.input` prompt pre-filled with the login name. The pre-fill is a suggestion and nothing
+`vim.g.selvage_display_name`, then the `SELVAGE_DISPLAY_NAME` environment variable, then the
+remembered answer, then a `vim.ui.input` prompt pre-filled with the login name. The pre-fill is a suggestion and nothing
 more: a cancelled or emptied prompt refuses the session rather than seating a room under a name
 nobody chose, and a process with nobody to ask refuses it too, saying how to configure one. The
 login name is never a name of its own, and `require('selvage').display_name()` is `nil` until one
-is set: a script reading it can tell that the next host or join has no name to go with, and will
+is set or remembered: a script reading it can tell that the next host or join has no name to go
+with, and will
 ask for one — or, where there is nobody to ask, refuse. `:SelvageDisplayName` sets the
-global and the prompt remembers its answer there, so the same Neovim is not asked again. The name
+global and writes it down, and a prompted answer is written down too, so neither the same Neovim
+nor the next one asks again; setting another name is how the remembered one changes. The name
 rides in the `host`/`join` handshake, and a change made while a session is live is sent as
 `session.rename`: the room answers with `peer.renamed`, and the sign and `:SelvagePeers` re-label
 from that event, so the session goes on under the new name. Setting

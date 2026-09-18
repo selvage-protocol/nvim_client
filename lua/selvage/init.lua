@@ -2775,6 +2775,34 @@ local function configured_display_name()
   return vim.trim(tostring(name)), source
 end
 
+--- The name a prompted answer left behind, so a restart is not asked again: the other
+--- half of the last server address, in a file beside it under `stdpath`. Read when a
+--- session starts without a configured name, written when one is answered or set.
+--- A read or write that fails is not a session's failure, so both give up silently.
+local function last_display_name_file()
+  return vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_display_name')
+end
+
+--- The name the file remembers, or nil when no session has answered yet or it cannot be read.
+local function read_last_display_name()
+  local ok, lines = pcall(vim.fn.readfile, last_display_name_file())
+  if not ok or type(lines) ~= 'table' or #lines < 1 then
+    return nil
+  end
+  local name = vim.trim(tostring(lines[1]))
+  if name == '' then
+    return nil
+  end
+  return name
+end
+
+--- Remembers `name` for the next session, in this Neovim and after it.
+local function remember_last_display_name(name)
+  local file = last_display_name_file()
+  pcall(vim.fn.mkdir, vim.fs.dirname(file), 'p')
+  pcall(vim.fn.writefile, { name }, file)
+end
+
 --- The `vim.ui.input` the plugin was loaded with. A replaced one — a GUI prompt, another
 --- plugin — is a prompt mechanism of its own, so it counts as somewhere to ask even where no
 --- UI is attached; the built-in reads the terminal, which a headless process does not have.
@@ -2791,15 +2819,15 @@ local function can_prompt()
   return #api.nvim_list_uis() > 0 or vim.ui.input ~= builtin_input
 end
 
---- Runs `callback(name)` with the name a session starting now should use, asking for one when
---- none is configured.
+--- Runs `callback(name)` with the name a session starting now should use: the configured
+--- value, else the remembered answer, else one question whose answer is written down.
 ---
---- The configured value wins. With neither the global nor the environment set, the user is asked
---- with `vim.ui.input`, pre-filled with the login name, and the answer becomes the global so the
---- next session is not asked again. The pre-fill is a suggestion and nothing more: it is not an
---- answer, so a cancelled or emptied prompt refuses the session rather than seating a room under
---- a name nobody chose. Nobody to ask is the same refusal said differently — a process without a
---- UI starts no room rather than guessing one.
+--- With neither the global nor the environment set, the user is asked once with `vim.ui.input`,
+--- pre-filled with the login name, and the answer becomes the global and the remembered file,
+--- so neither this Neovim nor the next one asks again. The pre-fill is a suggestion and nothing
+--- more: it is not an answer, so a cancelled or emptied prompt refuses the session rather than
+--- seating a room under a name nobody chose. Nobody to ask is the same refusal said
+--- differently — a process without a UI starts no room rather than guessing one.
 ---
 --- Every one of those names has to fit the room's limit. A name the user typed is asked for again
 --- with its length; one that came from the global or the environment has nobody to re-ask, so it
@@ -2812,6 +2840,11 @@ local function resolve_display_name(callback)
     end
     return
   end
+  local remembered = read_last_display_name()
+  if remembered ~= nil and utf16.len(remembered) <= MAX_DISPLAY_NAME then
+    callback(remembered)
+    return
+  end
   if not can_prompt() then
     notify(
       'No display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.',
@@ -2820,7 +2853,12 @@ local function resolve_display_name(callback)
     return
   end
   local function ask()
-    vim.ui.input({ prompt = 'The name other participants see: ', default = login_name() }, function(input)
+    vim.ui.input(
+      {
+        prompt = 'The name other participants see (remembered; :SelvageDisplayName changes it): ',
+        default = login_name(),
+      },
+      function(input)
       local name = vim.trim(input or '')
       if name == '' then
         notify('A name is needed; the session was not started.', vim.log.levels.ERROR)
@@ -2835,16 +2873,17 @@ local function resolve_display_name(callback)
         return
       end
       vim.g.selvage_display_name = name
+      remember_last_display_name(name)
       callback(name)
     end)
   end
   ask()
 end
 
---- The server a bare `:SelvageHost` starts its question from when nothing was configured
---- and nothing was remembered: the Pi demo from `ai_notes/docs/runbook-pi-demo.md`. An
---- overridable prefill, never a commitment — the question is still asked, an explicit
---- argument and `vim.g.selvage_server_url` always win — so moving the demo is this one line.
+--- The server a bare `:SelvageHost` asks about when nothing was configured and nothing
+--- was remembered: the Pi demo from `ai_notes/docs/runbook-pi-demo.md`. An overridable
+--- default, never a commitment — the answer is remembered, and an explicit argument and
+--- `vim.g.selvage_server_url` always win — so moving the demo is this one line.
 local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 
 --- The page CopyInvite links to when nothing is configured: the Pi page served
@@ -2853,10 +2892,10 @@ local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 --- page is this one line.
 local DEFAULT_WEB_ORIGIN = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443'
 
---- The last server address a host was started on, so the question the next bare `:SelvageHost`
---- asks starts from it. The file below is what outlives this Neovim; this is what answers
+--- The last server address a host was started on, so the next bare `:SelvageHost` reuses
+--- it without asking. The file below is what outlives this Neovim; this is what answers
 --- without reading it twice in one process. `vim.g.selvage_server_url` is the setting that
---- stops the question being asked.
+--- uses another address instead.
 local last_server = nil
 
 --- The file the last server address is kept in across restarts: the other client remembers it
@@ -2881,7 +2920,8 @@ local function read_last_server()
   return address
 end
 
---- Remembers `address` for the next question, in this Neovim and after it.
+--- Remembers `address` for the next host, in this Neovim and after it: a bare host
+--- reuses it without asking, and an argument or `vim.g.selvage_server_url` uses another.
 local function remember_last_server(address)
   last_server = address
   local file = last_server_file()
@@ -2912,14 +2952,19 @@ local function confirm_leave(question, button)
   return vim.fn.confirm(question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
 end
 
---- The server to mint a room on: the configured address, else a question starting from the last
---- one typed, else the demo default (`DEFAULT_SERVER_URL`). An answer is remembered across
---- restarts and the question is still asked next time, as it is in the other client: the default
---- is a prefill the person can still edit, never an endpoint chosen for them.
+--- The server to mint a room on: the configured address, else the remembered one with no
+--- question asked, else one question starting from the demo default (`DEFAULT_SERVER_URL`).
+--- Asked once, then reused: an argument or `vim.g.selvage_server_url` uses another, and
+--- writes it down as the remembered one.
 local function resolve_server_url(callback)
   local configured = vim.g.selvage_server_url
   if configured ~= nil and vim.trim(tostring(configured)) ~= '' then
     callback(vim.trim(tostring(configured)))
+    return
+  end
+  local remembered = last_server or read_last_server()
+  if remembered ~= nil then
+    callback(remembered)
     return
   end
   if not can_prompt() then
@@ -2927,8 +2972,8 @@ local function resolve_server_url(callback)
     return
   end
   vim.ui.input({
-    prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (set vim.g.selvage_server_url to stop being asked): ',
-    default = last_server or read_last_server() or DEFAULT_SERVER_URL,
+    prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (remembered for next time; an argument or vim.g.selvage_server_url uses another): ',
+    default = DEFAULT_SERVER_URL,
   }, function(input)
     local address = vim.trim(input or '')
     if address == '' then
@@ -3254,15 +3299,20 @@ function M.leave()
   notify('Left the session.')
 end
 
---- The name other participants see, when one is set: the plugin's global, or the environment's
---- name, and nil when there is neither. Nothing is invented here — a name nobody chose is not a
---- name, and the login name is only ever what the prompt starts from — so a script reading this
---- can tell that the next host or join will ask, or refuse where there is no one to ask. It
---- reports whatever was configured, so a name over the room's limit comes back too; that one
---- stops a session rather than being shortened, and `:SelvageDisplayName` says so.
+--- The name other participants see, when one is in force: the plugin's global, the
+--- environment's name, or the remembered answer — which is what a session starting now
+--- would use without asking. Nil when there is none of those: nothing is invented here —
+--- a name nobody chose is not a name, and the login name is only ever what the prompt
+--- starts from — so a script reading this can tell that the next host or join will ask,
+--- or refuse where there is no one to ask. It reports whatever was configured, so a name
+--- over the room's limit comes back too; that one stops a session rather than being
+--- shortened, and `:SelvageDisplayName` says so.
 function M.display_name()
   local configured = configured_display_name()
-  return configured
+  if configured ~= nil then
+    return configured
+  end
+  return read_last_display_name()
 end
 
 --- Sets the name other participants see, and says when it takes effect.
@@ -3276,14 +3326,15 @@ end
 function M.set_display_name(name)
   local wanted = vim.trim(name or '')
   if wanted == '' then
-    local configured, source = configured_display_name()
-    if configured ~= nil and not acceptable(configured, source, 'the next session will not start') then
-      return
-    end
-    if configured == nil then
+    local name = M.display_name()
+    if name == nil then
       notify('No display name is set yet.')
     else
-      notify(('The name others see is "%s"; :SelvageDisplayName <name> to change it.'):format(configured))
+      local _, source = configured_display_name()
+      if source ~= nil and not acceptable(name, source, 'the next session will not start') then
+        return
+      end
+      notify(('The name others see is "%s"; :SelvageDisplayName <name> to change it.'):format(name))
     end
     return
   end
@@ -3292,6 +3343,7 @@ function M.set_display_name(name)
     return
   end
   vim.g.selvage_display_name = wanted
+  remember_last_display_name(wanted)
   if state.process ~= nil then
     state.process:send({ type = 'rename', displayName = wanted })
   end
