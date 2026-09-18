@@ -132,7 +132,7 @@ local MESSAGES = {
   { 'WARN', 'No shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
   { 'INFO', 'The invite link is on the clipboard.' },
-  { 'WARN', 'There is no invite link: only the connection that opened the room has one.' },
+  { 'WARN', 'There is no invite link; host or join a room first.' },
   -- Leaving.
   { 'INFO', 'Left the session.' },
   { 'WARN', 'Not in a session.' },

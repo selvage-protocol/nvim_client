@@ -669,6 +669,44 @@ check('a refused host is reported', said_since(before, 'Already hosting; leave t
 handlers().on_message({ type = 'refused', what = 'join', roomId = 'r-open' })
 check('  and a refused join', said_since(before, 'Already in a session; leave that session first.') ~= nil, true)
 
+-- -- a guest holds the token it joined with ------------------------------------------
+--
+-- The invite is the permission the guest entered the room with, so the link the host sent is
+-- the guest's to hand on. A page link keeps the origin the host sent it from; a guest that
+-- reached the room over `ws://` has no page for it, so that link is what it passes on.
+
+selvage.leave()
+vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-page&token=tpage')
+report_status('joined', 'r-page')
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  'a guest joined by page link copies that link',
+  registers['+'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-page&token=tpage'
+)
+check('  and the unnamed register too', registers['"'], registers['+'])
+
+selvage.leave()
+local wire_invite = 'ws://127.0.0.1:8080/session?room=r-wire&token=twire'
+vim.cmd('SelvageJoin ' .. wire_invite)
+report_status('joined', 'r-wire')
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check('a guest that joined by wire copies the wire link', registers['+'], wire_invite)
+
+-- Nothing to copy is a session that is not there, and the sentence says that rather than
+-- blaming the connection that minted the room.
+selvage.leave()
+registers = {}
+before = #notices
+vim.cmd('SelvageCopyInvite')
+check(
+  'copying with no session says there is none',
+  said_since(before, 'There is no invite link; host or join a room first.') ~= nil,
+  true
+)
+
 vim.notify = notify
 vim.ui.input = builtin_input
 vim.fn.confirm = builtin_confirm

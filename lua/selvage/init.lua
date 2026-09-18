@@ -3181,19 +3181,27 @@ local function resolve_invite(callback)
   end)
 end
 
---- Puts this session's page link on the clipboard and the unnamed register, or answers
---- false when there is none to put there. Two moments reach for the invite — hosting
---- again, and `:SelvageCopyInvite` — and each has its own sentence about it. What is
---- copied is never the wire address: only the page link leaves this editor.
+--- Puts this session's invite on the clipboard and the unnamed register, or answers false when
+--- there is none to put there. Two moments reach for the invite — hosting again, and
+--- `:SelvageCopyInvite` — and each has its own sentence about it.
+---
+--- What a host copies is its page link, never the wire address it holds. A guest holds the
+--- token it joined with — the invite *is* the permission — so the link its host sent is the
+--- guest's to hand on, as it stands: the page link keeps the origin the host sent it from, and
+--- a guest that reached the room over `ws://` has no other address for it.
 take_invite = function()
-  if state.invite == nil then
+  local invite = state.invite
+  if invite == nil then
     return false
   end
-  local wire = parse_wire_invite(state.invite)
-  if wire == nil then
-    return false
+  local link = invite
+  if state.role ~= 'guest' then
+    local wire = parse_wire_invite(invite)
+    if wire == nil then
+      return false
+    end
+    link = build_page_link(wire.room, wire.token, wire.base)
   end
-  local link = build_page_link(wire.room, wire.token, wire.base)
   vim.fn.setreg('"', link)
   pcall(vim.fn.setreg, '+', link)
   return true
@@ -3296,6 +3304,9 @@ function M.join(invite)
       local process = ensure()
       if process ~= nil then
         capture_root()
+        -- The invite this guest joined by is kept as it arrived: it is the permission the
+        -- room was entered with, so it is the guest's to hand on (`:SelvageCopyInvite`).
+        state.invite = link
         process:send({
           type = 'join',
           -- The companion dials the wire URL: a pasted page link resolves to its
@@ -3317,7 +3328,7 @@ end
 --- Puts the invite on the clipboard and the unnamed register, and says where it is.
 function M.copy_invite()
   if not take_invite() then
-    notify('There is no invite link: only the connection that opened the room has one.', vim.log.levels.WARN)
+    notify('There is no invite link; host or join a room first.', vim.log.levels.WARN)
     return
   end
   notify('The invite link is on the clipboard.')
