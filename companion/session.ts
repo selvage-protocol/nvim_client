@@ -110,6 +110,15 @@ export class Companion {
    * started has nothing to say: it read the folder before a later one did.
    */
   private grantReadings = 0;
+  /** The folder this session shares while hosting it: the listing a reclaim republishes. */
+  private grantRoot?: string;
+  /**
+   * The peer id the current connection seated with. A reconnect is a new peer under the
+   * same room, so a seat report under a different id is the reclaim rather than later
+   * room news — the re-seat signal this engine generation carries (`reconnecting` only
+   * exists upstream; see the re-vendor note in the reclaim-grant round log).
+   */
+  private seatedPeer?: string;
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
@@ -202,6 +211,8 @@ export class Companion {
     this.stopListening?.();
     this.stopListening = undefined;
     this.stopWatching();
+    this.grantRoot = undefined;
+    this.seatedPeer = undefined;
     this.unarrived.clear();
     const engine = this.engine;
     this.engine = undefined;
@@ -389,6 +400,9 @@ export class Companion {
       return;
     }
     this.engine = engine;
+    // The peer id this connection seated with: a reconnect seats again under a new one,
+    // which is what tells a reclaim apart from later room news below.
+    this.seatedPeer = engine.session().peer.peer_id;
     this.bridge = new SessionBridge({
       engine,
       host: this.editor,
@@ -407,6 +421,16 @@ export class Companion {
     const stop = engine.on((event) => {
       if (event.type === 'documentChanged') {
         this.arrive(event.path);
+        return;
+      }
+      if (event.type === 'documentsChanged' || event.type === 'peersChanged') {
+        // Every seat reports the document set and the peers, under a new peer id on a
+        // reconnect — so a report under an id this connection did not seat with is the
+        // reclaim, while later room news reuses the id and is left alone.
+        if (engine.session().peer.peer_id !== this.seatedPeer) {
+          this.seatedPeer = engine.session().peer.peer_id;
+          this.republishAfterReseat(engine);
+        }
         return;
       }
       if (event.type === 'roomGone' || event.type === 'disconnected') {
@@ -447,11 +471,28 @@ export class Companion {
     // grant, read off the working copy as the session starts and read again whenever the folder
     // changes under it — a later change to which buffers are open is not a statement about the
     // folder, and neither is anything outside it.
+    this.grantRoot = session.role === 'host' ? root : undefined;
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
       this.publishGrant(root);
       this.watchGrant(root);
     }
+  }
+
+  /**
+   * Publishes the shared folder again after the retry reseated: a host that dropped reclaims
+   * its room rather than minting a new one, and the room kept the listing it had while this
+   * process was gone. The folder as it stands now replaces the dead listing — the last listing
+   * is forgotten first, so even an unchanged folder re-asserts what the room holds, one frame
+   * the guests dedupe, rather than staying silent. A guest owes the room no listing.
+   */
+  private republishAfterReseat(engine: CompanionEngine): void {
+    const root = this.grantRoot;
+    if (engine.session().role !== 'host' || root === undefined || root === '') {
+      return;
+    }
+    this.grantedListing = undefined;
+    this.publishGrant(root);
   }
 
   /**
