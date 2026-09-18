@@ -2252,9 +2252,76 @@ local function forget_documents()
   state.linked = {}
 end
 
+--- The buffers a guest session put on screen, captured before its documents are forgotten: they
+--- are the room's only for as long as the session holds them. A host's buffers are its own
+--- files, which outlive the room, so there is nothing here for a host to land.
+local function room_buffers()
+  if state.role ~= 'guest' then
+    return nil
+  end
+  local held = {}
+  for _, document in pairs(state.documents) do
+    if api.nvim_buf_is_valid(document.bufnr) then
+      held[#held + 1] = document.bufnr
+    end
+  end
+  return held
+end
+
+--- A room that dies under a person leaves no window showing it.
+---
+--- The room's buffers are the room's, and when the room is gone they are nobody's: a window still
+--- showing one reads as a room that is still there. What the person has not changed goes with it
+--- — its text is the room's, and the session that could write it has ended — while a buffer
+--- holding their own unsaved changes is kept in the buffer list and said so: the session can no
+--- longer save it, so dropping it would drop their text, and silence would hide where it went.
+--- (`:SelvageLeave` and a new host or join are not this: the room lives on, and the person asked.)
+local function land_room_buffers(held)
+  if held == nil or #held == 0 then
+    return
+  end
+  local landing = nil
+  for _, win in ipairs(api.nvim_list_wins()) do
+    local showing = api.nvim_win_get_buf(win)
+    local room = false
+    for _, bufnr in ipairs(held) do
+      if showing == bufnr then
+        room = true
+        break
+      end
+    end
+    if room then
+      if landing == nil then
+        landing = api.nvim_create_buf(true, false)
+      end
+      pcall(api.nvim_win_set_buf, win, landing)
+    end
+  end
+  local kept = 0
+  for _, bufnr in ipairs(held) do
+    if api.nvim_buf_is_valid(bufnr) then
+      if vim.bo[bufnr].modified then
+        kept = kept + 1
+      else
+        pcall(api.nvim_buf_delete, bufnr, { force = true })
+      end
+    end
+  end
+  if kept > 0 then
+    notify(
+      ('%d buffers with unsaved changes were kept; :ls lists them.'):format(kept),
+      vim.log.levels.WARN
+    )
+  end
+end
+
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
---- is back to nothing shared.
-local function reset()
+--- is back to nothing shared. `land` is for a room that died under the person (`roomGone`,
+--- `disconnected`): the buffers and the window still showing them are the room's, and the room
+--- is not. Every other ending leaves them where they are — the person asked, and a leave does
+--- not close the room for anyone else.
+local function reset(land)
+  local held = land and room_buffers() or nil
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
   clear_presence()
@@ -2279,6 +2346,7 @@ local function reset()
   -- pending go-to goes with it, for the same reason and with the same silence.
   end_follow('silent')
   state.pending_go_to = nil
+  land_room_buffers(held)
   state.status = 'idle'
   state.role = nil
   state.room = nil
@@ -2593,8 +2661,10 @@ local function on_report(report)
   elseif report.kind == 'roomGone' then
     -- The room is over and the companion has let the engine go, so the session here ends with
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
+    -- The window is part of that: a buffer still shown for the dead room reads as one that is
+    -- still there, so the room's buffers are landed as well.
     notify(('The room is gone (%s).'):format(tostring(report.reason)), vim.log.levels.WARN)
-    reset()
+    reset(true)
   elseif report.kind == 'hostDetached' then
     notify(
       ('The host left the room; it closes in %ds unless they come back.'):format(seconds(report.graceMs)),
@@ -2635,7 +2705,7 @@ local function on_report(report)
     -- companion process is deliberately left running — `ensure` reuses it on the next host
     -- or join, and the engine on the other side of it has already finished.
     notify('The connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
-    reset()
+    reset(true)
   end
 end
 

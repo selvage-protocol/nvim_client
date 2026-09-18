@@ -325,6 +325,12 @@ the process that owns it. The session that made it removes it on the way out, an
 crashed session left behind is pruned by the next one: only a directory whose process is gone is
 removed, so a second Neovim mirroring the same room keeps its own.
 
+A room that dies under a guest does not leave its buffers in the window: `roomGone`, and the
+connection the engine gave up on, land every window showing one on a fresh empty buffer, wipe the
+room's buffers that hold nothing the person changed, and keep the ones that do — saying how many,
+because the session that could save them is over. A host is left alone: its buffers are its own
+files. Pinned by `test/lua/session.lua`.
+
 A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not run
 Neovim's write path, and the file is written by this client from the buffer, as the save the room
 is told about. `:[range]w {file}` and `:w >> {file}` naming a file inside the mirror are refused for

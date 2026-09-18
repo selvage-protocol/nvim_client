@@ -162,6 +162,7 @@ local MESSAGES = {
   { 'WARN', 'The host left the room; it closes in %ds unless they come back.' },
   { 'INFO', '%s is hosting again.' },
   { 'WARN', 'The room is gone (%s).' },
+  { 'WARN', '%d buffers with unsaved changes were kept; :ls lists them.' },
   { 'ERROR', '%s (%s).' },
   { 'ERROR', 'The editor would not apply the room\'s change to %s; the file may be read-only.' },
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
