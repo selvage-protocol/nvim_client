@@ -3260,6 +3260,11 @@ end
 --- guest's to hand on, as it stands: the page link keeps the origin the host sent it from, and
 --- a guest that reached the room over `ws://` has no other address for it.
 take_invite = function()
+  -- An invite that outlived its session is not one to hand on: a failed join leaves the link
+  -- remembered, and a room nobody is in is not a room to invite anyone to.
+  if not in_session() then
+    return false
+  end
   local invite = state.invite
   if invite == nil then
     return false
