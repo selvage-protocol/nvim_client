@@ -421,9 +421,9 @@ before = #notices
 vim.cmd('SelvageJoin ws://127.0.0.1:1/room#tok')
 check('a join while hosting asks first', confirmations, 1)
 check(
-  '  naming the room and what joining it does',
+  '  naming what joining it does, never the room id',
   question and question.text,
-  'You are hosting room r-host; joining another session ends this room for everyone.'
+  'You are hosting; joining another session ends this room for everyone.'
 )
 check('  offering to leave and join', question and question.choices, '&Leave and join\n&Cancel')
 check('  a declined question joins nothing', count_type('join'), joins_before)
@@ -444,7 +444,7 @@ check('a host while a guest asks first', confirmations, asks_before + 1)
 check(
   '  saying that hosting means leaving',
   question and question.text,
-  'You are in room r-guest; hosting a session means leaving it first.'
+  'You are in a session; hosting a session means leaving it first.'
 )
 check('  offering to leave and host', question and question.choices, '&Leave and host\n&Cancel')
 check('  a declined question hosts nothing', count_type('host'), hosts_before)
@@ -542,9 +542,9 @@ check('  at information level', notices[#notices].level, vim.log.levels.INFO)
 
 before = #notices
 handlers().on_message({ type = 'refused', what = 'host', roomId = 'r-open' })
-check('a refused host is reported', said_since(before, 'Already hosting room r-open') ~= nil, true)
+check('a refused host is reported', said_since(before, 'Already hosting; leave that session first.') ~= nil, true)
 handlers().on_message({ type = 'refused', what = 'join', roomId = 'r-open' })
-check('  and a refused join', said_since(before, 'Already in room r-open') ~= nil, true)
+check('  and a refused join', said_since(before, 'Already in a session; leave that session first.') ~= nil, true)
 
 vim.notify = notify
 vim.ui.input = builtin_input

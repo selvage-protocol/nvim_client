@@ -105,8 +105,8 @@ local state = {
   -- Whether the next document the room names is still the one to put in front of the user.
   -- Set when a guest joins; cleared by the first document shown.
   auto_open = false,
-  -- Whether the join has been said out loud yet. The sentence names the room, and what the
-  -- landing did with the room's documents, which is only known once they are named — so it is
+  -- Whether the join has been said out loud yet. The sentence carries the landing, and what
+  -- the landing did with the room's documents, which is only known once they are named — so it is
   -- said over the first `documents` report rather than when the handshake arrives.
   join_said = false,
   -- What the join's own listing materialised: how many files, and where. The companion
@@ -2057,7 +2057,7 @@ local function remirror_documents()
           -- silent for it the way it does for the landing's `show`.
           state.suppress_unfetched = true
           for _, win in ipairs(api.nvim_list_wins()) do
-            if api.nvim_win_get_buf(win) == old then
+            if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == old then
               pcall(api.nvim_win_set_buf, win, bufnr)
             end
           end
@@ -2328,8 +2328,7 @@ local function on_status(message)
     reset()
   elseif message.state == 'hosting' then
     notify(
-      ('Room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).'):format(
-        tostring(message.roomId),
+      ('The room is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).'):format(
         state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
       )
     )
@@ -2383,8 +2382,7 @@ local function on_report(report)
           if not lands then
             if mirror_summary ~= nil then
               notify(
-                ('Joined room %s; %d files mirrored at %s; %d of %d fetched.'):format(
-                  tostring(state.room),
+                ('Joined the room; %d files mirrored at %s; %d of %d fetched.'):format(
                   mirror_summary.count,
                   mirror_summary.root,
                   fetched_count(report.documents),
@@ -2392,13 +2390,12 @@ local function on_report(report)
                 )
               )
             else
-              notify(('Joined room %s.'):format(tostring(state.room)))
+              notify('Joined the room.')
             end
           elseif #report.documents > 1 then
             if mirror_summary ~= nil then
               notify(
-                ('Joined room %s; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.'):format(
-                  tostring(state.room),
+                ('Joined the room; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.'):format(
                   report.documents[1],
                   #report.documents - 1,
                   mirror_summary.count,
@@ -2409,8 +2406,7 @@ local function on_report(report)
               )
             else
               notify(
-                ('Joined room %s; opening %s; %d more, :SelvageOpen to choose.'):format(
-                  tostring(state.room),
+                ('Joined the room; opening %s; %d more, :SelvageOpen to choose.'):format(
                   report.documents[1],
                   #report.documents - 1
                 )
@@ -2419,8 +2415,7 @@ local function on_report(report)
           else
             if mirror_summary ~= nil then
               notify(
-                ('Joined room %s; opening %s; %d files mirrored at %s; %d of %d fetched.'):format(
-                  tostring(state.room),
+                ('Joined the room; opening %s; %d files mirrored at %s; %d of %d fetched.'):format(
                   report.documents[1],
                   mirror_summary.count,
                   mirror_summary.root,
@@ -2429,7 +2424,7 @@ local function on_report(report)
                 )
               )
             else
-              notify(('Joined room %s; opening %s.'):format(tostring(state.room), report.documents[1]))
+              notify(('Joined the room; opening %s.'):format(report.documents[1]))
             end
           end
         end
@@ -2438,14 +2433,13 @@ local function on_report(report)
         local mirror_summary = state.join_mirror
         if mirror_summary ~= nil then
           notify(
-            ('Joined room %s; the room has no open documents yet; %d files mirrored at %s.'):format(
-              tostring(state.room),
+            ('Joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
               mirror_summary.count,
               mirror_summary.root
             )
           )
         else
-          notify(('Joined room %s; the room has no open documents yet.'):format(tostring(state.room)))
+          notify('Joined the room; the room has no open documents yet.')
         end
       end
     end
@@ -2657,8 +2651,8 @@ local function on_message(message)
   elseif message.type == 'refused' then
     -- This process did not open a second session: one is already live. The commands ask before
     -- they send one, so this is the answer when something else did not.
-    local where = message.what == 'host' and 'hosting' or 'in'
-    notify(('Already %s room %s; leave that session first.'):format(where, tostring(message.roomId)), vim.log.levels.WARN)
+    local where = message.what == 'host' and 'hosting' or 'in a session'
+    notify(('Already %s; leave that session first.'):format(where), vim.log.levels.WARN)
   elseif message.type == 'report' then
     if type(message.report) == 'table' then
       on_report(message.report)
@@ -3124,11 +3118,7 @@ function M.host(url)
   local wanted = vim.trim(url or '')
   if state.status == 'hosting' then
     if take_invite() then
-      notify(
-        ('You are already hosting room %s; the invite link is on the clipboard.'):format(
-          tostring(state.room)
-        )
-      )
+      notify('You are already hosting; the invite link is on the clipboard.')
     end
     return
   end
@@ -3141,7 +3131,7 @@ function M.host(url)
   end
   if in_session() then
     local can_leave = confirm_leave(
-      ('You are in room %s; hosting a session means leaving it first.'):format(tostring(state.room)),
+      'You are in a session; hosting a session means leaving it first.',
       'Leave and host'
     )
     if not can_leave then
@@ -3188,14 +3178,12 @@ function M.join(invite)
     local can_leave
     if state.role == 'host' then
       can_leave = confirm_leave(
-        ('You are hosting room %s; joining another session ends this room for everyone.'):format(
-          tostring(state.room)
-        ),
+        'You are hosting; joining another session ends this room for everyone.',
         'Leave and join'
       )
     else
       can_leave = confirm_leave(
-        ('You are in room %s; joining another session leaves it.'):format(tostring(state.room)),
+        'You are in a session; joining another session leaves it.',
         'Leave and join'
       )
     end

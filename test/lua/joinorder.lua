@@ -77,7 +77,7 @@ handle({ type = 'report', report = { kind = 'peers', peers = {} } })
 
 check('a late listing joins as one summary, not three notices', #notices, before + 1)
 local summary = notices[#notices] ~= nil and notices[#notices].message or ''
-check('  naming the room and the landing', summary:find('Joined room r-late; opening ra.lua; 3 more', 1, true) ~= nil, true)
+check('  saying the landing, never the room id', summary:find('Joined the room; opening ra.lua; 3 more', 1, true) ~= nil, true)
 check('  at info level', notices[#notices] ~= nil and notices[#notices].level or nil, vim.log.levels.INFO)
 
 local mirror_said = false

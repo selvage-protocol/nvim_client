@@ -176,7 +176,7 @@ With neither, the question starts from the demo server `ws://100.64.0.3:8080`.
 
 `:SelvageHost` and `:SelvageJoin` open a session and never end one. Hosting while hosting reaches
 for the invite link instead of minting a second room, and a `:SelvageHost` while a guest or a
-`:SelvageJoin` while in a session asks first, naming the room and what leaving it does, and
+`:SelvageJoin` while in a session asks first, naming what leaving it does, and
 does nothing at all when the answer is no. A process with nobody to answer the question cannot be
 asked, so it says what the command would have done and leaves the session alone.
 

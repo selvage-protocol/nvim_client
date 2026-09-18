@@ -115,7 +115,7 @@ local before = #notices
 local root = join({ 'a/one.lua', 'README.md' }, GRANT)
 check('the join says exactly one sentence', #notices, before + 1)
 local summary = notices[#notices] ~= nil and notices[#notices].message or ''
-check('  naming the room', summary:find('Joined room r-join', 1, true) ~= nil, true)
+check('  saying the landing, never the room id', summary:find('Joined the room; opening', 1, true) ~= nil, true)
 check('  counting the mirrored files', summary:find('6 files mirrored at ' .. root, 1, true) ~= nil, true)
 check('  counting the fetched landing', summary:find('2 of 2 fetched', 1, true) ~= nil, true)
 check('  at info level', notices[#notices] ~= nil and notices[#notices].level or nil, vim.log.levels.INFO)

@@ -132,7 +132,7 @@ local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check(
   'the host confirm names the folder the session shares',
-  said_since(before_host_confirm, 'Room r-test is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
+  said_since(before_host_confirm, 'The room is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
   true
 )
 
@@ -176,8 +176,8 @@ handlers().on_message({
 check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage://workspace/README.md')
 check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
 check(
-  '  and the join says the room and the landing',
-  said_since(before_join, 'Joined room r-guest; opening workspace/README.md') ~= nil,
+  '  and the join says the landing',
+  said_since(before_join, 'Joined the room; opening workspace/README.md') ~= nil,
   true
 )
 
@@ -229,7 +229,7 @@ handlers().on_message({
 check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
 check(
   '  and said so, pointing at the others',
-  said_since(before, 'Joined room r-two; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
+  said_since(before, 'Joined the room; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
   true
 )
 local pointed = false
@@ -251,7 +251,7 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
 check(
   '  and the join says the room has nothing in it yet',
-  said_since(before_empty, 'Joined room r-empty; the room has no open documents yet') ~= nil,
+  said_since(before_empty, 'Joined the room; the room has no open documents yet') ~= nil,
   true
 )
 local before_late = #notices
@@ -274,7 +274,7 @@ check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated
 check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
 check(
   '  and the join claims no landing',
-  said_since(before_off, 'Joined room r-off') ~= nil,
+  said_since(before_off, 'Joined the room') ~= nil,
   true
 )
 vim.g.selvage_open_on_join = nil
