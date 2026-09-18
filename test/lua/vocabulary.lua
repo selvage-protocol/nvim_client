@@ -110,7 +110,8 @@ local TITLES = {
 --- once: what is pinned is the words and the level, not how often they are said.
 local MESSAGES = {
   -- Hosting and joining.
-  { 'INFO', 'The room is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).' },
+  { 'INFO', 'The room is open (sharing %s); the invite link is on the clipboard.' },
+  { 'INFO', 'The room is open (sharing %s); :SelvageCopyInvite copies the invite link.' },
   { 'INFO', 'You are already hosting; the invite link is on the clipboard.' },
   { 'WARN', 'A session is already being opened.' },
   { 'INFO', 'Joined the room; opening %s.' },

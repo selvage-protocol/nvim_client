@@ -471,6 +471,35 @@ check(
 check('  and the unnamed register too', registers['"'], registers['+'])
 check('  and never the wire address', registers['+']:find('ws://', 1, true), nil)
 
+-- A room that opens copies its page link without being asked: the host's next move is
+-- pasting it to a guest. `:SelvageCopyInvite` stays for later copies.
+selvage.leave()
+vim.cmd('SelvageHost ws://127.0.0.1:7')
+registers = {}
+before = #notices
+report_status('hosting', 'r-fresh', 'ws://127.0.0.1:7/session?room=r-fresh&token=t7')
+check(
+  'a room that opens puts the page link on the clipboard',
+  registers['+'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
+)
+check(
+  '  and the unnamed register too',
+  registers['"'],
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
+)
+check(
+  '  and never the wire address',
+  registers['+'] ~= nil and registers['+']:find('ws://', 1, true),
+  nil
+)
+check(
+  '  and says so',
+  said_since(before, 'The room is open (sharing ') ~= nil
+    and said_since(before, 'the invite link is on the clipboard.') ~= nil,
+  true
+)
+
 -- A room on the page default links with no server: the page already knows it.
 report_status('hosting', 'r-demo', 'ws://100.64.0.3:8080/session?room=r-demo&token=t')
 registers = {}

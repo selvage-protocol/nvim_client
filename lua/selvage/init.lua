@@ -2314,6 +2314,10 @@ local function end_session()
   reset()
 end
 
+--- Puts this session's page link on the clipboard and the unnamed register; defined below,
+--- declared here because the host confirm above runs before its definition loads.
+local take_invite
+
 local function on_status(message)
   state.status = message.state
   state.role = message.role
@@ -2327,11 +2331,17 @@ local function on_status(message)
     -- which has already let the engine go.
     reset()
   elseif message.state == 'hosting' then
-    notify(
-      ('The room is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).'):format(
-        state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
+    -- A host's next move is pasting the link to a guest, so the room copies its page
+    -- link without being asked; `:SelvageCopyInvite` stays for later copies. What is
+    -- copied is never the wire address: only the page link leaves this editor.
+    local root = state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
+    if take_invite() then
+      notify(('The room is open (sharing %s); the invite link is on the clipboard.'):format(root))
+    else
+      notify(
+        ('The room is open (sharing %s); :SelvageCopyInvite copies the invite link.'):format(root)
       )
-    )
+    end
     share_current()
     watch_buffers()
     watch_presence()
@@ -3095,7 +3105,7 @@ end
 --- false when there is none to put there. Two moments reach for the invite — hosting
 --- again, and `:SelvageCopyInvite` — and each has its own sentence about it. What is
 --- copied is never the wire address: only the page link leaves this editor.
-local function take_invite()
+take_invite = function()
   if state.invite == nil then
     return false
   end
