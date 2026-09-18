@@ -247,6 +247,11 @@ function Document:resync()
   })
 end
 
+--- Publishes a local change as a range of the text's own offsets.
+---
+--- The buffer's positions count a newline after every row, its last one included, and the text's
+--- do not: a change that reaches the row past the last line ends at the end of the text, and the
+--- newline a buffer keeps after its last line is the buffer's rather than the room's.
 function Document:on_bytes(
   _,
   _,
@@ -259,7 +264,7 @@ function Document:on_bytes(
   _,
   new_row_count,
   new_end_col,
-  _
+  new_byte_count
 )
   if self.detached then
     return true
@@ -274,14 +279,8 @@ function Document:on_bytes(
   local new_end_row = start_row + new_row_count
   local new_end = new_row_count == 0 and start_col + new_end_col or new_end_col
 
-  -- A row past the last line is the end of the document: the text holds no trailing newline
-  -- for it to sit past, so it counts the text's own length.
   local count = #self.lines
-  local past_end = self:prefix(count) - 1
-  local from = start_row >= count and past_end
-    or self:prefix(start_row) + utf16.of_byte(self:line(start_row), start_col)
-  local to = old_end_row >= count and past_end
-    or self:prefix(old_end_row) + utf16.of_byte(self:line(old_end_row), old_end)
+  local new_count = api.nvim_buf_line_count(self.bufnr)
 
   -- The rows the change now spans. The last of them can be the row past the buffer's end —
   -- an edit that appended a line ends there — which holds no line but does bound the text.
@@ -303,16 +302,36 @@ function Document:on_bytes(
     text = table.concat(parts, '\n')
   end
 
+  -- A change ending at column 0 of the row past the last one ends after a newline the text does
+  -- not have. A buffer keeps one after its last line; the text, which is the lines joined, has
+  -- none there, and the join above put that newline at the back rather than between two rows.
+  if new_end_col == 0 and new_end_row >= new_count then
+    text = text:gsub('\n$', '')
+  end
+
+  -- The change's range in the offsets the text counts. A buffer counts a newline after every
+  -- row, its last one included, and the text has none after its last: the row past the last is
+  -- one unit past the end of the text, and every position at or past it is that end.
+  local past_end = self:prefix(count) - 1
+  local start_at = start_row >= count and past_end + 1
+    or self:prefix(start_row) + utf16.of_byte(self:line(start_row), start_col)
+  local end_at = old_end_row >= count and past_end + 1
+    or self:prefix(old_end_row) + utf16.of_byte(self:line(old_end_row), old_end)
+
+  local from = math.min(start_at, past_end)
+  local to = math.min(end_at, past_end)
+
+  -- A change that reaches past the end of the text and brings nothing took the row past the
+  -- last line with it, and the newline before that row is the text's own last unit: the text
+  -- the change produces ends one unit earlier than the row the range names.
+  if end_at > past_end and new_byte_count == 0 then
+    from = math.max(from - 1, 0)
+  end
+
   -- A change starting past the last line starts a new one: the newline it starts after is not
-  -- in the text, so the change brings it, in front. The span above padded the rows with the
-  -- empty line past the buffer's end, whose join put that newline at the back instead.
-  if start_row >= count then
-    text = '\n' .. text:gsub('\n$', '')
-  elseif old_end_row >= count and start_col == 0 and start_row > 0 and text:find('\n$') == nil then
-    -- A change reaching past the last line from a line boundary took the newline before that
-    -- line with it, so the removed text starts one unit earlier than the row does. A change
-    -- bringing a newline of its own already ends where it should.
-    from = from - 1
+  -- in the text, so the change brings it, in front.
+  if start_at > past_end then
+    text = '\n' .. text
   end
 
   self:reshadow(start_row, old_end_row, rows)
