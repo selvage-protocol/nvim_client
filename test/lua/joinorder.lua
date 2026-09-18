@@ -112,5 +112,48 @@ check('a file opened after the join still earns the session hint once', hints, 1
 
 selvage.leave()
 
+-- -- a window closed mid-remirror is skipped, not errored ---------------------------
+--
+-- Re-pointing a window runs its BufEnter autocommands, and one of those may close another
+-- window the remirror snapshotted. That window is skipped: reading its buffer would error,
+-- and the error would leave the landing's hint suppression set. A guest showing the landing
+-- in two windows, whose first BufEnter closes the other, proves it.
+selvage.join('ws://127.0.0.1:1/session?room=r-race&token=t')
+handle({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-race' })
+handle({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'rw.lua' } },
+})
+vim.cmd('split')
+check('the landing is shown in two windows', #vim.api.nvim_list_wins(), 2)
+local closed_mid_loop = false
+local race_group = vim.api.nvim_create_augroup('SelvageJoinorderRace', { clear = true })
+vim.api.nvim_create_autocmd('BufEnter', {
+  group = race_group,
+  callback = function(args)
+    -- Only the remirror's own placement counts: it enters the mirror's real file,
+    -- never another `selvage://` buffer, so a stray enter before it must not
+    -- consume the one close this scenario is about.
+    if closed_mid_loop or vim.api.nvim_buf_get_name(args.buf):sub(1, 10) == 'selvage://' then
+      return
+    end
+    closed_mid_loop = true
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if win ~= vim.api.nvim_get_current_win() then
+        pcall(vim.api.nvim_win_close, win, true)
+      end
+    end
+  end,
+})
+local ok, err = pcall(handle, { type = 'report', report = { kind = 'grant', paths = { 'rw.lua' } } })
+vim.api.nvim_del_augroup_by_id(race_group)
+check('a window closed mid-remirror raises no error', ok, true)
+if not ok then
+  print('  error: ' .. tostring(err))
+end
+check('  because an autocommand closed one there', closed_mid_loop, true)
+
+selvage.leave()
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
