@@ -867,7 +867,9 @@ vim.fn.delete(own_file)
 --
 -- The mirror materialises the shape and not the content, so a file whose content nobody
 -- fetched is empty — and an empty file with no word about it reads as a room that failed to
--- send. Opening one says where the content comes from, once per path.
+-- send. Opening one says where the content comes from, once per session: the sentence is
+-- for the shape, and the shape is the same on every empty file. (The join's own landing is
+-- placed silently — its summary accounts for it — so the hint stays for a file opened after.)
 
 root = join({}, GRANT)
 responder = nil

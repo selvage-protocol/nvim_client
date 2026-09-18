@@ -112,9 +112,14 @@ local state = {
   -- What the join's own listing materialised: how many files, and where. The companion
   -- reports the listing before the documents, so the first grant lands before the join is
   -- said, and its counts join that one summary instead of arriving as a second sentence.
-  -- A listing that arrives after the join was said keeps its own sentence: the summary
-  -- already went out, and where the mirror lives is still news.
+  -- A listing that arrives after the join was said stays silent: the summary already went
+  -- out, and the mirror is discoverable without a notice (`require('selvage').session()
+  -- `.mirror`, the README, `:SelvageFetch` completion). One summary plus errors, in every order.
   join_mirror = nil,
+  -- While the join's own landing is placed in the window: the summary accounts for how much
+  -- of the landing fetched, so its empty buffer is expected rather than news, and the
+  -- session's one unfetched hint stays for the first file opened afterwards.
+  suppress_unfetched = false,
 }
 
 --- Whether a session is live. The companion process is not the thing to ask: it outlives the
@@ -907,7 +912,12 @@ end
 --- Said for the first such file in a session and never again: the sentence is for the shape,
 --- and the shape is the same on every empty file, so one hint per file is a flood with
 --- the file count. The paths are all still recorded, so a file fetched later is not news.
+--- The join's own landing is the exception: while it is placed the hint is suppressed
+--- outright, unrecorded, so the first file opened afterwards still earns it.
 local function notice_unfetched(path)
+  if state.suppress_unfetched then
+    return
+  end
   if state.unfetched[path] ~= nil then
     return
   end
@@ -2042,12 +2052,16 @@ local function remirror_documents()
         api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         if api.nvim_buf_is_valid(old) then
           -- A window showing the buffer that is going away is pointed at the one replacing it,
-          -- so that closing the room's copy does not move the person somewhere else.
+          -- so that closing the room's copy does not move the person somewhere else. The move
+          -- is the session's own placement rather than an open, so the unfetched hint stays
+          -- silent for it the way it does for the landing's `show`.
+          state.suppress_unfetched = true
           for _, win in ipairs(api.nvim_list_wins()) do
             if api.nvim_win_get_buf(win) == old then
               pcall(api.nvim_win_set_buf, win, bufnr)
             end
           end
+          state.suppress_unfetched = false
           pcall(api.nvim_buf_delete, old, { force = true })
         end
         share(bufnr, path)
@@ -2258,6 +2272,7 @@ local function reset()
   state.auto_open = false
   state.join_said = false
   state.join_mirror = nil
+  state.suppress_unfetched = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
   -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
@@ -2356,7 +2371,11 @@ local function on_report(report)
       if state.auto_open and first ~= nil then
         state.auto_open = false
         if lands then
+          -- The landing is the join's own window placement: its empty buffer is what the
+          -- summary's fetched count already accounts for, so the unfetched hint stays silent.
+          state.suppress_unfetched = true
           show(first)
+          state.suppress_unfetched = false
         end
         if not state.join_said then
           state.join_said = true
@@ -2463,11 +2482,11 @@ local function on_report(report)
         end
         if state.join_mirror == nil and not state.join_said then
           state.join_mirror = { count = #state.grant - #blocked, root = root }
-        elseif created then
-          notify(
-            ('The room\'s files are mirrored at %s; :SelvageFetch fetches their content.'):format(root)
-          )
         end
+        -- A first listing that arrives after the join was said stays silent: the summary
+        -- already went out, and one summary plus errors is the whole of the join's news. The
+        -- mirror stays discoverable without a notice (`require('selvage').session().mirror`,
+        -- the README, `:SelvageFetch` completion).
         if #blocked > 0 then
           notify(
             ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
