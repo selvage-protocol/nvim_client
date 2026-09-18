@@ -292,8 +292,16 @@ A **listed path's buffer is the mirror's file** — a real path on disk — rath
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being edited.
 A document the room holds and its listing does not name — a listing can be truncated by the host's
 own bounds — keeps the `selvage://` buffer it had before the mirror existed, which is the fallback
-for everything the mirror cannot name. A listing that arrives after the room has already named a
-document moves that document's buffer to the file the listing names for it; its text comes with it.
+for everything the mirror cannot name. The buffer is a real file with a real name, so the editor's
+own filetype detection answers for it: a listed path with a known extension carries that filetype
+(`lua`, `markdown`, `rust`), and `'syntax'` and an ftplugin hook onto it the way they do for any
+other file the person opened. Detection is asked for by name rather than left to the `BufRead`
+autocmds, which this client suppresses while it fills the buffer so that the session's own hooks
+and the person's do not run over a buffer the room is about to write. Icons are not this client's:
+a tree plugin reads the mirror's files and draws them with whatever devicons or mini.icons the
+person has, exactly as it does for their own project. A listing that arrives after the room has
+already named a document moves that document's buffer to the file the listing names for it; its
+text comes with it.
 A path that **leaves** the listing loses its mirror file too, and a buffer already open on it is not
 taken away: the listing and the room's open-document set are two facts (`PROTOCOL.md` §5, §6), so
 the document stays open in the same buffer, with the same text and the same name. A save in it

@@ -840,6 +840,14 @@ local function guest_buffer(path)
   api.nvim_buf_call(bufnr, function()
     vim.cmd('silent noautocmd edit!')
   end)
+  -- `noautocmd` keeps the session's own hooks and the person's out of the way while the buffer is
+  -- made, and it also suppresses what the `filetypedetect` group does on `BufRead`: the buffer is
+  -- named for a real file and would hold no `filetype`, and so no syntax. Detection is therefore
+  -- asked for directly, by the same name the buffer carries.
+  local filetype = vim.filetype.match({ buf = bufnr, filename = name })
+  if filetype ~= nil then
+    vim.bo[bufnr].filetype = filetype
+  end
   vim.bo[bufnr].modifiable = true
   return bufnr
 end
