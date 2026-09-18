@@ -247,6 +247,11 @@ function Document:resync()
   })
 end
 
+--- Publishes a local change as a range of the text's own offsets.
+---
+--- The buffer's positions count a newline after every row, its last one included, and the text's
+--- do not: a change that reaches the row past the last line ends at the end of the text, and the
+--- newline a buffer keeps after its last line is the buffer's rather than the room's.
 function Document:on_bytes(
   _,
   _,
