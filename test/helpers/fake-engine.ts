@@ -82,6 +82,15 @@ export class FakeEngine implements CompanionEngine {
     }
   }
 
+  /**
+   * Moves this replica onto a new peer id, the way a reconnect's seating would: the room
+   * is the same one and the peer is new. The documents and peers the seat reports stay for
+   * the test to emit, so a re-seat and later room news can be told apart exactly as live.
+   */
+  reseat(peerId: string): void {
+    this.info.peer = { ...this.info.peer, peer_id: peerId };
+  }
+
   session(): SessionInfo {
     return this.info;
   }
