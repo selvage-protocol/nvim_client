@@ -53,6 +53,13 @@ end
 local shared, bufnr, sent = document({ 'héllo', 'wörld' })
 check('the document text invents no trailing newline', shared:text(), 'héllo\nwörld')
 
+-- The ends of the contract the room and this side share: the text is the lines joined by LF, so
+-- a one-line document has no newline of its own and an empty one is the empty string.
+local single = document({ 'one line' })
+check('a one-line document has no trailing newline', single:text(), 'one line')
+local blank = document({})
+check('an empty document is the empty string', blank:text(), '')
+
 vim.api.nvim_buf_set_text(bufnr, 0, 3, 0, 3, { 'X' })
 check('an insert after a two-byte character', change(sent[1]), '2..2 "X"')
 
