@@ -211,6 +211,23 @@ join. `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to 
 `https://lumi-raspberrypi.muskellunge-yo.ts.net:8443`. It must name an https origin; anything else
 falls back to the default, so a copied link never carries the room's token over cleartext. `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
+### Pickers
+
+`:SelvageOpen`, `:SelvageGoTo` and `:SelvageFollow` ask through `vim.ui.select` — the
+editor's own chooser — so no picker plugin is ever required. Whatever overrides
+`vim.ui.select` is what opens (fzf-lua, telescope-ui-select, dressing.nvim, mini.pick,
+snacks.nvim, or any other provider, in whatever order that override resolves); with none
+installed, Neovim's builtin numbered list asks instead. `test/lua/pickers.lua` pins both
+halves: no fzf or picker reference in the shipped code, and every chooser completing on
+plain `vim.ui.select`.
+
+A join says one summary sentence plus errors, whatever order the room speaks in: the
+room may name its documents before it publishes its listing, and a listing that arrives
+after the summary stays silent rather than earning its own mirror sentence. The mirror's
+location is `require('selvage').session().mirror`, and the session's one unfetched hint
+still points at `:SelvageFetch`; neither needs a notice of its own. Pinned by
+`test/lua/join.lua` (listing first) and `test/lua/joinorder.lua` (documents first).
+
 The folder a session was started in is its root: a host publishes the listing of the files under
 it to the room, and nothing outside it is ever served. The root is fixed for the session — a
 `:cd`, `:lcd` or `:tcd` afterwards moves where Neovim looks, not what the room can see — and a
