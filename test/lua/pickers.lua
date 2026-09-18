@@ -54,7 +54,7 @@ for _, file in ipairs(code_files) do
         and (
           module:find('telescope', 1, true) ~= nil
           or module:find('dressing', 1, true) ~= nil
-          or module:find('mini%.pick', 1, true) ~= nil
+          or module:find('mini.pick', 1, true) ~= nil
           or module:find('snacks', 1, true) ~= nil
         )
       then
