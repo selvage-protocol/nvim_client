@@ -183,10 +183,13 @@ local MESSAGES = {
   { 'ERROR', 'An invite link is needed.' },
   { 'ERROR', 'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
-  -- (No sentence announces where the mirror lives: the join's summary carries its counts
-  -- when the listing arrives first, and a later listing stays silent — one summary plus
-  -- errors. The path is `require('selvage').session().mirror`.)
+  -- (No sentence announces where the mirror lives: the join's summary carries its counts when the
+  -- listing is in front of it, and a later listing stays silent — one summary plus errors. The
+  -- exception is a room that had nothing open at the join and grants files afterwards: that guest
+  -- has neither document nor tree, so the listing is said once. The path is always
+  -- `require('selvage').session().mirror`.)
   { 'INFO', 'This file is empty until fetched; :SelvageFetch %s fills it.' },
+  { 'INFO', '%d files are mirrored at %s; :SelvageOpen opens one.' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s." },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends." },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it.' },

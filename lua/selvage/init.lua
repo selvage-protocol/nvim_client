@@ -116,6 +116,12 @@ local state = {
   -- out, and the mirror is discoverable without a notice (`require('selvage').session()
   -- `.mirror`, the README, `:SelvageFetch` completion). One summary plus errors, in every order.
   join_mirror = nil,
+  -- Whether the join's sentence said the room has nothing open, and whether that sentence named
+  -- the listing. The two together say whether the room's files have been announced: a room that
+  -- listed nothing when the guest joined and grants files afterwards has none of them to land, so
+  -- the listing is the only news, and a guest has no tree to watch for it.
+  join_empty = false,
+  join_listed = false,
   -- While the join's own landing is placed in the window: the summary accounts for how much
   -- of the landing fetched, so its empty buffer is expected rather than news, and the
   -- session's one unfetched hint stays for the first file opened afterwards.
@@ -2280,6 +2286,8 @@ local function reset()
   state.auto_open = false
   state.join_said = false
   state.join_mirror = nil
+  state.join_empty = false
+  state.join_listed = false
   state.suppress_unfetched = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
@@ -2359,6 +2367,8 @@ local function on_status(message)
     -- what the landing did with the room's documents, and that is the report's news.
     state.auto_open = true
     state.join_said = false
+    state.join_empty = false
+    state.join_listed = false
     watch_presence()
     watch_follow_window()
   elseif message.state == 'error' then
@@ -2448,7 +2458,9 @@ local function on_report(report)
         end
       elseif state.auto_open and not state.join_said then
         state.join_said = true
+        state.join_empty = true
         local mirror_summary = state.join_mirror
+        state.join_listed = mirror_summary ~= nil
         if mirror_summary ~= nil then
           notify(
             ('Joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
@@ -2495,10 +2507,18 @@ local function on_report(report)
         if state.join_mirror == nil and not state.join_said then
           state.join_mirror = { count = #state.grant - #blocked, root = root }
         end
-        -- A first listing that arrives after the join was said stays silent: the summary
-        -- already went out, and one summary plus errors is the whole of the join's news. The
-        -- mirror stays discoverable without a notice (`require('selvage').session().mirror`,
-        -- the README, `:SelvageFetch` completion).
+        -- A first listing that arrives after the join was said stays silent: the summary already
+        -- went out, and one summary plus errors is the whole of the join's news. The mirror stays
+        -- discoverable without a notice (`require('selvage').session().mirror`, the README,
+        -- `:SelvageFetch` completion). The exception is a join the room had nothing open in: that
+        -- guest has no document to watch and no tree to read, so a listing that arrives after the
+        -- sentence is the only place the room's files reach them, and it is said once here.
+        if state.join_said and state.join_empty and not state.join_listed and #state.grant > #blocked then
+          state.join_listed = true
+          notify(
+            ('%d files are mirrored at %s; :SelvageOpen opens one.'):format(#state.grant - #blocked, root)
+          )
+        end
         if #blocked > 0 then
           notify(
             ('%d of the room\'s files could not be mirrored, starting with %s.'):format(

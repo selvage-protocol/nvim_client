@@ -227,10 +227,14 @@ plain `vim.ui.select`.
 
 A join says one summary sentence plus errors, whatever order the room speaks in: the
 room may name its documents before it publishes its listing, and a listing that arrives
-after the summary stays silent rather than earning its own mirror sentence. The mirror's
-location is `require('selvage').session().mirror`, and the session's one unfetched hint
-still points at `:SelvageFetch`; neither needs a notice of its own. Pinned by
-`test/lua/join.lua` (listing first) and `test/lua/joinorder.lua` (documents first).
+after the summary stays silent rather than earning its own mirror sentence. The one
+exception is a room that had nothing open at the join and grants files afterwards: that
+guest landed no document and has no tree to read, so the listing is said once, and is the
+only thing that tells them the room has files at all. The mirror's location is
+`require('selvage').session().mirror`, and the session's one unfetched hint still points
+at `:SelvageFetch`; neither needs a notice of its own. Pinned by `test/lua/join.lua`
+(listing first), `test/lua/joinorder.lua` (documents first) and `test/lua/granted.lua`
+(a listing after an empty join).
 
 The folder a session was started in is its root: a host publishes the listing of the files under
 it to the room, and nothing outside it is ever served. The root is fixed for the session — a

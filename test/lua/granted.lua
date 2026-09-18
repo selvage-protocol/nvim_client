@@ -231,6 +231,32 @@ check(
   true
 )
 
+-- -- a listing that arrives after an empty join ---------------------------------------
+--
+-- The join's sentence can be said before the room's listing has arrived: the host reads its
+-- folder as the session starts, and a guest can join inside that window. A guest that landed
+-- nothing has no document and no tree, so a listing that arrives afterwards is said once —
+-- otherwise the files are only reachable through a command the guest was never told about,
+-- which is exactly the room the owner joined.
+
+before = #notices
+handlers().on_message({ type = 'report', report = { kind = 'grant', paths = GRANT } })
+local listing_root = selvage.session().mirror
+check(
+  'a listing after an empty join is said',
+  said_since(before, ('%d files are mirrored at %s; :SelvageOpen opens one.'):format(#GRANT, listing_root)) ~= nil,
+  true
+)
+check(
+  '  and the room\'s files are offered now',
+  listed(selvage.offered()),
+  'README.md,notes/deep.txt,src/main.rs,workspace/README.md'
+)
+
+before = #notices
+handlers().on_message({ type = 'report', report = { kind = 'grant', paths = GRANT } })
+check('  and said once, however often the listing is republished', #notices, before)
+
 selvage.leave()
 vim.notify = notify
 
