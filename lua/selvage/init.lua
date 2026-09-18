@@ -930,8 +930,12 @@ local function notice_unfetched(path)
 end
 
 --- Whether a buffer holds nothing: one empty line, the way an empty file reads.
+---
+--- Two lines are read and no more, because the answer is in the first one: the indicator asks
+--- this on every applied remote edit, and a whole-buffer read there would copy a file per
+--- keystroke of a peer's.
 local function buffer_empty(bufnr)
-  local lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local lines = api.nvim_buf_get_lines(bufnr, 0, 2, false)
   return #lines == 0 or (#lines == 1 and lines[1] == '')
 end
 
