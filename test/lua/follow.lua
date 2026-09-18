@@ -673,7 +673,7 @@ check('  and the statusline says nothing either', selvage.statusline(), '')
 -- caret through all of it until something ends the follow.
 
 vim.cmd('edit ' .. vim.fn.fnameescape(file1))
-selvage.join('ws://127.0.0.1:1/room#tok')
+selvage.join('ws://127.0.0.1:1/session?room=r-gfollow&token=t')
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-gfollow' })
 handlers().on_message({
   type = 'report',

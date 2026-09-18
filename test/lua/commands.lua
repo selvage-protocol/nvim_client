@@ -344,6 +344,76 @@ check(
 )
 check('  and says nothing about it', said_since(before, 'That does not look like') == nil, true)
 
+-- -- an invite that arrives as an argument is checked before anything else --------------
+--
+-- The prompt is not the only way an invite arrives: `:SelvageJoin <link>` hands one straight
+-- over, and a wrong one there was resolved as a name first, so the person answered a question
+-- about a room that was never going to open and the engine then heard an address it could not
+-- use. An argument is refused before anything is asked or dialled, with the box's own sentence.
+--
+-- No name is configured and there is nobody to ask: were the name resolved first, this would
+-- refuse with the name's own sentence rather than the link's.
+
+vim.g.selvage_display_name = nil
+vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
+vim.ui.input = builtin_input
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin ws://127.0.0.1:1/other')
+check(
+  'a mistyped argument is refused',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check(
+  '  at error level, where the box refuses',
+  notices[before + 1] ~= nil and notices[before + 1].level or nil,
+  vim.log.levels.ERROR
+)
+check(
+  '  and the name is never asked for',
+  said_since(before, 'No display name is set') == nil,
+  true
+)
+check('  with nothing dialled', count_type('join'), joins_before)
+
+-- The page link's shape is checked the same way: a truncated one is the paste a person
+-- always makes, and it fails here rather than at the server.
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one')
+check(
+  'a truncated page link argument is refused too',
+  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  true
+)
+check('  and nothing is dialled for it either', count_type('join'), joins_before)
+
+-- A conforming argument still joins, and still takes its name on the way in: an explicit
+-- page link is dialled as the wire URL it resolves to.
+answer_with('Ada')
+joins_before = count_type('join')
+before = #notices
+vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-arg&token=t&server=ws%3A%2F%2F127.0.0.1%3A9')
+check(
+  'a conforming argument joins',
+  last_of('join') and last_of('join').invite,
+  'ws://127.0.0.1:9/session?room=r-arg&token=t'
+)
+check('  after asking for the name once', prompted ~= nil, true)
+check('  and joins under it', last_of('join') and last_of('join').displayName, 'Ada')
+check('  saying nothing about the link', said_since(before, 'That does not look like') == nil, true)
+
+-- A wire link as an argument joins as it is.
+vim.g.selvage_display_name = 'Test User'
+joins_before = count_type('join')
+vim.cmd('SelvageJoin ws://127.0.0.1:1/session?room=r-arg&token=t')
+check(
+  '  and a wire argument too',
+  last_of('join') and last_of('join').invite,
+  'ws://127.0.0.1:1/session?room=r-arg&token=t'
+)
+
 -- -- the auto-save knob -------------------------------------------------------------
 --
 -- Whether a document the room changes is written is the front-end's setting, as it is in the
@@ -438,7 +508,7 @@ report_status('hosting', 'r-host', 'ws://127.0.0.1:1/session?room=r-host&token=t
 local joins_before = count_type('join')
 confirmation = 0
 before = #notices
-vim.cmd('SelvageJoin ws://127.0.0.1:1/room#tok')
+vim.cmd('SelvageJoin ws://127.0.0.1:1/session?room=r-next&token=t')
 check('a join while hosting asks first', confirmations, 1)
 check(
   '  naming what joining it does, never the room id',
@@ -450,9 +520,13 @@ check('  a declined question joins nothing', count_type('join'), joins_before)
 check('  and leaves the session alone', selvage.session().status, 'hosting')
 
 confirmation = 1
-vim.cmd('SelvageJoin ws://127.0.0.1:1/room#tok')
+vim.cmd('SelvageJoin ws://127.0.0.1:1/session?room=r-next&token=t')
 check('  an accepted question gives the session up', last_of('leave') ~= nil, true)
-check('  and joins the new room', last_of('join') and last_of('join').invite, 'ws://127.0.0.1:1/room#tok')
+check(
+  '  and joins the new room',
+  last_of('join') and last_of('join').invite,
+  'ws://127.0.0.1:1/session?room=r-next&token=t'
+)
 
 -- The same for hosting while a guest, which is the other half of it.
 report_status('joined', 'r-guest')
@@ -558,7 +632,7 @@ vim.g.selvage_web_origin = nil
 vim.ui.input = builtin_input
 joins_before = count_type('join')
 before = #notices
-vim.cmd('SelvageJoin ws://127.0.0.1:1/other')
+vim.cmd('SelvageJoin ws://127.0.0.1:1/session?room=r-other&token=t')
 check('a join while hosting with nobody to ask joins nothing', count_type('join'), joins_before)
 check(
   '  and says what joining would do',

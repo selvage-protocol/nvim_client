@@ -3102,6 +3102,18 @@ local function is_invite_link(text)
   return parse_wire_invite(text) ~= nil or parse_page_link(text) ~= nil
 end
 
+--- The refusal a value that is not an invite link earns, whoever asked: the box a bare
+--- `:SelvageJoin` opens, and the argument an explicit one carries. One sentence for both, so the
+--- same paste is answered the same way however it arrived, and a truncated one fails here rather
+--- than later as whatever the engine said — nobody can tell "bad paste" from "server down" from
+--- an ECONNREFUSED.
+local function refuse_invite()
+  notify(
+    'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.',
+    vim.log.levels.ERROR
+  )
+end
+
 --- What the clipboard holds, when it holds an invite: the host has just sent the link and pasting
 --- it is the next thing the person does. Only a link that names a room is offered, so a stray
 --- address in the clipboard is not joined by mistake.
@@ -3120,11 +3132,9 @@ local function clipboard_invite()
   return ''
 end
 
---- The invite to join on, asked for when the command was given none. A truncated
---- paste fails here, in the other client's words, rather than
---- later as whatever the engine said: nobody can tell "bad paste" from "server down"
---- from an ECONNREFUSED. A link that arrives by argument still goes to the engine, the
---- way the other client sends one past its own box.
+--- The invite to join on, asked for when the command was given none. What the box returns is
+--- checked here; what arrived as an argument is checked before the name is resolved, in
+--- `M.join`, and both say the same sentence (`refuse_invite`).
 local function resolve_invite(callback)
   if not can_prompt() then
     notify('An invite link is needed.', vim.log.levels.ERROR)
@@ -3136,10 +3146,7 @@ local function resolve_invite(callback)
       return
     end
     if not is_invite_link(invite) then
-      notify(
-        'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.',
-        vim.log.levels.ERROR
-      )
+      refuse_invite()
       return
     end
     callback(invite)
@@ -3220,9 +3227,18 @@ end
 --- Joins the room an invite link names.
 ---
 --- A session already live is given up first, and only when the person says so: joining another
---- room ends this one for everyone in it, and a mistyped link must not do that on its own.
+--- room ends this one for everyone in it, and a mistyped link must not do that on its own. A
+--- mistyped one does nothing at all: it is refused here, before the name is asked for, before a
+--- live session is given up for it and before anything is dialled.
 function M.join(invite)
   local wanted = vim.trim(invite or '')
+  -- An argument that is not an invite link cannot join whatever the session is doing, so it is
+  -- answered at once rather than behind a name prompt: a question put in front of a failure
+  -- reads as a join in progress, and the name it collects would outlive it.
+  if wanted ~= '' and not is_invite_link(wanted) then
+    refuse_invite()
+    return
+  end
   -- As hosting one: a second join behind a session being opened earns the companion's
   -- refusal for a room that was never live.
   if state.status == 'connecting' then
