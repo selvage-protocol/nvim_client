@@ -105,16 +105,21 @@ local state = {
   -- Whether the next document the room names is still the one to put in front of the user.
   -- Set when a guest joins; cleared by the first document shown.
   auto_open = false,
-  -- Whether the join has been said out loud yet. The sentence names the room, and what the
-  -- landing did with the room's documents, which is only known once they are named — so it is
+  -- Whether the join has been said out loud yet. The sentence carries the landing, and what
+  -- the landing did with the room's documents, which is only known once they are named — so it is
   -- said over the first `documents` report rather than when the handshake arrives.
   join_said = false,
   -- What the join's own listing materialised: how many files, and where. The companion
   -- reports the listing before the documents, so the first grant lands before the join is
   -- said, and its counts join that one summary instead of arriving as a second sentence.
-  -- A listing that arrives after the join was said keeps its own sentence: the summary
-  -- already went out, and where the mirror lives is still news.
+  -- A listing that arrives after the join was said stays silent: the summary already went
+  -- out, and the mirror is discoverable without a notice (`require('selvage').session()
+  -- `.mirror`, the README, `:SelvageFetch` completion). One summary plus errors, in every order.
   join_mirror = nil,
+  -- While the join's own landing is placed in the window: the summary accounts for how much
+  -- of the landing fetched, so its empty buffer is expected rather than news, and the
+  -- session's one unfetched hint stays for the first file opened afterwards.
+  suppress_unfetched = false,
 }
 
 --- Whether a session is live. The companion process is not the thing to ask: it outlives the
@@ -907,7 +912,12 @@ end
 --- Said for the first such file in a session and never again: the sentence is for the shape,
 --- and the shape is the same on every empty file, so one hint per file is a flood with
 --- the file count. The paths are all still recorded, so a file fetched later is not news.
+--- The join's own landing is the exception: while it is placed the hint is suppressed
+--- outright, unrecorded, so the first file opened afterwards still earns it.
 local function notice_unfetched(path)
+  if state.suppress_unfetched then
+    return
+  end
   if state.unfetched[path] ~= nil then
     return
   end
@@ -2042,12 +2052,16 @@ local function remirror_documents()
         api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         if api.nvim_buf_is_valid(old) then
           -- A window showing the buffer that is going away is pointed at the one replacing it,
-          -- so that closing the room's copy does not move the person somewhere else.
+          -- so that closing the room's copy does not move the person somewhere else. The move
+          -- is the session's own placement rather than an open, so the unfetched hint stays
+          -- silent for it the way it does for the landing's `show`.
+          state.suppress_unfetched = true
           for _, win in ipairs(api.nvim_list_wins()) do
-            if api.nvim_win_get_buf(win) == old then
+            if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == old then
               pcall(api.nvim_win_set_buf, win, bufnr)
             end
           end
+          state.suppress_unfetched = false
           pcall(api.nvim_buf_delete, old, { force = true })
         end
         share(bufnr, path)
@@ -2258,6 +2272,7 @@ local function reset()
   state.auto_open = false
   state.join_said = false
   state.join_mirror = nil
+  state.suppress_unfetched = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
   -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
@@ -2299,6 +2314,10 @@ local function end_session()
   reset()
 end
 
+--- Puts this session's page link on the clipboard and the unnamed register; defined below,
+--- declared here because the host confirm above runs before its definition loads.
+local take_invite
+
 local function on_status(message)
   state.status = message.state
   state.role = message.role
@@ -2312,12 +2331,17 @@ local function on_status(message)
     -- which has already let the engine go.
     reset()
   elseif message.state == 'hosting' then
-    notify(
-      ('Room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).'):format(
-        tostring(message.roomId),
-        state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
+    -- A host's next move is pasting the link to a guest, so the room copies its page
+    -- link without being asked; `:SelvageCopyInvite` stays for later copies. What is
+    -- copied is never the wire address: only the page link leaves this editor.
+    local root = state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
+    if take_invite() then
+      notify(('The room is open (sharing %s); the invite link is on the clipboard.'):format(root))
+    else
+      notify(
+        ('The room is open (sharing %s); :SelvageCopyInvite copies the invite link.'):format(root)
       )
-    )
+    end
     share_current()
     watch_buffers()
     watch_presence()
@@ -2356,7 +2380,11 @@ local function on_report(report)
       if state.auto_open and first ~= nil then
         state.auto_open = false
         if lands then
+          -- The landing is the join's own window placement: its empty buffer is what the
+          -- summary's fetched count already accounts for, so the unfetched hint stays silent.
+          state.suppress_unfetched = true
           show(first)
+          state.suppress_unfetched = false
         end
         if not state.join_said then
           state.join_said = true
@@ -2364,8 +2392,7 @@ local function on_report(report)
           if not lands then
             if mirror_summary ~= nil then
               notify(
-                ('Joined room %s; %d files mirrored at %s; %d of %d fetched.'):format(
-                  tostring(state.room),
+                ('Joined the room; %d files mirrored at %s; %d of %d fetched.'):format(
                   mirror_summary.count,
                   mirror_summary.root,
                   fetched_count(report.documents),
@@ -2373,13 +2400,12 @@ local function on_report(report)
                 )
               )
             else
-              notify(('Joined room %s.'):format(tostring(state.room)))
+              notify('Joined the room.')
             end
           elseif #report.documents > 1 then
             if mirror_summary ~= nil then
               notify(
-                ('Joined room %s; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.'):format(
-                  tostring(state.room),
+                ('Joined the room; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.'):format(
                   report.documents[1],
                   #report.documents - 1,
                   mirror_summary.count,
@@ -2390,8 +2416,7 @@ local function on_report(report)
               )
             else
               notify(
-                ('Joined room %s; opening %s; %d more, :SelvageOpen to choose.'):format(
-                  tostring(state.room),
+                ('Joined the room; opening %s; %d more, :SelvageOpen to choose.'):format(
                   report.documents[1],
                   #report.documents - 1
                 )
@@ -2400,8 +2425,7 @@ local function on_report(report)
           else
             if mirror_summary ~= nil then
               notify(
-                ('Joined room %s; opening %s; %d files mirrored at %s; %d of %d fetched.'):format(
-                  tostring(state.room),
+                ('Joined the room; opening %s; %d files mirrored at %s; %d of %d fetched.'):format(
                   report.documents[1],
                   mirror_summary.count,
                   mirror_summary.root,
@@ -2410,7 +2434,7 @@ local function on_report(report)
                 )
               )
             else
-              notify(('Joined room %s; opening %s.'):format(tostring(state.room), report.documents[1]))
+              notify(('Joined the room; opening %s.'):format(report.documents[1]))
             end
           end
         end
@@ -2419,14 +2443,13 @@ local function on_report(report)
         local mirror_summary = state.join_mirror
         if mirror_summary ~= nil then
           notify(
-            ('Joined room %s; the room has no open documents yet; %d files mirrored at %s.'):format(
-              tostring(state.room),
+            ('Joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
               mirror_summary.count,
               mirror_summary.root
             )
           )
         else
-          notify(('Joined room %s; the room has no open documents yet.'):format(tostring(state.room)))
+          notify('Joined the room; the room has no open documents yet.')
         end
       end
     end
@@ -2463,11 +2486,11 @@ local function on_report(report)
         end
         if state.join_mirror == nil and not state.join_said then
           state.join_mirror = { count = #state.grant - #blocked, root = root }
-        elseif created then
-          notify(
-            ('The room\'s files are mirrored at %s; :SelvageFetch fetches their content.'):format(root)
-          )
         end
+        -- A first listing that arrives after the join was said stays silent: the summary
+        -- already went out, and one summary plus errors is the whole of the join's news. The
+        -- mirror stays discoverable without a notice (`require('selvage').session().mirror`,
+        -- the README, `:SelvageFetch` completion).
         if #blocked > 0 then
           notify(
             ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
@@ -2638,8 +2661,8 @@ local function on_message(message)
   elseif message.type == 'refused' then
     -- This process did not open a second session: one is already live. The commands ask before
     -- they send one, so this is the answer when something else did not.
-    local where = message.what == 'host' and 'hosting' or 'in'
-    notify(('Already %s room %s; leave that session first.'):format(where, tostring(message.roomId)), vim.log.levels.WARN)
+    local where = message.what == 'host' and 'hosting' or 'in a session'
+    notify(('Already %s; leave that session first.'):format(where), vim.log.levels.WARN)
   elseif message.type == 'report' then
     if type(message.report) == 'table' then
       on_report(message.report)
@@ -2752,6 +2775,34 @@ local function configured_display_name()
   return vim.trim(tostring(name)), source
 end
 
+--- The name a prompted answer left behind, so a restart is not asked again: the other
+--- half of the last server address, in a file beside it under `stdpath`. Read when a
+--- session starts without a configured name, written when one is answered or set.
+--- A read or write that fails is not a session's failure, so both give up silently.
+local function last_display_name_file()
+  return vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_display_name')
+end
+
+--- The name the file remembers, or nil when no session has answered yet or it cannot be read.
+local function read_last_display_name()
+  local ok, lines = pcall(vim.fn.readfile, last_display_name_file())
+  if not ok or type(lines) ~= 'table' or #lines < 1 then
+    return nil
+  end
+  local name = vim.trim(tostring(lines[1]))
+  if name == '' then
+    return nil
+  end
+  return name
+end
+
+--- Remembers `name` for the next session, in this Neovim and after it.
+local function remember_last_display_name(name)
+  local file = last_display_name_file()
+  pcall(vim.fn.mkdir, vim.fs.dirname(file), 'p')
+  pcall(vim.fn.writefile, { name }, file)
+end
+
 --- The `vim.ui.input` the plugin was loaded with. A replaced one — a GUI prompt, another
 --- plugin — is a prompt mechanism of its own, so it counts as somewhere to ask even where no
 --- UI is attached; the built-in reads the terminal, which a headless process does not have.
@@ -2768,15 +2819,15 @@ local function can_prompt()
   return #api.nvim_list_uis() > 0 or vim.ui.input ~= builtin_input
 end
 
---- Runs `callback(name)` with the name a session starting now should use, asking for one when
---- none is configured.
+--- Runs `callback(name)` with the name a session starting now should use: the configured
+--- value, else the remembered answer, else one question whose answer is written down.
 ---
---- The configured value wins. With neither the global nor the environment set, the user is asked
---- with `vim.ui.input`, pre-filled with the login name, and the answer becomes the global so the
---- next session is not asked again. The pre-fill is a suggestion and nothing more: it is not an
---- answer, so a cancelled or emptied prompt refuses the session rather than seating a room under
---- a name nobody chose. Nobody to ask is the same refusal said differently — a process without a
---- UI starts no room rather than guessing one.
+--- With neither the global nor the environment set, the user is asked once with `vim.ui.input`,
+--- pre-filled with the login name, and the answer becomes the global and the remembered file,
+--- so neither this Neovim nor the next one asks again. The pre-fill is a suggestion and nothing
+--- more: it is not an answer, so a cancelled or emptied prompt refuses the session rather than
+--- seating a room under a name nobody chose. Nobody to ask is the same refusal said
+--- differently — a process without a UI starts no room rather than guessing one.
 ---
 --- Every one of those names has to fit the room's limit. A name the user typed is asked for again
 --- with its length; one that came from the global or the environment has nobody to re-ask, so it
@@ -2789,6 +2840,11 @@ local function resolve_display_name(callback)
     end
     return
   end
+  local remembered = read_last_display_name()
+  if remembered ~= nil and utf16.len(remembered) <= MAX_DISPLAY_NAME then
+    callback(remembered)
+    return
+  end
   if not can_prompt() then
     notify(
       'No display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.',
@@ -2797,7 +2853,12 @@ local function resolve_display_name(callback)
     return
   end
   local function ask()
-    vim.ui.input({ prompt = 'The name other participants see: ', default = login_name() }, function(input)
+    vim.ui.input(
+      {
+        prompt = 'The name other participants see (remembered; :SelvageDisplayName changes it): ',
+        default = login_name(),
+      },
+      function(input)
       local name = vim.trim(input or '')
       if name == '' then
         notify('A name is needed; the session was not started.', vim.log.levels.ERROR)
@@ -2812,16 +2873,17 @@ local function resolve_display_name(callback)
         return
       end
       vim.g.selvage_display_name = name
+      remember_last_display_name(name)
       callback(name)
     end)
   end
   ask()
 end
 
---- The server a bare `:SelvageHost` starts its question from when nothing was configured
---- and nothing was remembered: the Pi demo from `ai_notes/docs/runbook-pi-demo.md`. An
---- overridable prefill, never a commitment — the question is still asked, an explicit
---- argument and `vim.g.selvage_server_url` always win — so moving the demo is this one line.
+--- The server a bare `:SelvageHost` asks about when nothing was configured and nothing
+--- was remembered: the Pi demo from `ai_notes/docs/runbook-pi-demo.md`. An overridable
+--- default, never a commitment — the answer is remembered, and an explicit argument and
+--- `vim.g.selvage_server_url` always win — so moving the demo is this one line.
 local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 
 --- The page CopyInvite links to when nothing is configured: the Pi page served
@@ -2830,10 +2892,10 @@ local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 --- page is this one line.
 local DEFAULT_WEB_ORIGIN = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443'
 
---- The last server address a host was started on, so the question the next bare `:SelvageHost`
---- asks starts from it. The file below is what outlives this Neovim; this is what answers
+--- The last server address a host was started on, so the next bare `:SelvageHost` reuses
+--- it without asking. The file below is what outlives this Neovim; this is what answers
 --- without reading it twice in one process. `vim.g.selvage_server_url` is the setting that
---- stops the question being asked.
+--- uses another address instead.
 local last_server = nil
 
 --- The file the last server address is kept in across restarts: the other client remembers it
@@ -2858,7 +2920,8 @@ local function read_last_server()
   return address
 end
 
---- Remembers `address` for the next question, in this Neovim and after it.
+--- Remembers `address` for the next host, in this Neovim and after it: a bare host
+--- reuses it without asking, and an argument or `vim.g.selvage_server_url` uses another.
 local function remember_last_server(address)
   last_server = address
   local file = last_server_file()
@@ -2889,14 +2952,19 @@ local function confirm_leave(question, button)
   return vim.fn.confirm(question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
 end
 
---- The server to mint a room on: the configured address, else a question starting from the last
---- one typed, else the demo default (`DEFAULT_SERVER_URL`). An answer is remembered across
---- restarts and the question is still asked next time, as it is in the other client: the default
---- is a prefill the person can still edit, never an endpoint chosen for them.
+--- The server to mint a room on: the configured address, else the remembered one with no
+--- question asked, else one question starting from the demo default (`DEFAULT_SERVER_URL`).
+--- Asked once, then reused: an argument or `vim.g.selvage_server_url` uses another, and
+--- writes it down as the remembered one.
 local function resolve_server_url(callback)
   local configured = vim.g.selvage_server_url
   if configured ~= nil and vim.trim(tostring(configured)) ~= '' then
     callback(vim.trim(tostring(configured)))
+    return
+  end
+  local remembered = last_server or read_last_server()
+  if remembered ~= nil then
+    callback(remembered)
     return
   end
   if not can_prompt() then
@@ -2904,8 +2972,8 @@ local function resolve_server_url(callback)
     return
   end
   vim.ui.input({
-    prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (set vim.g.selvage_server_url to stop being asked): ',
-    default = last_server or read_last_server() or DEFAULT_SERVER_URL,
+    prompt = 'The Selvage server to host on, e.g. ws://127.0.0.1:8080 (remembered for next time; an argument or vim.g.selvage_server_url uses another): ',
+    default = DEFAULT_SERVER_URL,
   }, function(input)
     local address = vim.trim(input or '')
     if address == '' then
@@ -3082,7 +3150,7 @@ end
 --- false when there is none to put there. Two moments reach for the invite — hosting
 --- again, and `:SelvageCopyInvite` — and each has its own sentence about it. What is
 --- copied is never the wire address: only the page link leaves this editor.
-local function take_invite()
+take_invite = function()
   if state.invite == nil then
     return false
   end
@@ -3105,11 +3173,7 @@ function M.host(url)
   local wanted = vim.trim(url or '')
   if state.status == 'hosting' then
     if take_invite() then
-      notify(
-        ('You are already hosting room %s; the invite link is on the clipboard.'):format(
-          tostring(state.room)
-        )
-      )
+      notify('You are already hosting; the invite link is on the clipboard.')
     end
     return
   end
@@ -3122,7 +3186,7 @@ function M.host(url)
   end
   if in_session() then
     local can_leave = confirm_leave(
-      ('You are in room %s; hosting a session means leaving it first.'):format(tostring(state.room)),
+      'You are in a session; hosting a session means leaving it first.',
       'Leave and host'
     )
     if not can_leave then
@@ -3169,14 +3233,12 @@ function M.join(invite)
     local can_leave
     if state.role == 'host' then
       can_leave = confirm_leave(
-        ('You are hosting room %s; joining another session ends this room for everyone.'):format(
-          tostring(state.room)
-        ),
+        'You are hosting; joining another session ends this room for everyone.',
         'Leave and join'
       )
     else
       can_leave = confirm_leave(
-        ('You are in room %s; joining another session leaves it.'):format(tostring(state.room)),
+        'You are in a session; joining another session leaves it.',
         'Leave and join'
       )
     end
@@ -3237,15 +3299,20 @@ function M.leave()
   notify('Left the session.')
 end
 
---- The name other participants see, when one is set: the plugin's global, or the environment's
---- name, and nil when there is neither. Nothing is invented here — a name nobody chose is not a
---- name, and the login name is only ever what the prompt starts from — so a script reading this
---- can tell that the next host or join will ask, or refuse where there is no one to ask. It
---- reports whatever was configured, so a name over the room's limit comes back too; that one
---- stops a session rather than being shortened, and `:SelvageDisplayName` says so.
+--- The name other participants see, when one is in force: the plugin's global, the
+--- environment's name, or the remembered answer — which is what a session starting now
+--- would use without asking. Nil when there is none of those: nothing is invented here —
+--- a name nobody chose is not a name, and the login name is only ever what the prompt
+--- starts from — so a script reading this can tell that the next host or join will ask,
+--- or refuse where there is no one to ask. It reports whatever was configured, so a name
+--- over the room's limit comes back too; that one stops a session rather than being
+--- shortened, and `:SelvageDisplayName` says so.
 function M.display_name()
   local configured = configured_display_name()
-  return configured
+  if configured ~= nil then
+    return configured
+  end
+  return read_last_display_name()
 end
 
 --- Sets the name other participants see, and says when it takes effect.
@@ -3259,14 +3326,15 @@ end
 function M.set_display_name(name)
   local wanted = vim.trim(name or '')
   if wanted == '' then
-    local configured, source = configured_display_name()
-    if configured ~= nil and not acceptable(configured, source, 'the next session will not start') then
-      return
-    end
-    if configured == nil then
+    local name = M.display_name()
+    if name == nil then
       notify('No display name is set yet.')
     else
-      notify(('The name others see is "%s"; :SelvageDisplayName <name> to change it.'):format(configured))
+      local _, source = configured_display_name()
+      if source ~= nil and not acceptable(name, source, 'the next session will not start') then
+        return
+      end
+      notify(('The name others see is "%s"; :SelvageDisplayName <name> to change it.'):format(name))
     end
     return
   end
@@ -3275,6 +3343,7 @@ function M.set_display_name(name)
     return
   end
   vim.g.selvage_display_name = wanted
+  remember_last_display_name(wanted)
   if state.process ~= nil then
     state.process:send({ type = 'rename', displayName = wanted })
   end

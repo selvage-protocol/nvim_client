@@ -132,7 +132,7 @@ local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check(
   'the host confirm names the folder the session shares',
-  said_since(before_host_confirm, 'Room r-test is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
+  said_since(before_host_confirm, 'The room is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
   true
 )
 
@@ -176,8 +176,8 @@ handlers().on_message({
 check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage://workspace/README.md')
 check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
 check(
-  '  and the join says the room and the landing',
-  said_since(before_join, 'Joined room r-guest; opening workspace/README.md') ~= nil,
+  '  and the join says the landing',
+  said_since(before_join, 'Joined the room; opening workspace/README.md') ~= nil,
   true
 )
 
@@ -229,7 +229,7 @@ handlers().on_message({
 check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
 check(
   '  and said so, pointing at the others',
-  said_since(before, 'Joined room r-two; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
+  said_since(before, 'Joined the room; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
   true
 )
 local pointed = false
@@ -251,7 +251,7 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
 check(
   '  and the join says the room has nothing in it yet',
-  said_since(before_empty, 'Joined room r-empty; the room has no open documents yet') ~= nil,
+  said_since(before_empty, 'Joined the room; the room has no open documents yet') ~= nil,
   true
 )
 local before_late = #notices
@@ -274,7 +274,7 @@ check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated
 check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
 check(
   '  and the join claims no landing',
-  said_since(before_off, 'Joined room r-off') ~= nil,
+  said_since(before_off, 'Joined the room') ~= nil,
   true
 )
 vim.g.selvage_open_on_join = nil
@@ -822,6 +822,16 @@ check(
 local saved_input = vim.ui.input
 local prompted = 0
 
+-- The remembered answers this section reads are sandboxed to this checkout, and cleared
+-- wherever a check needs nothing remembered: a prompted answer from an earlier check
+-- would otherwise answer a later one without asking.
+local saved_data_home = vim.env.XDG_DATA_HOME
+vim.env.XDG_DATA_HOME = vim.fn.getcwd() .. '/.tmp/lua-session-data'
+local function forget_remembered()
+  vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-session-data', 'rf')
+end
+forget_remembered()
+
 vim.g.selvage_display_name = nil
 vim.env.SELVAGE_DISPLAY_NAME = 'Env Name'
 vim.ui.input = function()
@@ -846,7 +856,11 @@ vim.env.SELVAGE_DISPLAY_NAME = nil
 vim.ui.input = function(opts, on_confirm)
   prompted = prompted + 1
   check('  the prompt pre-fills the login name', opts and opts.default, vim.env.USER or '')
-  check('  and separates the prompt from the value', opts and opts.prompt, 'The name other participants see: ')
+  check(
+    '  and separates the prompt from the value',
+    opts and opts.prompt,
+    'The name other participants see (remembered; :SelvageDisplayName changes it): '
+  )
   on_confirm('  Ada  ')
 end
 selvage.leave()
@@ -862,8 +876,9 @@ check('  and it names the next session too', last_of('host') and last_of('host')
 
 -- Dismissing the prompt is not a name, and nothing else is: the suggestion it started from is
 -- not an answer, so no session is opened and the global is left unset, ready to be asked for
--- again.
+-- again. A name an earlier check answered is forgotten first, so this one is asked.
 vim.g.selvage_display_name = nil
+forget_remembered()
 vim.ui.input = function(_, on_confirm)
   prompted = prompted + 1
   on_confirm(nil)
@@ -920,8 +935,9 @@ check('  and with no name reports the one in force', said_since(before_report, '
 -- A change during a live session is sent now: `session.rename` carries it and the room answers
 -- with `peer.renamed`, so the sign and `:SelvagePeers` re-label from that event rather than from
 -- anything held here. The configured name is set too, so a session started after this one
--- re-hellos under it.
+-- re-hellos under it. A name an earlier check set is forgotten first, so this one is asked.
 vim.g.selvage_display_name = nil
+forget_remembered()
 vim.ui.input = function(_, on_confirm)
   on_confirm('First')
 end
@@ -996,8 +1012,9 @@ check('33 units ending in an astral character are refused', vim.g.selvage_displa
 check('  with its count', said_since(before_astral, '33 UTF-16 code units') ~= nil, true)
 
 -- At the prompt the question is asked again, so a typed name over the limit costs a keystroke
--- and not the session.
+-- and not the session. A name an earlier check set is forgotten first, so this one is asked.
 vim.g.selvage_display_name = nil
+forget_remembered()
 local answers = { string.rep('c', 33), 'Cara' }
 local asked = 0
 vim.ui.input = function(_, on_confirm)
@@ -1059,7 +1076,10 @@ vim.g.selvage_display_name = nil
 
 -- The login name is a suggestion and nothing more, however long it is: it is what the prompt
 -- starts from, and a process with nobody to ask starts no room at all rather than seating one
--- under a name that was never answered for.
+-- under a name that was never answered for. A name an earlier check answered is forgotten
+-- first, so this refusal is about there being no name at all.
+vim.g.selvage_display_name = nil
+forget_remembered()
 local saved_user = vim.env.USER
 vim.env.USER = string.rep('g', 33)
 vim.ui.input = saved_input
@@ -1078,6 +1098,7 @@ vim.g.selvage_display_name = nil
 
 -- Put this file's own name back: the sections after this one are not about the name.
 vim.g.selvage_display_name = 'Test User'
+vim.env.XDG_DATA_HOME = saved_data_home
 
 -- -- a session that ends without leaving ------------------------------------------
 --

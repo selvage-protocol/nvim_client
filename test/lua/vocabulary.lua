@@ -110,20 +110,21 @@ local TITLES = {
 --- once: what is pinned is the words and the level, not how often they are said.
 local MESSAGES = {
   -- Hosting and joining.
-  { 'INFO', 'Room %s is open (sharing %s); copy the invite link to let someone join (:SelvageCopyInvite).' },
-  { 'INFO', 'You are already hosting room %s; the invite link is on the clipboard.' },
+  { 'INFO', 'The room is open (sharing %s); the invite link is on the clipboard.' },
+  { 'INFO', 'The room is open (sharing %s); :SelvageCopyInvite copies the invite link.' },
+  { 'INFO', 'You are already hosting; the invite link is on the clipboard.' },
   { 'WARN', 'A session is already being opened.' },
-  { 'INFO', 'Joined room %s; opening %s.' },
-  { 'INFO', 'Joined room %s; opening %s; %d more, :SelvageOpen to choose.' },
-  { 'INFO', 'Joined room %s.' },
-  { 'INFO', 'Joined room %s; the room has no open documents yet.' },
-  { 'INFO', 'Joined room %s; opening %s; %d files mirrored at %s; %d of %d fetched.' },
-  { 'INFO', 'Joined room %s; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.' },
-  { 'INFO', 'Joined room %s; the room has no open documents yet; %d files mirrored at %s.' },
-  { 'INFO', 'Joined room %s; %d files mirrored at %s; %d of %d fetched.' },
-  { 'WARN', 'You are hosting room %s; joining another session ends this room for everyone.' },
-  { 'WARN', 'You are in room %s; joining another session leaves it.' },
-  { 'WARN', 'You are in room %s; hosting a session means leaving it first.' },
+  { 'INFO', 'Joined the room; opening %s.' },
+  { 'INFO', 'Joined the room; opening %s; %d more, :SelvageOpen to choose.' },
+  { 'INFO', 'Joined the room.' },
+  { 'INFO', 'Joined the room; the room has no open documents yet.' },
+  { 'INFO', 'Joined the room; opening %s; %d files mirrored at %s; %d of %d fetched.' },
+  { 'INFO', 'Joined the room; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.' },
+  { 'INFO', 'Joined the room; the room has no open documents yet; %d files mirrored at %s.' },
+  { 'INFO', 'Joined the room; %d files mirrored at %s; %d of %d fetched.' },
+  { 'WARN', 'You are hosting; joining another session ends this room for everyone.' },
+  { 'WARN', 'You are in a session; joining another session leaves it.' },
+  { 'WARN', 'You are in a session; hosting a session means leaving it first.' },
   -- The room's documents, and the invite.
   { 'INFO', 'The room has no open documents yet.' },
   { 'INFO', 'You are hosting, so the files you open are the ones the room has.' },
@@ -177,12 +178,14 @@ local MESSAGES = {
   { 'WARN', 'Unreadable report from the companion.' },
   { 'WARN', 'Unreadable status from the companion.' },
   { 'ERROR', 'The companion exited with %s.' },
-  { 'WARN', 'Already %s room %s; leave that session first.' },
+  { 'WARN', 'Already %s; leave that session first.' },
   { 'ERROR', 'A server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.' },
   { 'ERROR', 'An invite link is needed.' },
   { 'ERROR', 'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
-  { 'INFO', "The room's files are mirrored at %s; :SelvageFetch fetches their content." },
+  -- (No sentence announces where the mirror lives: the join's summary carries its counts
+  -- when the listing arrives first, and a later listing stays silent — one summary plus
+  -- errors. The path is `require('selvage').session().mirror`.)
   { 'INFO', 'This file is empty until fetched; :SelvageFetch %s fills it.' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s." },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends." },
@@ -401,6 +404,23 @@ end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
 check('the messages that are not literals are the three this file names', variables, 3)
+
+-- -- no room id reaches a sentence a user reads ----------------------------------------
+--
+-- The id still names the mirror's directory and rides in `require('selvage').session()`
+-- for scripts and debugging, but the prose says the room, never its id: no `notify` or
+-- `confirm_leave` call may format one in.
+local id_holes = {}
+for _, call in ipairs(scanned) do
+  local text = written(call.args[1] or {})
+  if text:find('state.room', 1, true) ~= nil or text:find('roomId', 1, true) ~= nil then
+    id_holes[#id_holes + 1] = text
+  end
+end
+check('no sentence a user reads carries the room id', #id_holes, 0)
+if #id_holes > 0 then
+  print('  holes: ' .. table.concat(id_holes, ' | '))
+end
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

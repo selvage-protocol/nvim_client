@@ -5,11 +5,14 @@
 # stubbed companion (`test/lua/session.lua`), the folder a session shares and what moves it
 # (`test/lua/grant.lua`), the room's grant listing and `:SelvageOpen` over it
 # (`test/lua/granted.lua`), the guest's mirror of that listing (`test/lua/mirror.lua`), the one
-# summary a guest's join says (`test/lua/join.lua`), what the
+# summary a guest's join says whatever order the room speaks in (`test/lua/join.lua` for the
+# listing-first order, `test/lua/joinorder.lua` for documents first), what the
 # commands themselves decide (`test/lua/commands.lua`), the words the two clients share
 # (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), and what
 # stopping the process does to it (`test/lua/leave.lua`,
-# against a real job), and going to a participant and following one (`test/lua/follow.lua`).
+# against a real job), and going to a participant and following one (`test/lua/follow.lua`),
+# and the pickers asking through `vim.ui.select` with no external picker required
+# (`test/lua/pickers.lua`).
 #
 #   scripts/test-lua.sh
 #
@@ -26,6 +29,8 @@ nvim --headless -l test/lua/grant.lua
 nvim --headless -l test/lua/granted.lua
 nvim --headless -l test/lua/mirror.lua
 nvim --headless -l test/lua/join.lua
+nvim --headless -l test/lua/joinorder.lua
+nvim --headless -l test/lua/pickers.lua
 nvim --headless -l test/lua/commands.lua
 nvim --headless -l test/lua/vocabulary.lua
 nvim --headless -l test/lua/warnings.lua
