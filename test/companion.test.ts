@@ -1400,6 +1400,89 @@ test('a reading that finishes after a later one does not publish', async (t) => 
   );
 });
 
+// -- a host that reseats after a drop ---------------------------------------------------
+//
+// A host that dropped reclaims its room rather than minting a new one, and the room kept the
+// listing it had while this process was gone. A reconnect seats again under a new peer id in
+// the same room, so the first seat report under that id is the reclaim rather than later room
+// news — and the host publishes the folder as it stands then instead of leaving the dead
+// listing advertised.
+
+test('a host that reseats after a drop publishes its current listing', async (t) => {
+  const root = folder(t);
+  let listing = ['old.txt'];
+  const it = harness('host', [], [], {
+    enumerate: async () => [...listing],
+  });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the starting listing to be published',
+    () => it.engine.grants.length > 0,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [['old.txt']]);
+
+  // The folder moves while the room still names the old listing — the shape a reclaim meets
+  // when the working copy changed under a dead socket.
+  listing = ['new.txt'];
+  it.engine.reseat('p-again');
+  it.engine.emit({ type: 'documentsChanged', documents: [] });
+
+  await until(
+    'the current listing to be published after the reseat',
+    () => it.engine.grants.length > 1,
+    () => it.engine.grants,
+  );
+  assert.deepEqual(it.engine.grants, [['old.txt'], ['new.txt']]);
+});
+
+test('later room news under the same peer id publishes nothing again', async (t) => {
+  const root = folder(t);
+  let listing = ['old.txt'];
+  const it = harness('host', [], [], {
+    enumerate: async () => [...listing],
+  });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the starting listing to be published',
+    () => it.engine.grants.length > 0,
+    () => it.engine.grants,
+  );
+
+  listing = ['new.txt'];
+  it.engine.reseat('p-again');
+  it.engine.emit({ type: 'documentsChanged', documents: [] });
+  await until(
+    'the current listing to be published after the reseat',
+    () => it.engine.grants.length > 1,
+    () => it.engine.grants,
+  );
+
+  // An open elsewhere is room news under the same peer, not a second reclaim: the folder
+  // has nothing new to say, and the room is not told twice.
+  it.engine.emit({ type: 'documentsChanged', documents: ['new.txt'] });
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+  await delay(QUIET_MS);
+  assert.deepEqual(it.engine.grants, [['old.txt'], ['new.txt']]);
+});
+
+test('a guest that reseats after a drop publishes nothing and keeps its role', async () => {
+  const it = harness('guest');
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  await settle();
+  assert.equal(it.engine.session().role, 'guest');
+
+  it.engine.reseat('p-again');
+  it.engine.emit({ type: 'documentsChanged', documents: [] });
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+
+  // A publish the re-seat owed would already be resolved work, so `settle` is enough to
+  // have seen it; `QUIET_MS` is what says the watcher owed nothing either.
+  await delay(QUIET_MS);
+  assert.deepEqual(it.engine.grants, [], 'a reseated guest published a listing');
+  assert.equal(it.engine.session().role, 'guest', 'a reconnect drifted toward host');
+});
+
 test('a guest watches nothing and publishes no listing', async () => {
   const it = harness('guest');
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
