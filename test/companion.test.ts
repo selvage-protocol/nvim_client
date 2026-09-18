@@ -399,6 +399,29 @@ test("a joining client is told the room's grant the handshake carried", async ()
   });
 });
 
+test('a guest join waits for the listing the handshake carried', async () => {
+  const it = harness('guest');
+  const joining = it.companion.handle({
+    type: 'join',
+    invite: 'ws://127.0.0.1:0/session?room=r&token=t',
+  });
+  // The room's listing may land a turn after `join()` resolves: the server queues `doc.granted`
+  // after `room.joined`, and the engine reads the two frames separately. The join waits for the
+  // frame rather than reporting an empty listing the front-end would then never mention, and the
+  // bridge's own report of it is what the front-end hears — the snapshot stands down.
+  await new Promise((resolve) => setImmediate(resolve));
+  it.engine.granted = ['src/main.rs', 'notes.txt'];
+  it.engine.emit({ type: 'grantChanged', paths: ['src/main.rs', 'notes.txt'] });
+  await joining;
+
+  const reports = it.sent.filter((notification) => notification.type === 'report');
+  assert.deepEqual(
+    reports.map((notification) => (notification.report as { kind: string }).kind),
+    ['grant', 'documents', 'peers'],
+  );
+  assert.deepEqual(reports[0]?.report, { kind: 'grant', paths: ['src/main.rs', 'notes.txt'] });
+});
+
 test('a host seeds the buffer it opens, and only once', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });

@@ -1216,6 +1216,66 @@ check('  and the session ends with it', selvage.session().status, 'idle')
 check('  and its documents are let go', #selvage.documents(), 0)
 check('  and its peers with them', #selvage.peers(), 0)
 
+-- -- a guest's window is landed when the room dies -----------------------------------
+--
+-- The room's buffers are the room's, and when the room is gone they are nobody's: a window
+-- still showing one reads as a room that is still there. What the guest has not changed goes
+-- with the room; a buffer holding their own unsaved changes is kept and said so, because the
+-- session can no longer save it and dropping it would drop their text. A host is left alone:
+-- its buffers are its own files.
+
+selvage.join('ws://127.0.0.1:1/session?room=r-land&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-land' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'grant', paths = { 'room/one.txt', 'room/two.txt' } },
+})
+local land_root = selvage.session().mirror
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'room/one.txt' } },
+})
+vim.cmd('SelvageOpen room/two.txt')
+local one_buf = vim.fn.bufnr(land_root .. '/room/one.txt')
+local two_buf = vim.api.nvim_get_current_buf()
+check('the guest is editing the room file', vim.fn.bufname('%'), land_root .. '/room/two.txt')
+vim.api.nvim_buf_set_lines(two_buf, -1, -1, true, { 'kept by hand' })
+check('  and it has unsaved changes', vim.bo[two_buf].modified, true)
+
+local before_land = #notices
+handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+check('the dead room is not left in the window', vim.fn.bufname('%'), '')
+check('  and the buffer with no changes is gone', vim.api.nvim_buf_is_valid(one_buf), false)
+check('  while the one with unsaved changes is kept', vim.api.nvim_buf_is_valid(two_buf), true)
+check(
+  '  and that buffer still holds the edit',
+  table.concat(vim.api.nvim_buf_get_lines(two_buf, 0, -1, false), '\n'):find('kept by hand', 1, true) ~= nil,
+  true
+)
+check(
+  '  and the person is told it was kept',
+  said_since(before_land, '1 buffers with unsaved changes were kept') ~= nil,
+  true
+)
+check('  and the session is over', selvage.session().status, 'idle')
+
+-- With nothing changed, the room's buffers all go and there is nothing to say.
+selvage.join('ws://127.0.0.1:1/session?room=r-land2&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-land2' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'grant', paths = { 'room/only.txt' } },
+})
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'room/only.txt' } },
+})
+local only_buf = vim.api.nvim_get_current_buf()
+local before_clean = #notices
+handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+check('an unchanged room buffer goes with the room', vim.api.nvim_buf_is_valid(only_buf), false)
+check('  and nothing was kept to announce', said_since(before_clean, 'were kept') ~= nil, false)
+
 -- A report's cause is part of what it says: the sentence is the fact and the parenthetical is
 -- why, and a report that carries a reason must not lose it. The kind name is not a sentence.
 local before_reports = #notices

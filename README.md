@@ -168,7 +168,7 @@ without asking. With neither, the one question starts from the demo server `ws:/
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
 | `:SelvageFetch [path]` | Fetch the room's content into the mirror: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
-| `:SelvageCopyInvite` | Put the page invite on the clipboard and the unnamed register: an `https://` link opening the guest page with the room and its token (`&server=` only for rooms off the page default). Only the connection that minted the room has one; never a `ws://` address. |
+| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A host copies the page invite: an `https://` link opening the guest page with the room and its token (`&server=` only for rooms off the page default). A guest holds the token it joined with — the invite *is* the permission — so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
 | `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart, and a typed name whose caret has not arrived yet waits for it. |
@@ -211,9 +211,9 @@ writes a document the room changed by default, as the other client's `selvage.au
 a guest's mirror is not refreshed either way — a save in it is refused, and the file keeps what it
 last held. Both are read when a session starts, so a change to either applies to the next host or
 join. `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, and
-`vim.g.selvage_web_origin` is the page `:SelvageCopyInvite` links to, defaulting to the Pi page
+`vim.g.selvage_web_origin` is the page a host's `:SelvageCopyInvite` links to, defaulting to the Pi page
 `https://lumi-raspberrypi.muskellunge-yo.ts.net:8443`. It must name an https origin; anything else
-falls back to the default, so a copied link never carries the room's token over cleartext. `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
+falls back to the default, so a host's copied link never carries the room's token over cleartext. `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
 ### Pickers
 
@@ -227,10 +227,14 @@ plain `vim.ui.select`.
 
 A join says one summary sentence plus errors, whatever order the room speaks in: the
 room may name its documents before it publishes its listing, and a listing that arrives
-after the summary stays silent rather than earning its own mirror sentence. The mirror's
-location is `require('selvage').session().mirror`, and the session's one unfetched hint
-still points at `:SelvageFetch`; neither needs a notice of its own. Pinned by
-`test/lua/join.lua` (listing first) and `test/lua/joinorder.lua` (documents first).
+after the summary stays silent rather than earning its own mirror sentence. The one
+exception is a room that had nothing open at the join and grants files afterwards: that
+guest landed no document and has no tree to read, so the listing is said once, and is the
+only thing that tells them the room has files at all. The mirror's location is
+`require('selvage').session().mirror`, and the session's one unfetched hint still points
+at `:SelvageFetch`; neither needs a notice of its own. Pinned by `test/lua/join.lua`
+(listing first), `test/lua/joinorder.lua` (documents first) and `test/lua/granted.lua`
+(a listing after an empty join).
 
 The folder a session was started in is its root: a host publishes the listing of the files under
 it to the room, and nothing outside it is ever served. The root is fixed for the session — a
@@ -320,6 +324,12 @@ hosts), never inside the person's project — one directory per session inside t
 the process that owns it. The session that made it removes it on the way out, and a directory a
 crashed session left behind is pruned by the next one: only a directory whose process is gone is
 removed, so a second Neovim mirroring the same room keeps its own.
+
+A room that dies under a guest does not leave its buffers in the window: `roomGone`, and the
+connection the engine gave up on, land every window showing one on a fresh empty buffer, wipe the
+room's buffers that hold nothing the person changed, and keep the ones that do — saying how many,
+because the session that could save them is over. A host is left alone: its buffers are its own
+files. Pinned by `test/lua/session.lua`.
 
 A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not run
 Neovim's write path, and the file is written by this client from the buffer, as the save the room

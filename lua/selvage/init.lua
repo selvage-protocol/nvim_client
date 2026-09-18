@@ -116,6 +116,12 @@ local state = {
   -- out, and the mirror is discoverable without a notice (`require('selvage').session()
   -- `.mirror`, the README, `:SelvageFetch` completion). One summary plus errors, in every order.
   join_mirror = nil,
+  -- Whether the join's sentence said the room has nothing open, and whether that sentence named
+  -- the listing. The two together say whether the room's files have been announced: a room that
+  -- listed nothing when the guest joined and grants files afterwards has none of them to land, so
+  -- the listing is the only news, and a guest has no tree to watch for it.
+  join_empty = false,
+  join_listed = false,
   -- While the join's own landing is placed in the window: the summary accounts for how much
   -- of the landing fetched, so its empty buffer is expected rather than news, and the
   -- session's one unfetched hint stays for the first file opened afterwards.
@@ -2246,9 +2252,76 @@ local function forget_documents()
   state.linked = {}
 end
 
+--- The buffers a guest session put on screen, captured before its documents are forgotten: they
+--- are the room's only for as long as the session holds them. A host's buffers are its own
+--- files, which outlive the room, so there is nothing here for a host to land.
+local function room_buffers()
+  if state.role ~= 'guest' then
+    return nil
+  end
+  local held = {}
+  for _, document in pairs(state.documents) do
+    if api.nvim_buf_is_valid(document.bufnr) then
+      held[#held + 1] = document.bufnr
+    end
+  end
+  return held
+end
+
+--- A room that dies under a person leaves no window showing it.
+---
+--- The room's buffers are the room's, and when the room is gone they are nobody's: a window still
+--- showing one reads as a room that is still there. What the person has not changed goes with it
+--- — its text is the room's, and the session that could write it has ended — while a buffer
+--- holding their own unsaved changes is kept in the buffer list and said so: the session can no
+--- longer save it, so dropping it would drop their text, and silence would hide where it went.
+--- (`:SelvageLeave` and a new host or join are not this: the room lives on, and the person asked.)
+local function land_room_buffers(held)
+  if held == nil or #held == 0 then
+    return
+  end
+  local landing = nil
+  for _, win in ipairs(api.nvim_list_wins()) do
+    local showing = api.nvim_win_get_buf(win)
+    local room = false
+    for _, bufnr in ipairs(held) do
+      if showing == bufnr then
+        room = true
+        break
+      end
+    end
+    if room then
+      if landing == nil then
+        landing = api.nvim_create_buf(true, false)
+      end
+      pcall(api.nvim_win_set_buf, win, landing)
+    end
+  end
+  local kept = 0
+  for _, bufnr in ipairs(held) do
+    if api.nvim_buf_is_valid(bufnr) then
+      if vim.bo[bufnr].modified then
+        kept = kept + 1
+      else
+        pcall(api.nvim_buf_delete, bufnr, { force = true })
+      end
+    end
+  end
+  if kept > 0 then
+    notify(
+      ('%d buffers with unsaved changes were kept; :ls lists them.'):format(kept),
+      vim.log.levels.WARN
+    )
+  end
+end
+
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
---- is back to nothing shared.
-local function reset()
+--- is back to nothing shared. `land` is for a room that died under the person (`roomGone`,
+--- `disconnected`): the buffers and the window still showing them are the room's, and the room
+--- is not. Every other ending leaves them where they are — the person asked, and a leave does
+--- not close the room for anyone else.
+local function reset(land)
+  local held = land and room_buffers() or nil
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
   clear_presence()
@@ -2273,6 +2346,7 @@ local function reset()
   -- pending go-to goes with it, for the same reason and with the same silence.
   end_follow('silent')
   state.pending_go_to = nil
+  land_room_buffers(held)
   state.status = 'idle'
   state.role = nil
   state.room = nil
@@ -2280,6 +2354,8 @@ local function reset()
   state.auto_open = false
   state.join_said = false
   state.join_mirror = nil
+  state.join_empty = false
+  state.join_listed = false
   state.suppress_unfetched = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
@@ -2359,6 +2435,8 @@ local function on_status(message)
     -- what the landing did with the room's documents, and that is the report's news.
     state.auto_open = true
     state.join_said = false
+    state.join_empty = false
+    state.join_listed = false
     watch_presence()
     watch_follow_window()
   elseif message.state == 'error' then
@@ -2448,7 +2526,9 @@ local function on_report(report)
         end
       elseif state.auto_open and not state.join_said then
         state.join_said = true
+        state.join_empty = true
         local mirror_summary = state.join_mirror
+        state.join_listed = mirror_summary ~= nil
         if mirror_summary ~= nil then
           notify(
             ('Joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
@@ -2495,10 +2575,18 @@ local function on_report(report)
         if state.join_mirror == nil and not state.join_said then
           state.join_mirror = { count = #state.grant - #blocked, root = root }
         end
-        -- A first listing that arrives after the join was said stays silent: the summary
-        -- already went out, and one summary plus errors is the whole of the join's news. The
-        -- mirror stays discoverable without a notice (`require('selvage').session().mirror`,
-        -- the README, `:SelvageFetch` completion).
+        -- A first listing that arrives after the join was said stays silent: the summary already
+        -- went out, and one summary plus errors is the whole of the join's news. The mirror stays
+        -- discoverable without a notice (`require('selvage').session().mirror`, the README,
+        -- `:SelvageFetch` completion). The exception is a join the room had nothing open in: that
+        -- guest has no document to watch and no tree to read, so a listing that arrives after the
+        -- sentence is the only place the room's files reach them, and it is said once here.
+        if state.join_said and state.join_empty and not state.join_listed and #state.grant > #blocked then
+          state.join_listed = true
+          notify(
+            ('%d files are mirrored at %s; :SelvageOpen opens one.'):format(#state.grant - #blocked, root)
+          )
+        end
         if #blocked > 0 then
           notify(
             ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
@@ -2573,8 +2661,10 @@ local function on_report(report)
   elseif report.kind == 'roomGone' then
     -- The room is over and the companion has let the engine go, so the session here ends with
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
+    -- The window is part of that: a buffer still shown for the dead room reads as one that is
+    -- still there, so the room's buffers are landed as well.
     notify(('The room is gone (%s).'):format(tostring(report.reason)), vim.log.levels.WARN)
-    reset()
+    reset(true)
   elseif report.kind == 'hostDetached' then
     notify(
       ('The host left the room; it closes in %ds unless they come back.'):format(seconds(report.graceMs)),
@@ -2615,7 +2705,7 @@ local function on_report(report)
     -- companion process is deliberately left running — `ensure` reuses it on the next host
     -- or join, and the engine on the other side of it has already finished.
     notify('The connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
-    reset()
+    reset(true)
   end
 end
 
@@ -3161,19 +3251,32 @@ local function resolve_invite(callback)
   end)
 end
 
---- Puts this session's page link on the clipboard and the unnamed register, or answers
---- false when there is none to put there. Two moments reach for the invite — hosting
---- again, and `:SelvageCopyInvite` — and each has its own sentence about it. What is
---- copied is never the wire address: only the page link leaves this editor.
+--- Puts this session's invite on the clipboard and the unnamed register, or answers false when
+--- there is none to put there. Two moments reach for the invite — hosting again, and
+--- `:SelvageCopyInvite` — and each has its own sentence about it.
+---
+--- What a host copies is its page link, never the wire address it holds. A guest holds the
+--- token it joined with — the invite *is* the permission — so the link its host sent is the
+--- guest's to hand on, as it stands: the page link keeps the origin the host sent it from, and
+--- a guest that reached the room over `ws://` has no other address for it.
 take_invite = function()
-  if state.invite == nil then
+  -- An invite that outlived its session is not one to hand on: a failed join leaves the link
+  -- remembered, and a room nobody is in is not a room to invite anyone to.
+  if not in_session() then
     return false
   end
-  local wire = parse_wire_invite(state.invite)
-  if wire == nil then
+  local invite = state.invite
+  if invite == nil then
     return false
   end
-  local link = build_page_link(wire.room, wire.token, wire.base)
+  local link = invite
+  if state.role ~= 'guest' then
+    local wire = parse_wire_invite(invite)
+    if wire == nil then
+      return false
+    end
+    link = build_page_link(wire.room, wire.token, wire.base)
+  end
   vim.fn.setreg('"', link)
   pcall(vim.fn.setreg, '+', link)
   return true
@@ -3276,6 +3379,9 @@ function M.join(invite)
       local process = ensure()
       if process ~= nil then
         capture_root()
+        -- The invite this guest joined by is kept as it arrived: it is the permission the
+        -- room was entered with, so it is the guest's to hand on (`:SelvageCopyInvite`).
+        state.invite = link
         process:send({
           type = 'join',
           -- The companion dials the wire URL: a pasted page link resolves to its
@@ -3297,7 +3403,7 @@ end
 --- Puts the invite on the clipboard and the unnamed register, and says where it is.
 function M.copy_invite()
   if not take_invite() then
-    notify('There is no invite link: only the connection that opened the room has one.', vim.log.levels.WARN)
+    notify('There is no invite link; host or join a room first.', vim.log.levels.WARN)
     return
   end
   notify('The invite link is on the clipboard.')

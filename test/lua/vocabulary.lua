@@ -132,7 +132,7 @@ local MESSAGES = {
   { 'WARN', 'No shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
   { 'INFO', 'The invite link is on the clipboard.' },
-  { 'WARN', 'There is no invite link: only the connection that opened the room has one.' },
+  { 'WARN', 'There is no invite link; host or join a room first.' },
   -- Leaving.
   { 'INFO', 'Left the session.' },
   { 'WARN', 'Not in a session.' },
@@ -162,6 +162,7 @@ local MESSAGES = {
   { 'WARN', 'The host left the room; it closes in %ds unless they come back.' },
   { 'INFO', '%s is hosting again.' },
   { 'WARN', 'The room is gone (%s).' },
+  { 'WARN', '%d buffers with unsaved changes were kept; :ls lists them.' },
   { 'ERROR', '%s (%s).' },
   { 'ERROR', 'The editor would not apply the room\'s change to %s; the file may be read-only.' },
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
@@ -183,10 +184,13 @@ local MESSAGES = {
   { 'ERROR', 'An invite link is needed.' },
   { 'ERROR', 'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
-  -- (No sentence announces where the mirror lives: the join's summary carries its counts
-  -- when the listing arrives first, and a later listing stays silent — one summary plus
-  -- errors. The path is `require('selvage').session().mirror`.)
+  -- (No sentence announces where the mirror lives: the join's summary carries its counts when the
+  -- listing is in front of it, and a later listing stays silent — one summary plus errors. The
+  -- exception is a room that had nothing open at the join and grants files afterwards: that guest
+  -- has neither document nor tree, so the listing is said once. The path is always
+  -- `require('selvage').session().mirror`.)
   { 'INFO', 'This file is empty until fetched; :SelvageFetch %s fills it.' },
+  { 'INFO', '%d files are mirrored at %s; :SelvageOpen opens one.' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s." },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends." },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it.' },
