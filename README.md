@@ -53,7 +53,7 @@ turns them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
-| `status {state, role?, roomId?, invite?, message?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. |
+| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `code` is the protocol's own code for a failure the server named, and is absent for one nothing named. |
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about — the room named is the one still standing. |
 | `report {report}` | The bridge's own report — the room's documents, its grant, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
@@ -129,7 +129,7 @@ when there is no shared document in front of the user.
 
 Following moves the follower's caret: Neovim has no viewport-only state that survives a redraw,
 so being where a peer is means the cursor is there, and the next keystroke lands there too. That
-is why a local edit of a shared document ends the follow, saying `Stopped following <name>.` —
+is why a local edit of a shared document ends the follow, saying `stopped following <name>.` —
 while a remote edit only re-lands it. Going somewhere deliberately ends one the same way, the
 peer's leaving ends it with their name on it, and a rename keeps it, since the target is the
 peer id. While a follow stands, the window shows a `winbar` row naming the peer and the command
@@ -142,7 +142,17 @@ their own statusline. A typed jump to a peer in no document waits for the frame 
 them rather than refusing — a presence update one frame away reads exactly the same — while
 the picker refuses its own rows where the row says they are in no document. A host opens a
 peer's document only when it resolves to a readable file inside the shared folder, never
-creating it; anything else says `Could not open <path> from the room: <reason>`.
+creating it; anything else says `could not open <path> from the room: <reason>`.
+
+The session itself is on screen without any statusline configuration: the window wears a `winbar`
+row saying which end of the session this is and how many people are in it — `Selvage: hosting — 2
+here`, `Selvage: guest — 2 here`, `Selvage: connecting…` while a connection is being made and
+`Selvage: reconnecting…` while a dropped one is retried. It is the same mechanism as the follow's
+row and the same discipline: window-local, the person's own row saved and put back, and a follow's
+row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off entirely.
+`%{v:lua.require'selvage'.statusline()}` returns those words — for a statusline that wants them
+somewhere else — and with the file itself in front of it: one holding no fetched content has the
+row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
 
 ### The vendored engine
 
@@ -168,7 +178,7 @@ without asking. With neither, the one question starts from the demo server `ws:/
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the https page link the host copies; a `ws://` link still joins as the advanced fallback for rooms off the page default. A value that is not an invite link — an argument as much as a paste — is refused at once, in the same sentence the box refuses with, with nothing asked for first and nothing dialled. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
-| `:SelvageFetch [path]` | Fetch the room's content into the mirror: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
+| `:SelvageFetch [path]` | Download a file from the room: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
 | `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A host copies the page invite: an `https://` link opening the guest page with the room and its token (`&server=` only for rooms off the page default). A guest holds the token it joined with — the invite *is* the permission — so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so, rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
@@ -226,12 +236,14 @@ installed, Neovim's builtin numbered list asks instead. `test/lua/pickers.lua` p
 halves: no fzf or picker reference in the shipped code, and every chooser completing on
 plain `vim.ui.select`.
 
-A join says one summary sentence plus errors, whatever order the room speaks in: the
-room may name its documents before it publishes its listing, and a listing that arrives
-after the summary stays silent rather than earning its own mirror sentence. The one
-exception is a room that had nothing open at the join and grants files afterwards: that
-guest landed no document and has no tree to read, so the listing is said once, and is the
-only thing that tells them the room has files at all. The mirror's location is
+A join says one summary sentence plus errors, whatever order the room speaks in: the room may
+name its documents before it publishes its listing, and a listing that arrives after the summary
+stays silent rather than earning its own mirror sentence. The sentence is the landing and how
+many other documents the room holds — `joined the room — opening <path>; <n> more in the room.` —
+because a path, a file count and a fetched count in one greeting is a row nobody reads. The one
+exception is a room that had nothing open at the join and grants files afterwards: that guest
+landed no document and has no tree to read, so the listing is said once, and is the only thing
+that tells them the room has files at all. The mirror's location is
 `require('selvage').session().mirror`, and the session's one unfetched hint still points
 at `:SelvageFetch`; neither needs a notice of its own. Pinned by `test/lua/join.lua`
 (listing first), `test/lua/joinorder.lua` (documents first) and `test/lua/granted.lua`
@@ -286,7 +298,10 @@ reported with the paths that cannot be written. Content arrives when something n
 file opened in the editor, or `:SelvageFetch` — which takes one path, a directory of them or the
 whole listing. A project-wide search is therefore partial until the paths it covers have been
 fetched, and `:SelvageFetch` is the one command that answers that. `require('selvage').session()
-.mirror` is where the directory is, for a plugin that has to be pointed at it.
+.mirror` is where the directory is, for a plugin that has to be pointed at it. The window says so
+too: a buffer holding no fetched content has `[not fetched]` on its row, so the partiality is
+visible while a person is looking at the file and not only in the sentence the first such file
+earns once per session.
 
 A fetch is a **hold**, not a read: the paths it names join the room's open-document set, so every
 peer receives them and a peer with a mirror materialises them. A file, two of them or a directory
@@ -525,9 +540,10 @@ text in it, and the deleted path — materialised since the join — leaves both
   bookkeeping on every scroll and edit for less than the block cursor gives at the same place.
 - A guest's mirror holds the room's listing as real files, and that is what a language server,
   `rg`, ctags and a tree plugin see. What it does not hold is content nobody has fetched: a file
-  whose path has not been opened or fetched is empty, so a search over the mirror is partial until
-  the paths it covers have been (`DESIGN.md` §4.2). A file a tool creates in the mirror is not part
-  of the room, and a mutation made in the mirror — create, rename, delete — still reaches the room
+  whose path has not been opened or fetched is empty, and the window marks it `[not fetched]`,
+  so a search over the mirror is visibly partial until the paths it covers have been fetched
+  (`DESIGN.md` §4.2) rather than silently so. A file a tool creates in the mirror is not part of
+  the room, and a mutation made in the mirror — create, rename, delete — still reaches the room
   nowhere; what does reach it is the host's own folder, through the listing above.
 - A host wiping a shared buffer releases the path in the room; a guest wiping one does too, but a
   guest keeps a path the room stops naming, because this client's document set only grows within a

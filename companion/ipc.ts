@@ -86,6 +86,13 @@ export type Notification =
       roomId?: string;
       invite?: string;
       message?: string;
+      /**
+       * The protocol's own code for a failure the server named (an `error` frame, a refused
+       * handshake). Absent for a failure nothing named — a socket that never got there. It is
+       * the code and not the message that a front-end says a refusal by: the server's message
+       * carries the values it refused about, which are not what a person acts on.
+       */
+      code?: string;
     }
   /**
    * A `host` or `join` this process did not carry out, because a session is live and ending

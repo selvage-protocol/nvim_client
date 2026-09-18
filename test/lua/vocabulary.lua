@@ -23,9 +23,9 @@
 -- - The expression that fills a hole: `%s` in a pinned sentence is that hole, so the pin is on
 --   the words around it.
 --
--- Three messages are variables — the connect failure, the companion's failure to start, and the
--- question said where there is nobody to answer it — and their number is pinned, so a fourth
--- cannot arrive unnoticed.
+-- Four messages are variables — the connect failure, the companion's failure to start, the
+-- question said where there is nobody to answer it, and what a room's own refusal says — and
+-- their number is pinned, so a fifth cannot arrive unnoticed.
 --
 --   nvim --headless -l test/lua/vocabulary.lua      (or scripts/test-lua.sh)
 
@@ -87,8 +87,10 @@ end
 ---
 --- `SelvageFetch` names what the mirror needs: a real directory that this editor's own
 --- extensions — ripgrep, ctags, a language server — read for themselves, so it has to be
---- filled. The other client has the twin command since its room became a real directory too.
---- The README says why; `AGENTS.md` §4 is the rule.
+--- filled. The other client has the twin command since its room became a real directory too,
+--- and the phrase for it is this one in both: `Fetch the room's content into the mirror`
+--- described the mechanism rather than the command, and the two clients were not naming the
+--- same intent with the same words. The README says why; `AGENTS.md` §4 is the rule.
 local TITLES = {
   SelvageHost = 'Host a session',
   SelvageJoin = 'Join a session from an invite link',
@@ -100,7 +102,7 @@ local TITLES = {
   SelvageGoTo = 'Go to a participant',
   SelvageFollow = 'Follow a participant',
   SelvageStopFollowing = 'Stop following',
-  SelvageFetch = "Fetch the room's content into the mirror",
+  SelvageFetch = 'Download a file from the room',
 }
 
 --- Every sentence this front-end notifies, with the level it notifies it at, and the two
@@ -108,105 +110,106 @@ local TITLES = {
 --- changes, breaks this list and has to be changed here deliberately. A sentence said at two
 --- moments — an empty session and an empty room both say `Join a session first.` — is listed
 --- once: what is pinned is the words and the level, not how often they are said.
+---
+--- The join's own sentences are the greeting alone: the landing, and how many other documents
+--- the room holds. Where the mirror lives and how much of it has arrived are not part of it —
+--- a row of counts in a greeting is not read — and the one guest who still hears the mirror is
+--- the one whose room had nothing open: no document and no tree is a join with no other news.
 local MESSAGES = {
   -- Hosting and joining.
-  { 'INFO', 'The room is open (sharing %s); the invite link is on the clipboard.' },
-  { 'INFO', 'The room is open (sharing %s); :SelvageCopyInvite copies the invite link.' },
-  { 'INFO', 'You are already hosting; the invite link is on the clipboard.' },
-  { 'WARN', 'A session is already being opened.' },
-  { 'INFO', 'Joined the room; opening %s.' },
-  { 'INFO', 'Joined the room; opening %s; %d more, :SelvageOpen to choose.' },
-  { 'INFO', 'Joined the room.' },
-  { 'INFO', 'Joined the room; the room has no open documents yet.' },
-  { 'INFO', 'Joined the room; opening %s; %d files mirrored at %s; %d of %d fetched.' },
-  { 'INFO', 'Joined the room; opening %s; %d more, :SelvageOpen to choose; %d files mirrored at %s; %d of %d fetched.' },
-  { 'INFO', 'Joined the room; the room has no open documents yet; %d files mirrored at %s.' },
-  { 'INFO', 'Joined the room; %d files mirrored at %s; %d of %d fetched.' },
-  { 'WARN', 'You are hosting; joining another session ends this room for everyone.' },
-  { 'WARN', 'You are in a session; joining another session leaves it.' },
-  { 'WARN', 'You are in a session; hosting a session means leaving it first.' },
+  { 'INFO', 'the room is open (sharing %s); the invite link is on the clipboard.' },
+  { 'INFO', 'the room is open (sharing %s); :SelvageCopyInvite copies the invite link.' },
+  { 'INFO', 'you are already hosting; the invite link is on the clipboard.' },
+  { 'WARN', 'a session is already being opened.' },
+  { 'INFO', 'joined the room — opening %s.' },
+  { 'INFO', 'joined the room — opening %s; %d more in the room.' },
+  { 'INFO', 'joined the room.' },
+  { 'INFO', 'joined the room; the room has no open documents yet.' },
+  { 'INFO', 'joined the room; the room has no open documents yet; %d files mirrored at %s.' },
+  { 'WARN', 'you are hosting; joining another session ends this room for everyone.' },
+  { 'WARN', 'you are in a session; joining another session leaves it.' },
+  { 'WARN', 'you are in a session; hosting a session means leaving it first.' },
   -- The room's documents, and the invite.
-  { 'INFO', 'The room has no open documents yet.' },
-  { 'INFO', 'You are hosting, so the files you open are the ones the room has.' },
-  { 'WARN', 'Join a session first.' },
-  { 'WARN', 'No shared document matches "%s"; :SelvageOpen alone offers them.' },
+  { 'INFO', 'the room has no open documents yet.' },
+  { 'INFO', 'you are hosting, so the files you open are the ones the room has.' },
+  { 'WARN', 'join a session first.' },
+  { 'WARN', 'no shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
-  { 'INFO', 'The invite link is on the clipboard.' },
-  { 'WARN', 'There is no invite link; host or join a room first.' },
+  { 'INFO', 'the invite link is on the clipboard.' },
+  { 'WARN', 'there is no invite link; host or join a room first.' },
   -- Leaving.
-  { 'INFO', 'Left the session.' },
-  { 'WARN', 'Not in a session.' },
+  { 'INFO', 'left the session.' },
+  { 'WARN', 'not in a session.' },
   -- Going to a participant, and following one.
-  { 'INFO', 'Following %s.' },
+  { 'INFO', 'following %s.' },
   { 'INFO', '%s is not in a document; still following.' },
-  { 'INFO', 'Stopped following %s.' },
-  { 'WARN', 'Not following anyone.' },
+  { 'INFO', 'stopped following %s.' },
+  { 'WARN', 'not following anyone.' },
   { 'WARN', '%s left the room, so following stopped.' },
-  { 'WARN', 'Nothing to go to: %s is not in a document.' },
-  { 'WARN', 'Nothing to follow: %s is not in a document.' },
-  { 'WARN', 'Nothing to go to: %s\'s caret does not resolve here.' },
-  { 'WARN', 'Nothing to follow: %s\'s caret does not resolve here.' },
-  { 'ERROR', 'Could not open %s from the room: %s.' },
-  { 'WARN', 'No participant matches "%s".' },
+  { 'WARN', 'nothing to go to: %s is not in a document.' },
+  { 'WARN', 'nothing to follow: %s is not in a document.' },
+  { 'WARN', 'nothing to go to: %s\'s caret does not resolve here.' },
+  { 'WARN', 'nothing to follow: %s\'s caret does not resolve here.' },
+  { 'ERROR', 'could not open %s from the room: %s.' },
+  { 'WARN', 'no participant matches "%s".' },
   -- The display name.
-  { 'INFO', 'No display name is set yet.' },
-  { 'INFO', 'The name others see is "%s"; :SelvageDisplayName <name> to change it.' },
-  { 'INFO', 'Display name set to "%s".' },
-  { 'ERROR', 'A name is needed; the session was not started.' },
-  { 'ERROR', 'This name is %s; a name is refused rather than shortened.' },
-  { 'ERROR', 'This name is %s; a name is refused rather than shortened (from %s, so %s; set a shorter one).' },
-  { 'ERROR', 'No display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.' },
+  { 'INFO', 'no display name is set yet.' },
+  { 'INFO', 'the name others see is "%s"; :SelvageDisplayName <name> to change it.' },
+  { 'INFO', 'display name set to "%s".' },
+  { 'ERROR', 'a name is needed; the session was not started.' },
+  { 'ERROR', 'that name is %s. Pick a shorter one.' },
+  { 'ERROR', 'the configured name is %s, so %s. Set a shorter one in %s.' },
+  { 'ERROR', 'no display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.' },
   -- The list of participants.
-  { 'WARN', 'No other participants yet.' },
+  { 'WARN', 'no other participants yet.' },
   -- What the room's own reports say.
-  { 'WARN', 'The host left the room; it closes in %ds unless they come back.' },
+  { 'WARN', 'the host left the room; it closes in %ds unless they come back.' },
   { 'INFO', '%s is hosting again.' },
-  { 'WARN', 'The room is gone (%s).' },
+  { 'WARN', 'the room is gone (%s).' },
   { 'WARN', '%d buffers with unsaved changes were kept; :ls lists them.' },
-  { 'ERROR', '%s (%s).' },
-  { 'ERROR', 'The editor would not apply the room\'s change to %s; the file may be read-only.' },
+  { 'ERROR', 'the editor would not apply the room\'s change to %s; the file may be read-only.' },
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
-  { 'ERROR', 'Could not save %s; the file on disk is behind the room%s.' },
-  { 'ERROR', 'The connection ended and the session is over; it could not be re-established.' },
+  { 'ERROR', 'could not save %s; the file on disk is behind the room%s.' },
+  { 'ERROR', 'the connection ended and the session is over; it could not be re-established.' },
   -- What this front-end refuses on its own.
   { 'ERROR', '%s is not valid UTF-8, so it is not shared.' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared.' },
-  { 'WARN', 'This buffer has no file, so it is not shared; the folder this session shares is %s.' },
+  { 'WARN', 'this buffer has no file, so it is not shared; the folder this session shares is %s.' },
   { 'WARN', '%s is not a regular file, so it is not shared.' },
   -- What a misspeaking companion earns: said, never obeyed blindly.
-  { 'WARN', 'Unknown message type from the companion: %s.' },
-  { 'WARN', 'Unreadable message from the companion.' },
-  { 'WARN', 'Unreadable report from the companion.' },
-  { 'WARN', 'Unreadable status from the companion.' },
-  { 'ERROR', 'The companion exited with %s.' },
-  { 'WARN', 'Already %s; leave that session first.' },
-  { 'ERROR', 'A server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.' },
-  { 'ERROR', 'An invite link is needed.' },
-  { 'ERROR', 'That does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.' },
+  { 'WARN', 'unknown message type from the companion: %s.' },
+  { 'WARN', 'unreadable message from the companion.' },
+  { 'WARN', 'unreadable report from the companion.' },
+  { 'WARN', 'unreadable status from the companion.' },
+  { 'ERROR', 'the companion exited with %s.' },
+  { 'WARN', 'already %s; leave that session first.' },
+  { 'ERROR', 'a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.' },
+  { 'ERROR', 'an invite link is needed.' },
+  { 'ERROR', 'that does not look like a Selvage invite link. Paste the whole link the host sent you — it looks like https://page/?room=…&token=…. A ws://host:8080/session?room=…&token=… link still joins.' },
   -- The mirror: the room's listing as a real directory, and the content fetched into it.
   -- (No sentence announces where the mirror lives: the join's summary carries its counts when the
   -- listing is in front of it, and a later listing stays silent — one summary plus errors. The
   -- exception is a room that had nothing open at the join and grants files afterwards: that guest
   -- has neither document nor tree, so the listing is said once. The path is always
   -- `require('selvage').session().mirror`.)
-  { 'INFO', 'This file is empty until fetched; :SelvageFetch %s fills it.' },
+  { 'INFO', 'this file is empty until fetched; :SelvageFetch %s fills it.' },
   { 'INFO', '%d files are mirrored at %s; :SelvageOpen opens one.' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s." },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends." },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it.' },
-  { 'WARN', 'The room carries no file mutations yet.' },
+  { 'WARN', 'the room carries no file mutations yet.' },
   { 'WARN', '%s is no longer in the room; the host no longer has it.' },
   { 'WARN', "%s is inside the mirror, which holds the room's files, so it is not written; write outside the mirror to keep it." },
   { 'ERROR', '%s could not be written into the mirror.' },
-  { 'INFO', 'You are hosting, so the files a mirror would hold are already on your disk.' },
-  { 'INFO', 'The room lists no files to fetch.' },
-  { 'INFO', 'Fetching opens them in the room, so every peer receives them.' },
-  { 'INFO', 'Fetching opens %s in the room, so every peer receives it.' },
+  { 'INFO', 'you are hosting, so the files a mirror would hold are already on your disk.' },
+  { 'INFO', 'the room lists no files to fetch.' },
+  { 'INFO', 'fetching opens them in the room, so every peer receives them.' },
+  { 'INFO', 'fetching opens %s in the room, so every peer receives it.' },
   { 'INFO', '%s is opened in the room, so every peer receives it.' },
-  { 'WARN', 'No file the room lists matches "%s"; :SelvageOpen and completion name them.' },
-  { 'INFO', 'Fetched the files.' },
-  { 'WARN', 'Fetched the files; these had not arrived within %ds: %s.' },
-  { 'WARN', 'The session ended before the files were fetched.' },
+  { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them.' },
+  { 'INFO', 'fetched the files.' },
+  { 'WARN', 'fetched the files; these had not arrived within %ds: %s.' },
+  { 'WARN', 'the session ended before the files were fetched.' },
 }
 
 --- The calls whose first argument is a sentence a user reads: the front-end's own `notify`, and
@@ -407,7 +410,7 @@ for _, message in ipairs(MESSAGES) do
 end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
-check('the messages that are not literals are the three this file names', variables, 3)
+check('the messages that are not literals are the four this file names', variables, 4)
 
 -- -- no room id reaches a sentence a user reads ----------------------------------------
 --

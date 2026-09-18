@@ -443,6 +443,10 @@ export class Companion {
         type: 'status',
         state: 'error',
         message: error instanceof Error ? error.message : String(error),
+        // A refusal the protocol named carries its code as well as its words: the server's
+        // message answers with values the person never chose to see — `no such room: <id>` —
+        // and the code is the same fact without them, for a front-end that says it its own way.
+        ...(isProtocolError(error) ? { code: error.code } : {}),
       });
       return;
     }

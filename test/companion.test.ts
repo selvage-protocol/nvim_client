@@ -333,6 +333,52 @@ test('a room that is gone ends the session', async () => {
   assert.equal(it.engine.disconnected, true, 'the engine goes with the room');
 });
 
+test('a refused connect carries the code, a dead socket carries no code', async () => {
+  // The front-end says a refusal by its code rather than by the server's message, which names
+  // the room it could not find: the code is the same fact without the value. A socket that
+  // never reached a handshake has no code at all, which is how a front-end tells the two
+  // apart.
+  const sent: Notification[] = [];
+  const companion = new Companion({
+    send: (notification) => sent.push(notification),
+    editor: new NvimEditorHost({ send: () => undefined }),
+    autoSave: false,
+    engines: {
+      host: () => Promise.reject(new ProtocolError('room_unknown', 'no such room: r-4f2a91')),
+      join: () => Promise.reject(new Error('the WebSocket reported an error')),
+    },
+  });
+
+  await companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  assert.deepEqual(
+    sent.filter((notification) => notification.type === 'status'),
+    [
+      { type: 'status', state: 'connecting' },
+      {
+        type: 'status',
+        state: 'error',
+        message: 'no such room: r-4f2a91',
+        code: 'room_unknown',
+      },
+      { type: 'status', state: 'connecting' },
+      {
+        type: 'status',
+        state: 'error',
+        message: 'the WebSocket reported an error',
+      },
+    ],
+    'a refusal the protocol named carries its code; nothing named a dead socket',
+  );
+  await companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  assert.equal(
+    sent.some((notification) => notification.type === 'refused'),
+    false,
+    'a connect that failed leaves no session behind for the next one to be refused by',
+  );
+});
+
 test('a connection the engine gave up on leaves the next session free', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });

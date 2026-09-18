@@ -31,6 +31,18 @@ harness.write_file(harness.invite_file, invite)
 -- the seed rather than as a live edit and prove nothing about the host -> guest direction.
 harness.wait_for_file('the guest to report it has joined', harness.deadline_ms, harness.joined_file)
 
+-- The window says what the session is without any statusline configuration: which end this is,
+-- and how many people the room holds. The count is the room's own membership report, so the
+-- guest that has just reported joining is the second person in it — and this is a real companion
+-- against a real server, which is what makes the count a fact about the room.
+harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 })
+    == '%#SelvageSession#Selvage: hosting — 2 here%*'
+end, function()
+  return vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
+end)
+harness.log('the window says', vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 })))
+
 vim.api.nvim_buf_set_lines(bufnr, 0, 0, true, { harness.markers.host })
 harness.log('made the host edit; buffer now', vim.inspect(harness.text()))
 -- A caret and a selection for the guest to see. Where either is only reaches the room through
