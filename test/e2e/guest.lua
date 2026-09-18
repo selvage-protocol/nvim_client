@@ -43,7 +43,7 @@ end)
 
 local bufnr = vim.api.nvim_get_current_buf()
 harness.log('the buffer exists and holds', vim.inspect(harness.text()))
-if harness.text() ~= '\n' then
+if harness.text() ~= '' then
   harness.fail('the room text arrived before the buffer could be edited; the relay lag is too small to open the window this checks')
 end
 vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { '[[GUEST-BEFORE-ARRIVAL]]' })
@@ -162,7 +162,10 @@ if harness.mirror() == nil then
 end
 local mirrored_seed = harness.mirror() .. '/' .. harness.seed_path
 harness.wait('the mirrored seed document to hold the converged text', harness.deadline_ms, function()
-  return harness.file_text(mirrored_seed) == harness.text()
+  -- The file on disk is the buffer Neovim wrote line by line, so it ends in the newline the last
+  -- line is written with; the room's text carries no newline of its own, which is why the two
+  -- differ by exactly that byte (the same read `mirror.holds` makes).
+  return harness.file_text(mirrored_seed) == harness.text() .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirrored_seed))
 end)
@@ -253,11 +256,13 @@ end)
 harness.log('the granted path holds', vim.inspect(harness.text_of(harness.granted_path)))
 
 -- The guest writes into it, so the host's copy of a file it never opened becomes something this
--- window wrote.
+-- window wrote. The room's text for a path off the host's disk is the file's own bytes, which end
+-- in a newline, so this buffer's last line is empty and the appended line follows a blank one:
+-- that blank line is the file's final newline, and the room holds the text as it stands.
 vim.api.nvim_buf_set_lines(granted_buf, -1, -1, true, { harness.markers.guest })
 harness.wait('the guest marker to land in the granted document', harness.deadline_ms, function()
   return harness.text_of(harness.granted_path)
-    == harness.granted_text .. harness.markers.guest .. '\n'
+    == harness.granted_text .. '\n' .. harness.markers.guest
 end, function()
   return vim.inspect(harness.text_of(harness.granted_path))
 end)
@@ -270,7 +275,8 @@ harness.log('the granted path reads', vim.inspect(harness.text_of(harness.grante
 -- changed wrote it there. A program started outside this editor — ripgrep, ctags, a language
 -- server — reads the bytes this window is editing.
 harness.wait("the mirror's file to hold what the room sent", harness.deadline_ms, function()
-  return harness.file_text(mirrored_granted) == harness.granted_text .. harness.markers.guest .. '\n'
+  return harness.file_text(mirrored_granted)
+    == harness.granted_text .. '\n' .. harness.markers.guest .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirrored_granted))
 end)
@@ -299,7 +305,7 @@ vim.api.nvim_buf_set_lines(granted_buf, -1, -1, true, { harness.markers.mirror }
 vim.cmd('write')
 harness.wait('the save to be written into the mirror file', harness.deadline_ms, function()
   return harness.file_text(mirrored_granted)
-    == harness.granted_text .. harness.markers.guest .. '\n' .. harness.markers.mirror .. '\n'
+    == harness.granted_text .. '\n' .. harness.markers.guest .. '\n' .. harness.markers.mirror .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirrored_granted))
 end)
@@ -336,7 +342,9 @@ end)
 -- the host delete while the save is still on its way, and the save arriving after the listing
 -- shrank would write the file the removal just deleted back again.
 harness.wait('the save to write the path it will delete into the mirror', harness.deadline_ms, function()
-  return harness.file_text(mirror .. '/' .. harness.removed_path) == harness.removed_text
+  -- The file is the buffer Neovim writes, line by line, so it ends in the newline the last line is
+  -- written with: the room's text for this path is the host's file bytes, which already end in one.
+  return harness.file_text(mirror .. '/' .. harness.removed_path) == harness.removed_text .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirror .. '/' .. harness.removed_path))
 end)
@@ -375,7 +383,9 @@ end, function()
   return vim.inspect(harness.text_of(harness.created_path))
 end)
 harness.wait("the save that follows it to write the mirror's file", harness.deadline_ms, function()
-  return harness.file_text(mirrored_created) == harness.created_text
+  -- The room's text for the created path is the bytes the host wrote, which end in a newline; the
+  -- mirror's file is that text written out line by line, so it ends in one more.
+  return harness.file_text(mirrored_created) == harness.created_text .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirrored_created))
 end)
@@ -392,7 +402,7 @@ end)
 harness.log('the created path reads', vim.inspect(harness.text_of(harness.created_path)))
 
 harness.record('watch', harness.text_of(harness.created_path), {
-  mirrorHoldsCreated = harness.file_text(mirrored_created) == harness.created_text,
+  mirrorHoldsCreated = harness.file_text(mirrored_created) == harness.created_text .. '\n',
   listingNamesCreated = vim.tbl_contains(selvage.fetchable(), harness.created_path),
   mirrorHoldsRemoved = harness.file_text(mirrored_removed) ~= nil,
   listingNamesRemoved = vim.tbl_contains(selvage.fetchable(), harness.removed_path),

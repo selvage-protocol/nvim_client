@@ -27,10 +27,11 @@ The plugin and the companion speak **one JSON object per line** over the compani
 stdout, in both directions. `companion/ipc.ts` is the normative list; this is the summary.
 
 **Every offset is a UTF-16 code unit**, counted in the document's text as Neovim holds it: the
-buffer's lines joined by `\n`, byte for byte what the room holds — a buffer whose last line is
-empty ends in a newline, and one whose last line has content does not. That is the unit `Y.Text`
-indices are counted in and the unit `vendor/bridge/editing.ts` works in, so nothing is converted on the companion's
-side; Lua converts from Neovim's byte positions, where the bytes are.
+buffer's lines joined by `\n` — one newline *between* lines and none after the last, so a buffer
+whose last line is empty ends in a newline and a buffer of one empty line is the empty string.
+That text is byte for byte what the room holds, and it is the unit `Y.Text` indices are counted in
+and the unit `vendor/bridge/editing.ts` works in, so nothing is converted on the companion's side;
+Lua converts from Neovim's byte positions, where the bytes are.
 
 Line endings are not this adapter's business. A Neovim buffer holds lines and `fileformat`
 turns them into CRLF at write time, so the companion always reports `\n`.

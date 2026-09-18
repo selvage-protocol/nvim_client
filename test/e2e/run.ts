@@ -506,12 +506,15 @@ async function main(): Promise<void> {
     granted: {
       // The guest read a file the host never opened, and the host then opened it and found the
       // guest's marker in the room's copy: content travelled both ways over a path that was
-      // only ever a name until somebody asked for it.
+      // only ever a name until somebody asked for it. The room's text for that path is the host's
+      // file bytes, which end in a newline, so the marker lands a line past it and both editors
+      // hold that text byte for byte — the blank line is the file's own last newline, not one
+      // either side invented.
       converged:
         hostOutcome?.granted !== undefined &&
         guestOutcome?.granted !== undefined &&
-        guestOutcome.granted.text === GRANTED_TEXT + MARKER_GUEST + '\n' &&
-        hostOutcome.granted.text === GRANTED_TEXT + MARKER_GUEST + '\n' &&
+        guestOutcome.granted.text === GRANTED_TEXT + '\n' + MARKER_GUEST &&
+        hostOutcome.granted.text === GRANTED_TEXT + '\n' + MARKER_GUEST &&
         hostOutcome.granted.heldBeforeGuest === false,
       hostText: hostOutcome?.granted?.text,
       guestText: guestOutcome?.granted?.text,
@@ -521,12 +524,14 @@ async function main(): Promise<void> {
       // The guest's mirror is a real directory holding the room's shape before anything is
       // fetched, the guest's file holds the room's text after the path was opened, ripgrep read
       // that file from outside this editor, and a save made in it reached the host's own copy.
-      // The expected text is what the host's file must hold at the end of it.
+      // The expected text is what each file on disk must hold at the end of it: the room's text
+      // with the newline Neovim writes for its last line, on the host's working copy as on the
+      // guest's mirror file.
       converged:
-        guestOutcome?.mirror?.text === GRANTED_TEXT + MARKER_GUEST + '\n' + MARKER_MIRROR + '\n' &&
+        guestOutcome?.mirror?.text === GRANTED_TEXT + '\n' + MARKER_GUEST + '\n' + MARKER_MIRROR + '\n' &&
         guestOutcome?.mirror?.root !== undefined &&
         guestOutcome?.mirror?.rgFound === true &&
-        hostOutcome?.mirror?.text === GRANTED_TEXT + MARKER_GUEST + '\n' + MARKER_MIRROR + '\n',
+        hostOutcome?.mirror?.text === GRANTED_TEXT + '\n' + MARKER_GUEST + '\n' + MARKER_MIRROR + '\n',
       guestFile: guestOutcome?.mirror?.text,
       guestMirrorRoot: guestOutcome?.mirror?.root,
       guestRgFound: guestOutcome?.mirror?.rgFound,

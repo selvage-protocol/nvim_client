@@ -7,10 +7,12 @@
  * anyone writing a different front-end against the same companion.
  *
  * **Every offset here is a UTF-16 code unit**, counted in the document's text as Neovim
- * holds it — the buffer's lines joined by `\n` with a trailing `\n`, which is what Neovim's
- * own byte offsets count too. That is the same unit `vendor/bridge/editing.ts` works in and
- * the same unit a `Y.Text` index is, so nothing has to be converted on this side of the
- * seam; the conversion from Neovim's byte positions happens in Lua, where the bytes are.
+ * holds it — the buffer's lines joined by `\n`, one newline between lines and none after the
+ * last, so an empty buffer is the empty string and a buffer whose last line is empty ends in a
+ * newline. That text is byte for byte what the room holds. It is the same unit
+ * `vendor/bridge/editing.ts` works in and the same unit a `Y.Text` index is, so nothing has to
+ * be converted on this side of the seam; the conversion from Neovim's byte positions happens in
+ * Lua, where the bytes are.
  */
 
 import type { Cursor } from '../vendor/bridge/index.ts';

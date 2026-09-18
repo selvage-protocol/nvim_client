@@ -2,8 +2,9 @@
 -- UTF-16 offsets, in both directions.
 --
 -- The document's text is the buffer's lines joined by `\n`, byte for byte what the room
--- holds: a buffer whose last line is empty ends in a newline, and one whose last line has
--- content does not. A shadow of the lines is kept because
+-- holds: one newline between lines and none after the last, so a buffer whose last line is
+-- empty ends in a newline and a buffer of one empty line is the empty string. A shadow of the
+-- lines is kept because
 -- `on_bytes` reports what was removed as a range, not as text: the removed text is already gone
 -- from the buffer by the time the callback runs, and its length in UTF-16 units cannot be
 -- recovered from a buffer that no longer has it.
