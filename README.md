@@ -164,7 +164,7 @@ without asking. With neither, the one question starts from the demo server `ws:/
 | | |
 |---|---|
 | `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so — `:SelvageCopyInvite` is for later copies. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking — the demo default `ws://100.64.0.3:8080` until one is used — and `vim.g.selvage_server_url` answers it without asking. |
-| `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the https page link the host copies; a `ws://` link still joins as the advanced fallback for rooms off the page default. |
+| `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the https page link the host copies; a `ws://` link still joins as the advanced fallback for rooms off the page default. A value that is not an invite link — an argument as much as a paste — is refused at once, in the same sentence the box refuses with, with nothing asked for first and nothing dialled. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers — its grant and the documents it holds — and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
 | `:SelvageFetch [path]` | Fetch the room's content into the mirror: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file — a project-wide search is partial until the paths it covers have been fetched — and this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
@@ -197,7 +197,8 @@ rides in the `host`/`join` handshake, and a change made while a session is live 
 from that event, so the session goes on under the new name. Setting
 `vim.g.selvage_display_name` directly mid-session does not send anything — Neovim has no
 configuration-change event to watch — so only `:SelvageDisplayName` renames a live session; a
-direct write is picked up by the next host or join.
+direct write is picked up by the next host or join. An invite that is not a link is refused before
+any of this, so a mistyped argument is never answered with a question about a name.
 A name is at most **32 UTF-16 code units** — the unit the protocol counts, so an astral
 character costs two — and one over that is refused rather than shortened, because a room must
 see the name its owner chose or none at all. A name typed at the prompt that is too long says
@@ -291,8 +292,16 @@ A **listed path's buffer is the mirror's file** — a real path on disk — rath
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being edited.
 A document the room holds and its listing does not name — a listing can be truncated by the host's
 own bounds — keeps the `selvage://` buffer it had before the mirror existed, which is the fallback
-for everything the mirror cannot name. A listing that arrives after the room has already named a
-document moves that document's buffer to the file the listing names for it; its text comes with it.
+for everything the mirror cannot name. The buffer is a real file with a real name, so the editor's
+own filetype detection answers for it: a listed path with a known extension carries that filetype
+(`lua`, `markdown`, `rust`), and `'syntax'` and an ftplugin hook onto it the way they do for any
+other file the person opened. Detection is asked for by name rather than left to the `BufRead`
+autocmds, which this client suppresses while it fills the buffer so that the session's own hooks
+and the person's do not run over a buffer the room is about to write. Icons are not this client's:
+a tree plugin reads the mirror's files and draws them with whatever devicons or mini.icons the
+person has, exactly as it does for their own project. A listing that arrives after the room has
+already named a document moves that document's buffer to the file the listing names for it; its
+text comes with it.
 A path that **leaves** the listing loses its mirror file too, and a buffer already open on it is not
 taken away: the listing and the room's open-document set are two facts (`PROTOCOL.md` §5, §6), so
 the document stays open in the same buffer, with the same text and the same name. A save in it

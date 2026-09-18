@@ -164,7 +164,7 @@ selvage.leave()
 -- now shows the document, and `:SelvageOpen` reaches the ones that are not shown.
 
 vim.cmd('edit! ' .. path)
-selvage.join('ws://127.0.0.1:1/room#tok')
+selvage.join('ws://127.0.0.1:1/session?room=r-guest&token=t')
 check('joining sends the command', sent[#sent].type, 'join')
 
 local before_join = #notices
@@ -219,7 +219,7 @@ check('  and shows the one chosen', vim.fn.bufname('%'), 'selvage://workspace/ot
 
 -- A join whose room has several documents shows the first and points at the rest.
 selvage.leave()
-selvage.join('ws://127.0.0.1:1/room#tok')
+selvage.join('ws://127.0.0.1:1/session?room=r-two&token=t')
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-two' })
 local before = #notices
 handlers().on_message({
@@ -244,7 +244,7 @@ check('  and the rest are pointed at', pointed, true)
 selvage.leave()
 vim.cmd('edit! ' .. path)
 local unrelated = vim.fn.bufname('%')
-selvage.join('ws://127.0.0.1:1/room#tok')
+selvage.join('ws://127.0.0.1:1/session?room=r-empty&token=t')
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-empty' })
 local before_empty = #notices
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = {} } })
@@ -262,7 +262,7 @@ check('  without a sentence about it', #notices, before_late)
 -- The escape hatch: `vim.g.selvage_open_on_join = false` keeps the buffer but not the window.
 selvage.leave()
 vim.g.selvage_open_on_join = false
-selvage.join('ws://127.0.0.1:1/room#tok')
+selvage.join('ws://127.0.0.1:1/session?room=r-off&token=t')
 vim.cmd('edit! ' .. path)
 local before_off = #notices
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-off' })

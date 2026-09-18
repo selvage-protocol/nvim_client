@@ -438,6 +438,15 @@ selvage.open('notes/deep.txt')
 check("a listed path's buffer is the mirror's file", vim.fn.bufname('%'), root .. '/notes/deep.txt')
 check('  and that is a real file on disk', vim.fn.filereadable(vim.fn.bufname('%')), 1)
 check('  opened by the room path as a suffix', selvage.documents()[1], 'notes/deep.txt')
+
+-- The name the buffer carries is a real file name, so the editor's own filetype detection can
+-- answer for it. The file is read with the autocmds suppressed — which is what keeps the
+-- session's hooks out of the way while the buffer is made — and `noautocmd` suppresses the
+-- `filetypedetect` group with them, so detection is asked for directly instead. A `.txt` has no
+-- filetype to carry, so the check uses an extension that does.
+selvage.open('src/main.rs')
+check('  and it carries the filetype its name gives it', vim.bo.filetype, 'rust')
+
 selvage.leave()
 
 join({ 'held-but-not-listed.txt' }, GRANT)
