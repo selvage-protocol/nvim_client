@@ -257,12 +257,16 @@ harness.log('the granted path holds', vim.inspect(harness.text_of(harness.grante
 
 -- The guest writes into it, so the host's copy of a file it never opened becomes something this
 -- window wrote. The room's text for a path off the host's disk is the file's own bytes, which end
--- in a newline, so this buffer's last line is empty and the appended line follows a blank one:
--- that blank line is the file's final newline, and the room holds the text as it stands.
-vim.api.nvim_buf_set_lines(granted_buf, -1, -1, true, { harness.markers.guest })
+-- in a newline, so this buffer's last line is empty and the file's final newline *is* that line:
+-- replacing it is the edit whose range ends past the end of the room's text, and the one this
+-- proof would read as an invented newline if the client got that range wrong.
+--
+-- Both sides are asserted byte for byte in the orchestrator's gate; what is checked here is that
+-- this buffer and the room's text for the path are the same bytes.
+vim.api.nvim_buf_set_lines(granted_buf, -2, -1, true, { harness.markers.guest })
 harness.wait('the guest marker to land in the granted document', harness.deadline_ms, function()
   return harness.text_of(harness.granted_path)
-    == harness.granted_text .. '\n' .. harness.markers.guest
+    == harness.granted_text .. harness.markers.guest
 end, function()
   return vim.inspect(harness.text_of(harness.granted_path))
 end)
@@ -273,10 +277,11 @@ harness.log('the granted path reads', vim.inspect(harness.text_of(harness.grante
 -- The content the room sent for a path this window opened is *in the mirror's file*, because that
 -- is what makes it native: the buffer is the file, and the save that follows a document the room
 -- changed wrote it there. A program started outside this editor — ripgrep, ctags, a language
--- server — reads the bytes this window is editing.
+-- server — reads the bytes this window is editing. The file is not the room's text: Neovim writes
+-- every line followed by a newline, so a file holds one more than the text it was written from.
 harness.wait("the mirror's file to hold what the room sent", harness.deadline_ms, function()
   return harness.file_text(mirrored_granted)
-    == harness.granted_text .. '\n' .. harness.markers.guest .. '\n'
+    == harness.granted_text .. harness.markers.guest .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirrored_granted))
 end)
@@ -305,7 +310,7 @@ vim.api.nvim_buf_set_lines(granted_buf, -1, -1, true, { harness.markers.mirror }
 vim.cmd('write')
 harness.wait('the save to be written into the mirror file', harness.deadline_ms, function()
   return harness.file_text(mirrored_granted)
-    == harness.granted_text .. '\n' .. harness.markers.guest .. '\n' .. harness.markers.mirror .. '\n'
+    == harness.granted_text .. harness.markers.guest .. '\n' .. harness.markers.mirror .. '\n'
 end, function()
   return vim.inspect(harness.file_text(mirrored_granted))
 end)
