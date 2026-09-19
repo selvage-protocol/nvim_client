@@ -102,6 +102,9 @@ local state = {
   --- out loud. The indicator's own rows live in `saved_winbars`, one per window and buffer.
   --- A local view state, never advertised: nothing about it reaches the room.
   following = nil,
+  --- Whether the caret is being placed by the follow itself. Neovim gives no reason for a cursor
+  --- change, so the follow's own landing is what the move handler must not read as the user's.
+  applying_follow = false,
   --- A go-to whose landing cannot be made yet: the peer id and the label the refusal would
   --- name. A one-shot follow — every room event that could have brought the text tries it
   --- again, and the first landing, refusal or departure clears it.
@@ -1477,7 +1480,12 @@ local function land(peer_id)
     return false, 'missing'
   end
   local row, col = document:position(cursor.head)
-  if not pcall(api.nvim_win_set_cursor, 0, { row + 1, col }) then
+  -- The follow's own placement is not a move the user made: Neovim reports no reason for a cursor
+  -- change, so the flag is what tells the move handler this caret is the follow's, not theirs.
+  state.applying_follow = true
+  local placed = pcall(api.nvim_win_set_cursor, 0, { row + 1, col })
+  state.applying_follow = false
+  if not placed then
     return false, 'unresolvable'
   end
   -- The landing moved the caret, so the room hears it through the coalesced publish
@@ -1763,6 +1771,18 @@ local function watch_follow_window()
     group = state.follow_group,
     callback = indicator_window_enter,
   })
+  -- A caret the user moved ends the follow: the next frame would drag it back, and a follow that
+  -- fought the person is the behaviour they remember as broken. A move the follow itself made is
+  -- behind `applying_follow`, not read here.
+  api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+    group = state.follow_group,
+    callback = function()
+      if state.applying_follow or state.following == nil then
+        return
+      end
+      end_follow('moved')
+    end,
+  })
   api.nvim_create_autocmd('BufLeave', {
     group = state.follow_group,
     callback = follow_window_leave,
@@ -1789,6 +1809,8 @@ end_follow = function(why)
   end
   if why == 'stopped' then
     notify(('stopped following %s.'):format(following.label))
+  elseif why == 'moved' then
+    notify(('Stopped following %s — you moved.'):format(following.label), vim.log.levels.WARN)
   elseif why == 'left' then
     notify(('%s left the room, so following stopped.'):format(following.label), vim.log.levels.WARN)
   end

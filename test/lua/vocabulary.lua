@@ -144,6 +144,7 @@ local MESSAGES = {
   { 'INFO', 'following %s.' },
   { 'INFO', '%s is not in a document; still following.' },
   { 'INFO', 'stopped following %s.' },
+  { 'WARN', 'Stopped following %s — you moved.' },
   { 'WARN', 'not following anyone.' },
   { 'WARN', '%s left the room, so following stopped.' },
   { 'WARN', 'nothing to go to: %s is not in a document.' },

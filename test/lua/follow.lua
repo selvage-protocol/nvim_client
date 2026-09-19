@@ -1292,6 +1292,46 @@ check(
   true
 )
 
+-- -- a deliberate local move ends the follow ------------------------------------------
+--
+-- The follow places the caret again on every frame, so a move of the user's own would be
+-- yanked back a moment later. Moving is the person choosing where to be, so the follow gives way
+-- and says so. The follow's own placement is not that: Neovim reports no reason for a cursor
+-- change, so the landing sets a flag and the handler here ignores its own caret.
+
+selvage.follow('Ada Lovelace')
+check('a follow stands before the move', selvage.following(), 'Ada Lovelace')
+local before_move = #notices
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = vim.api.nvim_get_current_buf() })
+check('a local cursor move ends the follow', selvage.following(), nil)
+check(
+  '  saying the user moved',
+  said_since(before_move, 'Stopped following Ada Lovelace — you moved.') ~= nil,
+  true
+)
+check('  and the caret stays where the user put it', cursor(), '1,0')
+
+-- The landing's own cursor set is the follow's, not the user's: an editor that reports a
+-- programmatic set as a move must not make the follow end itself. The set is wrapped so it
+-- fires the event the way a real editor does, inside the placement.
+local real_set_cursor = vim.api.nvim_win_set_cursor
+vim.api.nvim_win_set_cursor = function(win, position)
+  local placed, err = real_set_cursor(win, position)
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = vim.api.nvim_win_get_buf(win) })
+  return placed, err
+end
+local before_landing_move = #notices
+selvage.follow('Ada Lovelace')
+vim.api.nvim_win_set_cursor = real_set_cursor
+check("the landing's own cursor set does not end the follow", selvage.following(), 'Ada Lovelace')
+check(
+  '  and says nothing about a move',
+  said_since(before_landing_move, 'you moved') == nil,
+  true
+)
+selvage.stop_following()
+
 -- Leaving ends the follow silently: the session going says its own sentence, and none of
 -- the follow's. `leave` says `left the session` for itself; the pin is that no sentence
 -- about the follow is said alongside it.
