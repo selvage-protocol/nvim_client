@@ -399,13 +399,17 @@ The directory is a **cache of the room and never a source of truth**. It lives u
 hosts) and never inside the person's project, one directory per session inside the room's, named
 for the process that owns it. The session that made it removes it on the way out, and a directory
 a crashed session left behind is pruned by the next one: only a directory whose process is gone is
-removed, so a second Neovim mirroring the same room keeps its own.
+removed, so a second Neovim mirroring the same room keeps its own. The one ending that keeps the
+directory is a room closing under a guest: whatever the person did in the mirror during the grace
+is not in the room and reaches no one, so nothing there is a cache of anything the room still has
+and the directory stays, with a sentence saying where.
 
 A room that dies under a guest does not leave its buffers in the window: `roomGone`, and the
 connection the engine gave up on, land every window showing one on a fresh empty buffer, wipe the
 room's buffers that hold nothing the person changed, and keep the ones that do, saying how many,
-because the session that could save them is over. A host is left alone: its buffers are its own
-files. Pinned by `test/lua/session.lua`.
+because the session that could save them is over, and keep the mirror itself with the sentence
+`The room closed. Your copy is kept at <path>.` A host is left alone: its buffers, and its files,
+are its own. Pinned by `test/lua/session.lua`.
 
 A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not
 run Neovim's write path, and the file is written by this client from the buffer, as the save the

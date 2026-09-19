@@ -2469,8 +2469,18 @@ end
 --- `disconnected`): the buffers and the window still showing them are the room's, and the room
 --- is not. Every other ending leaves them where they are — the person asked, and a leave does
 --- not close the room for anyone else.
-local function reset(land)
+---
+--- `keep_mirror` is for a room that closed under a guest rather than being left: the directory is
+--- then kept and its path returned, because it holds work the room never received and deleting it
+--- would leave the person with nowhere to recover it. A leave, a new session and a host's own
+--- files are not that, and their mirror is removed as before.
+---
+--- @param land boolean|nil
+--- @param keep_mirror boolean|nil
+--- @return string|nil the kept mirror's path, when one was kept
+local function reset(land, keep_mirror)
   local held = land and room_buffers() or nil
+  local kept = keep_mirror and mirror.root() or nil
   -- The session is over before anything else moves, and the indicators go with it: landing a
   -- dead room's buffers switches windows, and a switch is a `BufEnter` — an indicator that
   -- still read a live session would put its row back on a session that is gone. Setting the
@@ -2515,7 +2525,8 @@ local function reset(land)
   state.suppress_unfetched = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
-  -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
+  -- is the truth and the directory is a cache of it, so a mirror is removed unless `keep_mirror`
+  -- says the room closed under the person and the cache holds the only copy of their work.
   state.root = nil
   state.grant = {}
   state.unlisted = {}
@@ -2523,7 +2534,7 @@ local function reset(land)
   state.unmutated = {}
   state.gone = {}
   state.unfetched = {}
-  mirror.teardown()
+  mirror.teardown(keep_mirror)
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil
@@ -2541,6 +2552,7 @@ local function reset(land)
     state.follow_group = nil
   end
   state.saved_winbars = {}
+  return kept
 end
 
 --- Ends the session this front-end is in, leaving the companion process for what comes next: one
@@ -2864,7 +2876,13 @@ local function on_report(report)
     -- The window is part of that: a buffer still shown for the dead room reads as one that is
     -- still there, so the room's buffers are landed as well.
     notify(('the room is gone (%s).'):format(tostring(report.reason)), vim.log.levels.WARN)
-    reset(true)
+    -- The mirror is kept: it is a cache of the room, but whatever the person did in it during the
+    -- grace is not in the room and has nowhere else to be recovered from, so the directory stays
+    -- and they are told where.
+    local kept = reset(true, true)
+    if kept ~= nil then
+      notify(('The room closed. Your copy is kept at %s.'):format(kept), vim.log.levels.WARN)
+    end
   elseif report.kind == 'hostDetached' then
     notify(
       ('the host left the room; it closes in %ds unless they come back.'):format(seconds(report.graceMs)),

@@ -1380,6 +1380,53 @@ handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 
 check('an unchanged room buffer goes with the room', vim.api.nvim_buf_is_valid(only_buf), false)
 check('  and nothing was kept to announce', said_since(before_clean, 'were kept') ~= nil, false)
 
+-- -- a closed room keeps a guest's mirror ------------------------------------------
+--
+-- A room can close under a guest: a host who does not come back inside the grace makes the
+-- server destroy it, and whatever the guest did in the mirror during the grace is not in the
+-- room and reaches no one. Deleting the directory would destroy the only copy, so it is kept
+-- and the person told where it is.
+
+selvage.join('ws://127.0.0.1:1/session?room=r-kept&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-kept' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'grant', paths = { 'kept/one.txt', 'kept/two.txt' } },
+})
+local kept_root = selvage.session().mirror
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'kept/one.txt' } },
+})
+vim.cmd('SelvageOpen kept/one.txt')
+local kept_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(kept_buf, 0, -1, false, { 'guest work' })
+-- The save is what puts the guest's typing on disk, the way the room's text is written when it
+-- arrives: this is the copy the closed room must not take with it.
+handlers().on_message({ type = 'save', id = 4243, path = 'kept/one.txt' })
+check('the guest saved work into the mirror', vim.fn.readfile(kept_root .. '/kept/one.txt')[1], 'guest work')
+-- A file the guest made in the mirror outside the editor is theirs too, and it goes the same way.
+vim.fn.writefile({ 'notes the room never heard' }, kept_root .. '/kept/scratch.txt')
+
+local before_kept = #notices
+handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+check('the room closing keeps the guest mirror', vim.fn.isdirectory(kept_root), 1)
+check(
+  '  holding the work the guest saved',
+  vim.fn.readfile(kept_root .. '/kept/one.txt')[1],
+  'guest work'
+)
+check(
+  '  and a file the guest made outside the editor',
+  vim.fn.readfile(kept_root .. '/kept/scratch.txt')[1],
+  'notes the room never heard'
+)
+check(
+  '  and the person is told where it is',
+  said_since(before_kept, ('The room closed. Your copy is kept at %s.'):format(kept_root)) ~= nil,
+  true
+)
+
 -- A report's cause is part of what it says: the sentence is the fact and the parenthetical is
 -- why, and a report that carries a reason must not lose it. The kind name is not a sentence.
 local before_reports = #notices
