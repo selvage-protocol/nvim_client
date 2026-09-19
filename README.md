@@ -145,14 +145,14 @@ peer's document only when it resolves to a readable file inside the shared folde
 creating it; anything else says `could not open <path> from the room: <reason>`.
 
 The session itself is on screen without any statusline configuration: the window wears a `winbar`
-row saying which end of the session this is and how many people are in it — `Selvage: hosting — 2
-here`, `Selvage: guest — 2 here`, `Selvage: connecting…` while a connection is being made and
-`Selvage: reconnecting…` while a dropped one is retried. It is the same mechanism as the follow's
-row and the same discipline: window-local, the person's own row saved and put back, and a follow's
-row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off entirely.
-`%{v:lua.require'selvage'.statusline()}` returns those words — for a statusline that wants them
-somewhere else — and with the file itself in front of it: one holding no fetched content has the
-row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
+row saying which end of the session this is and how many people are in it —
+`Selvage: hosting — 2 here`, `Selvage: guest — 2 here`, `Selvage: connecting…` while a connection
+is being made and `Selvage: reconnecting…` while a dropped one is retried. It is the same mechanism
+as the follow's row and the same discipline: window-local, the person's own row saved and put back,
+and a follow's row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off
+entirely. `%{v:lua.require'selvage'.statusline()}` returns those words — for a statusline that
+wants them somewhere else — and with the file itself in front of it: one holding no fetched content
+has the row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
 
 ### The vendored engine
 
@@ -297,11 +297,11 @@ arrives. A room past either bound is one no host enumerated, and what is past th
 reported with the paths that cannot be written. Content arrives when something needs it: a
 file opened in the editor, or `:SelvageFetch` — which takes one path, a directory of them or the
 whole listing. A project-wide search is therefore partial until the paths it covers have been
-fetched, and `:SelvageFetch` is the one command that answers that. `require('selvage').session()
-.mirror` is where the directory is, for a plugin that has to be pointed at it. The window says so
-too: a buffer holding no fetched content has `[not fetched]` on its row, so the partiality is
-visible while a person is looking at the file and not only in the sentence the first such file
-earns once per session.
+fetched, and `:SelvageFetch` is the one command that answers that. The window says so too: a
+buffer holding no fetched content has `[not fetched]` on its row, so the partiality is visible
+while a person is looking at the file and not only in the sentence the first such file earns once
+per session. `require('selvage').session().mirror` is where the directory is, for a plugin that has
+to be pointed at it.
 
 A fetch is a **hold**, not a read: the paths it names join the room's open-document set, so every
 peer receives them and a peer with a mirror materialises them. A file, two of them or a directory
@@ -392,8 +392,8 @@ is where a person reads and edits what the room holds, not where they restructur
 
 The mirror is a Neovim answer to a Neovim problem: here the room is a directory that
 ripgrep and a language server read for themselves, so it has to be filled — which is what
-`:SelvageFetch` does. The VS Code client has the twin command (`Selvage: Fetch a path from
-the room`) since its room became a real directory too.
+`:SelvageFetch` does. The VS Code client has the twin command
+(`Selvage: Fetch a path from the room`) since its room became a real directory too.
 
 ## Requirements
 
