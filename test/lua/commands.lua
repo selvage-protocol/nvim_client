@@ -237,7 +237,7 @@ check('  and joins the room it names', last_of('join') and last_of('join').invit
 
 -- The host copies the page link now, never the wire address: the clipboard offer is
 -- that link, and the companion dials the wire URL it resolves to.
-clipboard = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one&token=t&server=ws%3A%2F%2F127.0.0.1%3A8080'
+clipboard = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-one&token=t&server=ws%3A%2F%2F127.0.0.1%3A8080'
 before = #notices
 vim.cmd('SelvageJoin')
 check('  a page link is offered too', prompted and prompted.default, clipboard)
@@ -248,7 +248,7 @@ check(
 )
 
 -- A page link without a server joins on the page default, the demo it was copied from.
-clipboard = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one&token=t'
+clipboard = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-one&token=t'
 vim.cmd('SelvageJoin')
 check(
   '  a serverless page link joins on the page default',
@@ -321,7 +321,7 @@ check(
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
 
 -- A truncated page link is refused the same way, before any dial.
-answer_with('https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one')
+answer_with('https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-one')
 joins_before = count_type('join')
 before = #notices
 vim.cmd('SelvageJoin')
@@ -333,7 +333,7 @@ check(
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
 
 -- A whole page link pasted at the prompt joins on the wire URL it names.
-answer_with('https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-two&token=t2&server=ws%3A%2F%2F127.0.0.1%3A9')
+answer_with('https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-two&token=t2&server=ws%3A%2F%2F127.0.0.1%3A9')
 joins_before = count_type('join')
 before = #notices
 vim.cmd('SelvageJoin')
@@ -381,7 +381,7 @@ check('  with nothing dialled', count_type('join'), joins_before)
 -- always makes, and it fails here rather than at the server.
 joins_before = count_type('join')
 before = #notices
-vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one')
+vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-one')
 check(
   'a truncated page link argument is refused too',
   said_since(before, 'that does not look like a Selvage invite link') ~= nil,
@@ -394,7 +394,7 @@ check('  and nothing is dialled for it either', count_type('join'), joins_before
 answer_with('Ada')
 joins_before = count_type('join')
 before = #notices
-vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-arg&token=t&server=ws%3A%2F%2F127.0.0.1%3A9')
+vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-arg&token=t&server=ws%3A%2F%2F127.0.0.1%3A9')
 check(
   'a conforming argument joins',
   last_of('join') and last_of('join').invite,
@@ -560,7 +560,7 @@ check('  and asks nothing', confirmations, 0)
 check(
   '  and puts the page link on the clipboard',
   registers['+'],
-  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-again&token=t&server=ws%3A%2F%2F127.0.0.1%3A2'
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-again&token=t&server=ws%3A%2F%2F127.0.0.1%3A2'
 )
 check('  and the unnamed register too', registers['"'], registers['+'])
 check('  and never the wire address', registers['+']:find('ws://', 1, true), nil)
@@ -575,12 +575,12 @@ report_status('hosting', 'r-fresh', 'ws://127.0.0.1:7/session?room=r-fresh&token
 check(
   'a room that opens puts the page link on the clipboard',
   registers['+'],
-  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
 )
 check(
   '  and the unnamed register too',
   registers['"'],
-  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
 )
 check(
   '  and never the wire address',
@@ -601,7 +601,7 @@ vim.cmd('SelvageCopyInvite')
 check(
   '  a default-server room links with no server',
   registers['+'],
-  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-demo&token=t'
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-demo&token=t'
 )
 
 -- The setting moves the copied link.
@@ -623,7 +623,7 @@ vim.cmd('SelvageCopyInvite')
 check(
   '  an http setting falls back to the default page',
   registers['+'],
-  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-demo&token=t'
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-demo&token=t'
 )
 vim.g.selvage_web_origin = nil
 
@@ -676,14 +676,14 @@ check('  and a refused join', said_since(before, 'already in a session; leave th
 -- reached the room over `ws://` has no page for it, so that link is what it passes on.
 
 selvage.leave()
-vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-page&token=tpage')
+vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-page&token=tpage')
 report_status('joined', 'r-page')
 registers = {}
 vim.cmd('SelvageCopyInvite')
 check(
   'a guest joined by page link copies that link',
   registers['+'],
-  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-page&token=tpage'
+  'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444/?room=r-page&token=tpage'
 )
 check('  and the unnamed register too', registers['"'], registers['+'])
 

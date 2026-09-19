@@ -3189,7 +3189,7 @@ local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 --- next to the demo from `ai_notes/docs/runbook-pi-demo.md`. An overridable default,
 --- never a commitment — `vim.g.selvage_web_origin` always wins — so moving the
 --- page is this one line.
-local DEFAULT_WEB_ORIGIN = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8443'
+local DEFAULT_WEB_ORIGIN = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444'
 
 --- The last server address a host was started on, so the next bare `:SelvageHost` reuses
 --- it without asking. The file below is what outlives this Neovim; this is what answers
