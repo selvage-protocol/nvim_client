@@ -282,7 +282,7 @@ guest's mirror is not refreshed either way, so a save in it is refused and the f
 last held. Both are read when a session starts, so a change to either applies to the next host or
 join. `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, and
 `vim.g.selvage_web_origin` is the page a host's `:SelvageCopyInvite` links to, defaulting to the Pi
-page `https://lumi-raspberrypi.muskellunge-yo.ts.net:8443`. It must name an https origin; anything
+page `https://lumi-raspberrypi.muskellunge-yo.ts.net:8444`. It must name an https origin; anything
 else falls back to the default, so a host's copied link never carries the room's token over
 cleartext. `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
