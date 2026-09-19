@@ -2,9 +2,9 @@
 --
 -- Joining used to say a sentence per moment — the room and its landing, where the
 -- mirror lives, and one hint per empty file opened after it — so a room of
--- several files arrived as a flood. The join now says one summary (the room, how
--- many files are mirrored where, how many of the landing fetched) and errors
--- only; the empty-file hint is said for the first file and never again.
+-- several files arrived as a flood. The join now says one summary (the room, the
+-- document it opened, and how many others it holds) and errors only; the
+-- empty-file hint is said for the first file and never again.
 --
 --   nvim --headless -l test/lua/join.lua      (or scripts/test-lua.sh)
 
@@ -103,9 +103,11 @@ end
 
 -- -- the join is one summary ------------------------------------------------------
 --
--- Six files mirrored, two of them the landing, both fetched by the room's answer:
--- before the batching this was the join sentence, the mirror sentence and four
--- empty-file hints; now it is the summary and nothing else.
+-- Six files mirrored, two of them the landing, both fetched by the room's answer: before the
+-- batching this was the join sentence, the mirror sentence and four empty-file hints, and now
+-- it is one sentence and nothing else. What the sentence says is the landing and how many
+-- other documents the room holds: where the mirror lives and how much of it has arrived read
+-- as a row of counts, and the session's own row and `:SelvageOpen` are where a person looks.
 
 local GRANT = { 'a/one.lua', 'a/two.lua', 'b/three.lua', 'notes/deep.txt', 'README.md', 'src/main.rs' }
 responder = room_holding({ ['a/one.lua'] = 'one\n', ['README.md'] = 'readme\n' })
@@ -115,9 +117,9 @@ local before = #notices
 local root = join({ 'a/one.lua', 'README.md' }, GRANT)
 check('the join says exactly one sentence', #notices, before + 1)
 local summary = notices[#notices] ~= nil and notices[#notices].message or ''
-check('  saying the landing, never the room id', summary:find('Joined the room; opening', 1, true) ~= nil, true)
-check('  counting the mirrored files', summary:find('6 files mirrored at ' .. root, 1, true) ~= nil, true)
-check('  counting the fetched landing', summary:find('2 of 2 fetched', 1, true) ~= nil, true)
+check('  saying the landing, never the room id', summary:find('joined the room — opening a/one.lua', 1, true) ~= nil, true)
+check('  counting the room\'s other documents', summary:find('1 more in the room', 1, true) ~= nil, true)
+check('  and nothing about the mirror', summary:find('mirror', 1, true) == nil, true)
 check('  at info level', notices[#notices] ~= nil and notices[#notices].level or nil, vim.log.levels.INFO)
 
 -- -- the empty-file hint is said once ------------------------------------------------

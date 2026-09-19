@@ -39,7 +39,7 @@ command('SelvageFetch', function(args)
   require('selvage').fetch(args.args)
 end, {
   nargs = '?',
-  desc = "Fetch the room's content into the mirror",
+  desc = 'Download a file from the room',
   complete = function(lead)
     local matches = {}
     for _, path in ipairs(require('selvage').fetchable()) do

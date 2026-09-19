@@ -68,6 +68,21 @@ end
 
 harness.write_file(harness.joined_file, 'joined')
 
+-- The window says which end of the session this is, with no statusline configuration and no
+-- count to arrange: the room holds the host and this client, and the row is written from the
+-- room's own membership report. It is asserted after the document's text has landed, because a
+-- file whose content has not arrived carries the mark for that too.
+harness.wait('the room text to land', harness.deadline_ms, function()
+  return harness.text() ~= nil and harness.text() ~= ''
+end, harness.observe)
+harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 })
+    == '%#SelvageSession#Selvage: guest — 2 people in the room%*'
+end, function()
+  return vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
+end)
+harness.log('the window says', vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 })))
+
 harness.wait('the host edit to arrive', harness.deadline_ms, function()
   return harness.contains(harness.markers.host)
 end, harness.observe)
@@ -493,11 +508,39 @@ harness.wait_ack('follow', harness.deadline_ms)
 harness.write_file(harness.ack_file .. '.follow-done', 'go')
 
 if harness.control_file ~= nil then
-  harness.wait_for_file(
+  -- The blip is a real TCP close on this client's own socket, and the row is where a person
+  -- would see it: the connection is being re-established, and a session that says nothing while
+  -- its socket is gone is the silence the row exists to end. The engine retries on its own and
+  -- a seat is what says the room is back, so the word is sampled on the poll this wait already
+  -- runs (every 50 ms, against a 500 ms retry: the window is not a race) and the control file is
+  -- what says the blip is over.
+  local saw_reconnecting = false
+  harness.wait(
     'the orchestrator to signal the network blip is over',
     harness.reconnect_deadline_ms,
-    harness.control_file
+    function()
+      if
+        not saw_reconnecting
+        and vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Selvage: reconnecting…', 1, true)
+          ~= nil
+      then
+        saw_reconnecting = true
+        harness.log('the window said the connection was being re-established')
+      end
+      return harness.read_file(harness.control_file) ~= nil
+    end,
+    function()
+      return 'the window holds ' .. vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
+    end
   )
+  if not saw_reconnecting then
+    harness.fail('the dropped socket was never said on the window; the reconnect was invisible')
+  end
+  harness.wait('the window to name the session again after the blip', harness.reconnect_deadline_ms, function()
+    return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Selvage: guest — ', 1, true) ~= nil
+  end, function()
+    return 'the window holds ' .. vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
+  end)
   vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { harness.markers.guest2 })
   harness.log('made the second guest edit')
   harness.wait('the host edit made after the blip', harness.reconnect_deadline_ms, function()

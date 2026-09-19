@@ -131,8 +131,8 @@ selvage.host('ws://127.0.0.1:1')
 local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check(
-  'the host confirm names the folder the session shares',
-  said_since(before_host_confirm, 'The room is open (sharing ' .. vim.fn.getcwd() .. ')') ~= nil,
+  'the host confirm says the room is open',
+  said_since(before_host_confirm, 'the room is open; :SelvageCopyInvite copies the invite link.') ~= nil,
   true
 )
 
@@ -140,20 +140,124 @@ local after_crash = errors()
 handlers().on_exit(1)
 check('a companion that dies on its own is', errors(), after_crash + 1)
 
--- A connection that fails says what the engine said and what to try next: the engine's text is
--- accurate but names no next step, and a bad address is the newcomer's failure. A fresh host
--- earns the failure: the crashed companion above hears nothing anymore.
+-- A connection that fails says what to do about it. The engine's own words are accurate and
+-- name no next step: a socket that never got as far as a handshake has two causes, and a host
+-- checks the address it dialled where a guest checks the link it pasted. A refusal the protocol
+-- named is said from the code it arrived with, because the server's message answers with the
+-- values it refused about — `no such room: <room id>` names what could not be found and not the
+-- way back from it. A fresh host earns the failure: the crashed companion above hears nothing
+-- anymore.
 selvage.host('ws://127.0.0.1:1')
 local before_error = #notices
-handlers().on_message({ type = 'status', state = 'error', message = 'connection refused' })
-local failed = said_since(before_error, 'connection refused')
-check('a failed connection says what the engine said', failed ~= nil, true)
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  message = 'the WebSocket reported an error',
+})
 check(
-  '  and what to try next',
-  failed ~= nil and failed:find('check the address and try again', 1, true) ~= nil,
+  'a host that could not be made is told to check the address it dialled',
+  said_since(
+    before_error,
+    'could not host on ws://127.0.0.1:1. No server answered — check the address is the one the server printed'
+  ) ~= nil,
+  true
+)
+check(
+  "  and not the engine's words about a socket",
+  said_since(before_error, 'WebSocket') == nil,
   true
 )
 check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
+
+-- A join says the two causes the other way round: the guest never saw an address, only the
+-- link it pasted.
+selvage.leave()
+selvage.join('ws://127.0.0.1:1/session?room=r-test&token=t')
+local before_join_error = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  message = 'the WebSocket reported an error',
+})
+check(
+  'a join that could not be made is told to check the link it pasted',
+  said_since(
+    before_join_error,
+    'could not join the session. No server answered — check the invite is complete'
+  ) ~= nil,
+  true
+)
+
+local before_unknown = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'room_unknown',
+  message = 'no such room: r-4f2a91',
+})
+check(
+  'a join into no room says the invite names a room the server does not have',
+  said_since(
+    before_unknown,
+    'could not join the session. That invite names a room the server does not have'
+  ) ~= nil,
+  true
+)
+check('  without the room id the server named', said_since(before_unknown, 'r-4f2a91') == nil, true)
+
+local before_token = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'token_invalid',
+  message = 'invalid room token',
+})
+check(
+  'a refused token says the invite is out of date',
+  said_since(before_token, 'That invite is no longer valid. Ask the host for a fresh invite.') ~= nil,
+  true
+)
+check('  in words a person uses, not the wire code', said_since(before_token, 'token_invalid') == nil, true)
+
+local before_present = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'host_present',
+  message = 'the room already has a host',
+})
+check(
+  'a room that already has a host says so',
+  said_since(before_present, 'That room already has a host.') ~= nil,
+  true
+)
+
+local before_version = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'unsupported_version',
+  message = 'unsupported wire version 2',
+})
+check(
+  'a server that speaks another version names what differs',
+  said_since(before_version, 'speak different versions (unsupported wire version 2)') ~= nil,
+  true
+)
+
+local before_full = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'x.room_full',
+  message = 'the room seats at most 2 peers',
+})
+check(
+  'a full room is a sentence, never the wire code',
+  said_since(before_full, 'The room is full — it seats no more people.') ~= nil,
+  true
+)
+check('  and still not its code', said_since(before_full, 'x.room_full') == nil, true)
 selvage.leave()
 
 -- -- a guest has the room's document put in front of it -----------------------
@@ -177,7 +281,7 @@ check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage:
 check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
 check(
   '  and the join says the landing',
-  said_since(before_join, 'Joined the room; opening workspace/README.md') ~= nil,
+  said_since(before_join, 'joined the room — opening workspace/README.md') ~= nil,
   true
 )
 
@@ -228,15 +332,15 @@ handlers().on_message({
 })
 check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
 check(
-  '  and said so, pointing at the others',
-  said_since(before, 'Joined the room; opening a/one.lua; 1 more, :SelvageOpen to choose') ~= nil,
+  '  and said so, counting the others',
+  said_since(before, 'joined the room — opening a/one.lua; 1 more in the room') ~= nil,
   true
 )
-local pointed = false
-for index = before + 1, #notices do
-  pointed = pointed or notices[index].message:find(':SelvageOpen', 1, true) ~= nil
-end
-check('  and the rest are pointed at', pointed, true)
+check(
+  '  naming no command in it',
+  notices[#notices].message:find(':Selvage', 1, true) == nil,
+  true
+)
 
 -- A room with no documents yet has a join sentence of its own, and shows the room's first
 -- document when it arrives: that is what a person who just joined asked to see, and a room that
@@ -251,7 +355,7 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
 check(
   '  and the join says the room has nothing in it yet',
-  said_since(before_empty, 'Joined the room; the room has no open documents yet') ~= nil,
+  said_since(before_empty, 'joined the room; the room has no open documents yet') ~= nil,
   true
 )
 local before_late = #notices
@@ -274,7 +378,7 @@ check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated
 check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
 check(
   '  and the join claims no landing',
-  said_since(before_off, 'Joined the room') ~= nil,
+  said_since(before_off, 'joined the room') ~= nil,
   true
 )
 vim.g.selvage_open_on_join = nil
@@ -807,7 +911,7 @@ local before_no_session = #notices
 vim.cmd('SelvagePeers')
 check(
   'with no session the list says there is none',
-  said_since(before_no_session, 'Join a session first') ~= nil,
+  said_since(before_no_session, 'join a session first') ~= nil,
   true
 )
 
@@ -859,7 +963,7 @@ vim.ui.input = function(opts, on_confirm)
   check(
     '  and separates the prompt from the value',
     opts and opts.prompt,
-    'The name other participants see (remembered; :SelvageDisplayName changes it): '
+    'The name other participants see (at most 32 characters): '
   )
   on_confirm('  Ada  ')
 end
@@ -889,7 +993,7 @@ local hosts_before_dismissal = count_type('host')
 selvage.host('ws://127.0.0.1:1')
 check('a dismissed prompt starts no session', count_type('host'), hosts_before_dismissal)
 check('  and does not configure a name', vim.g.selvage_display_name, nil)
-check('  and says A name is needed', said_since(before_dismissal, 'A name is needed') ~= nil, true)
+check('  and says A name is needed', said_since(before_dismissal, 'a name is needed') ~= nil, true)
 
 -- An emptied box is the same answer as a dismissed one.
 vim.ui.input = function(_, on_confirm)
@@ -900,7 +1004,7 @@ local before_blank = #notices
 local hosts_before_blank = count_type('host')
 selvage.host('ws://127.0.0.1:1')
 check('an emptied prompt starts no session', count_type('host'), hosts_before_blank)
-check('  and says A name is needed', said_since(before_blank, 'A name is needed') ~= nil, true)
+check('  and says A name is needed', said_since(before_blank, 'a name is needed') ~= nil, true)
 check('  and does not configure a name', vim.g.selvage_display_name, nil)
 
 -- No input at all: the built-in `vim.ui.input` reads a terminal a headless process does not
@@ -926,11 +1030,11 @@ vim.cmd('SelvageDisplayName Grace')
 check(':SelvageDisplayName sets the configured name', vim.g.selvage_display_name, 'Grace')
 local before_set = #notices
 vim.cmd('SelvageDisplayName Pat')
-check('  it says what it did', said_since(before_set, 'Display name set to "Pat"') ~= nil, true)
+check('  it says what it did', said_since(before_set, 'display name set to "Pat"') ~= nil, true)
 check('  and without protocol mechanics', said_since(before_set, 'room') == nil, true)
 local before_report = #notices
 vim.cmd('SelvageDisplayName')
-check('  and with no name reports the one in force', said_since(before_report, 'The name others see is "Pat"') ~= nil, true)
+check('  and with no name reports the one in force', said_since(before_report, 'the name others see is "Pat"') ~= nil, true)
 
 -- A change during a live session is sent now: `session.rename` carries it and the room answers
 -- with `peer.renamed`, so the sign and `:SelvagePeers` re-label from that event rather than from
@@ -951,7 +1055,7 @@ vim.cmd('SelvageDisplayName Second')
 check('  :SelvageDisplayName sets the configured name mid-session', vim.g.selvage_display_name, 'Second')
 check('  and sends the live rename', count_type('rename'), renames_before + 1)
 check('  naming the new name', last_of('rename') and last_of('rename').displayName, 'Second')
-check('  and confirms the new name', said_since(before_live, 'Display name set to "Second"') ~= nil, true)
+check('  and confirms the new name', said_since(before_live, 'display name set to "Second"') ~= nil, true)
 selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('the next session uses the changed name', last_of('host') and last_of('host').displayName, 'Second')
@@ -981,18 +1085,18 @@ selvage.leave()
 selvage.host('ws://127.0.0.1:1')
 check('  and names the session', last_of('host') and last_of('host').displayName, at_limit)
 
--- One unit more is refused, the name in force is kept, and the refusal says the limit and the
--- count so the answer is a shorter name rather than a guess.
+-- One unit more is refused, the name in force is kept, and the refusal says how long it is
+-- beside the limit in the unit the room counts and the sentence both clients use.
 local before_long = #notices
 vim.cmd('SelvageDisplayName ' .. string.rep('b', 33))
 check('a name of 33 units is refused', vim.g.selvage_display_name, at_limit)
 check(
   '  with the count and the limit',
-  said_since(before_long, 'This name is 33 UTF-16 code units and the limit is 32') ~= nil,
+  said_since(before_long, 'this name is 33 UTF-16 code units and the limit is 32') ~= nil,
   true
 )
 check(
-  '  and that it is refused rather than shortened',
+  '  and what to do about it',
   said_since(before_long, 'a name is refused rather than shortened') ~= nil,
   true
 )
@@ -1027,7 +1131,7 @@ selvage.host('ws://127.0.0.1:1')
 check('a 33-unit answer at the prompt is asked for again', asked, 2)
 check(
   '  with the count and the limit',
-  said_since(before_prompt, 'This name is 33 UTF-16 code units and the limit is 32') ~= nil,
+  said_since(before_prompt, 'this name is 33 UTF-16 code units and the limit is 32') ~= nil,
   true
 )
 check('  and the shorter answer names the session', last_of('host') and last_of('host').displayName, 'Cara')
@@ -1046,10 +1150,10 @@ check('an over-long SELVAGE_DISPLAY_NAME starts nothing', count_type('host'), ho
 check('  and is not asked about', asked, 0)
 check(
   '  and the refusal is the shared one, naming the variable',
-  said_since(before_env, 'a name is refused rather than shortened (from SELVAGE_DISPLAY_NAME') ~= nil,
+  said_since(before_env, 'Set a shorter one in SELVAGE_DISPLAY_NAME') ~= nil,
   true
 )
-check('  and says the session was not started', said_since(before_env, 'the session was not started') ~= nil, true)
+check('  and says the session was not started', said_since(before_env, 'so the session was not started') ~= nil, true)
 
 -- A script can set the global without going through the command; the check is at the point
 -- the session starts for exactly that reason.
@@ -1062,7 +1166,7 @@ selvage.host('ws://127.0.0.1:1')
 check('an over-long global a script set starts nothing', count_type('host'), hosts_before_global)
 check(
   '  and the refusal names the global',
-  said_since(before_global, 'from vim.g.selvage_display_name') ~= nil,
+  said_since(before_global, 'Set a shorter one in vim.g.selvage_display_name') ~= nil,
   true
 )
 
@@ -1090,7 +1194,7 @@ selvage.host('ws://127.0.0.1:1')
 check('an over-long login name starts nothing', count_type('host'), hosts_before_suggestion)
 check(
   '  and the refusal is about there being no name, not about its length',
-  said_since(before_suggestion, 'No display name is set and there is no one to ask') ~= nil,
+  said_since(before_suggestion, 'no display name is set and there is no one to ask') ~= nil,
   true
 )
 vim.env.USER = saved_user
@@ -1166,12 +1270,12 @@ local before_late_leave = #notices
 selvage.leave()
 check(
   'a leave after the engine gave up says there is no session',
-  said_since(before_late_leave, 'Not in a session') ~= nil,
+  said_since(before_late_leave, 'not in a session') ~= nil,
   true
 )
 check(
   '  and does not claim to have left one',
-  said_since(before_late_leave, 'Left the session') == nil,
+  said_since(before_late_leave, 'left the session') == nil,
   true
 )
 
@@ -1209,7 +1313,7 @@ local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
 check(
   'the room going is reported with its reason',
-  said_since(before_gone, 'The room is gone (host did not return)') ~= nil,
+  said_since(before_gone, 'the room is gone (host did not return)') ~= nil,
   true
 )
 check('  and the session ends with it', selvage.session().status, 'idle')
@@ -1282,7 +1386,7 @@ local before_reports = #notices
 handlers().on_message({ type = 'report', report = { kind = 'applyRefused', path = 'a.txt' } })
 check(
   'a refused apply is a sentence',
-  said_since(before_reports, "The editor would not apply the room's change to a.txt; the file may be read-only") ~= nil,
+  said_since(before_reports, "the editor would not apply the room's change to a.txt; the file may be read-only") ~= nil,
   true
 )
 check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
@@ -1299,13 +1403,13 @@ handlers().on_message({
 })
 check(
   'a save that failed says why',
-  said_since(before_reports, 'Could not save a.txt; the file on disk is behind the room (the path is read-only)') ~= nil,
+  said_since(before_reports, 'could not save a.txt; the file on disk is behind the room (the path is read-only)') ~= nil,
   true
 )
 handlers().on_message({ type = 'report', report = { kind = 'saveFailed', path = 'a.txt' } })
 check(
   '  and the sentence alone when the report carried no reason',
-  said_since(before_reports, 'Could not save a.txt; the file on disk is behind the room') ~= nil,
+  said_since(before_reports, 'could not save a.txt; the file on disk is behind the room') ~= nil,
   true
 )
 check('  without inventing one', notices[#notices].message:find('()', 1, true) == nil, true)
@@ -1430,6 +1534,112 @@ check('  and a keystroke still reaches the room', count_type('change'), before_s
 -- the process it let go says nothing: a new host on top of it would only reach for the
 -- old room's invite, so this one ends it first.
 selvage.leave()
+-- -- the window says what the session is ------------------------------------------
+--
+-- A live session is otherwise invisible: hosting is one notice, and after it neither the side the
+-- person is on, nor who else is here, nor whether the connection is still standing is anywhere on
+-- screen. The window's own `winbar` row carries it, the row the follow's indicator already uses
+-- (window-local, so never the statusline a statusline plugin owns), and every buffer's own row is
+-- saved and put back the way the follow's is. What is pinned here is the words and the
+-- save/restore; the precedence between the two indicators is `test/lua/follow.lua`'s.
+
+vim.cmd('edit! ' .. path)
+local own_winbar = 'my own row %f'
+vim.opt.winbar = own_winbar
+
+local function row(win)
+  return vim.api.nvim_get_option_value('winbar', { win = win or 0 })
+end
+
+selvage.host('ws://127.0.0.1:1')
+check('a session with nothing on the row yet', row(), own_winbar)
+handlers().on_message({ type = 'status', state = 'connecting' })
+check(
+  'a session being opened says so while the connection is made',
+  row(),
+  '%#SelvageSession#Selvage: connecting…%*'
+)
+-- Said by the row and not announced, so a repeated word moves nothing: a slow connect is one
+-- state rather than a count of attempts, and nothing scrolls past while it is waited out.
+local before_repeat = #notices
+handlers().on_message({ type = 'status', state = 'connecting' })
+check('  and a second one says nothing new', #notices, before_repeat)
+check('    with the row where it was', row(), '%#SelvageSession#Selvage: connecting…%*')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-row' })
+check(
+  'a host is named as the host, alone until the room says otherwise',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+)
+check(
+  '  and a statusline reports the same words',
+  selvage.statusline(),
+  'Selvage: hosting — 1 person in the room'
+)
+check(
+  '  in a highlight a colorscheme can own',
+  vim.api.nvim_get_hl(0, { name = 'SelvageSession', link = true }).link,
+  'Title'
+)
+
+-- The count is the room's own membership report: everyone it names, plus this client.
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } } },
+})
+check(
+  'the room naming a peer counts them',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
+)
+
+-- A dropped socket the engine is retrying is the one session state a person cannot see from
+-- the outside: the room goes quiet, and a quiet room is also what everyone else reading looks
+-- like. A seat reports the room's documents and its peers, so the first of either is the
+-- connection standing again.
+handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
+check('a connection the engine is re-establishing says so', row(), '%#SelvageSession#Selvage: reconnecting…%*')
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { path } } })
+check(
+  '  and a room that speaks again takes the word back',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
+)
+
+-- Every window: the row is window-local, and a split is a window like any other.
+vim.cmd('vsplit')
+local wins = vim.api.nvim_list_wins()
+check('a split carries the session row too', #wins, 2)
+check('  in the window that was split', row(wins[1]), '%#SelvageSession#Selvage: hosting — 2 people in the room%*')
+check('  and in the one it made', row(wins[2]), '%#SelvageSession#Selvage: hosting — 2 people in the room%*')
+vim.cmd('only')
+
+-- The person's own row is theirs: `vim.g.selvage_indicator = false` puts it back and leaves it
+-- there, which is what a statusline-only setup asks for.
+vim.g.selvage_indicator = false
+handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+check('the session row can be turned off', row(), own_winbar)
+check('  and the statusline says nothing then', selvage.statusline(), '')
+vim.g.selvage_indicator = nil
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } } },
+})
+check('  and comes back when it is turned on again', row(), '%#SelvageSession#Selvage: hosting — 2 people in the room%*')
+
+-- A guest's row says which side it is on, which is the one thing the two ends differ in.
+selvage.leave()
+check('leaving puts the person\'s own row back', row(), own_winbar)
+check('  and the statusline with it', selvage.statusline(), '')
+selvage.join('ws://127.0.0.1:1/session?room=r-row&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-row' })
+check(
+  'a guest is named as the guest',
+  row(),
+  '%#SelvageSession#Selvage: guest — 1 person in the room%*'
+)
+selvage.leave()
+
 -- -- a companion that misspeaks ---------------------------------------------------------
 --
 -- The companion is the same user's own process, so a misshapen message is a bug rather than
@@ -1520,7 +1730,7 @@ check(
 )
 check(
   '  naming the type',
-  said_since(before_shapes, 'Unknown message type from the companion: frobnicate.') ~= nil,
+  said_since(before_shapes, 'unknown message type from the companion: frobnicate.') ~= nil,
   true
 )
 local before_second = #notices
@@ -1533,7 +1743,7 @@ check(
 )
 check(
   '  as unreadable',
-  said_since(before_shapes, 'Unreadable message from the companion.') ~= nil,
+  said_since(before_shapes, 'unreadable message from the companion.') ~= nil,
   true
 )
 check(

@@ -159,13 +159,13 @@ vim.g.selvage_server_url = nil
 local before = #notices
 local raised = pcall(vim.cmd, 'SelvageHost')
 check('a bare :SelvageHost does not raise E471', raised, true)
-check('  and the refusal is the plugin\u{2019}s', said_since(before, 'A server address is needed') ~= nil, true)
+check('  and the refusal is the plugin\u{2019}s', said_since(before, 'a server address is needed') ~= nil, true)
 check('  and it names one', said_since(before, ':SelvageHost ws://127.0.0.1:8080') ~= nil, true)
 
 before = #notices
 raised = pcall(vim.cmd, 'SelvageJoin')
 check('a bare :SelvageJoin does not raise E471 either', raised, true)
-check('  and says what is missing', said_since(before, 'An invite link is needed') ~= nil, true)
+check('  and says what is missing', said_since(before, 'an invite link is needed') ~= nil, true)
 
 -- With somebody to ask, an unremembered command asks once, starting from the demo
 -- default. The answer is then reused without asking — across restarts — until an
@@ -273,7 +273,7 @@ before = #notices
 vim.cmd('SelvageJoin')
 check(
   'a truncated paste is refused at the prompt',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check(
@@ -290,7 +290,7 @@ before = #notices
 vim.cmd('SelvageJoin')
 check(
   'a paste without a token is refused too',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check('  and nothing is dialled either', count_type('join'), joins_before)
@@ -304,7 +304,7 @@ before = #notices
 vim.cmd('SelvageJoin')
 check(
   'a lookalike parameter is refused too',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
@@ -315,7 +315,7 @@ before = #notices
 vim.cmd('SelvageJoin')
 check(
   'an empty room value is refused too',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
@@ -327,7 +327,7 @@ before = #notices
 vim.cmd('SelvageJoin')
 check(
   'a truncated page link is refused too',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
@@ -362,7 +362,7 @@ before = #notices
 vim.cmd('SelvageJoin ws://127.0.0.1:1/other')
 check(
   'a mistyped argument is refused',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check(
@@ -384,7 +384,7 @@ before = #notices
 vim.cmd('SelvageJoin https://lumi-raspberrypi.muskellunge-yo.ts.net:8443/?room=r-one')
 check(
   'a truncated page link argument is refused too',
-  said_since(before, 'That does not look like a Selvage invite link') ~= nil,
+  said_since(before, 'that does not look like a Selvage invite link') ~= nil,
   true
 )
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
@@ -448,7 +448,7 @@ vim.cmd('SelvageHost ws://127.0.0.1:1')
 check('a second host while connecting sends nothing', count_type('host'), hosts_opening)
 check(
   '  and says a session is being opened',
-  said_since(before_opening, 'A session is already being opened.') ~= nil,
+  said_since(before_opening, 'a session is already being opened.') ~= nil,
   true
 )
 local joins_opening = count_type('join')
@@ -468,7 +468,7 @@ check('the name in force is nil when nothing is configured', selvage.display_nam
 vim.cmd('SelvageDisplayName')
 check(
   '  and the read form says there is none',
-  said_since(before, 'No display name is set yet') ~= nil,
+  said_since(before, 'no display name is set yet') ~= nil,
   true
 )
 check('  rather than reporting a name nobody chose', said_since(before, 'The name others see is') == nil, true)
@@ -513,7 +513,7 @@ check('a join while hosting asks first', confirmations, 1)
 check(
   '  naming what joining it does, never the room id',
   question and question.text,
-  'You are hosting; joining another session ends this room for everyone.'
+  'you are hosting this session; joining another session ends this room for everyone.'
 )
 check('  offering to leave and join', question and question.choices, '&Leave and join\n&Cancel')
 check('  a declined question joins nothing', count_type('join'), joins_before)
@@ -538,7 +538,7 @@ check('a host while a guest asks first', confirmations, asks_before + 1)
 check(
   '  saying that hosting means leaving',
   question and question.text,
-  'You are in a session; hosting a session means leaving it first.'
+  'you are in this session; hosting a session means leaving it first.'
 )
 check('  offering to leave and host', question and question.choices, '&Leave and host\n&Cancel')
 check('  a declined question hosts nothing', count_type('host'), hosts_before)
@@ -589,8 +589,8 @@ check(
 )
 check(
   '  and says so',
-  said_since(before, 'The room is open (sharing ') ~= nil
-    and said_since(before, 'the invite link is on the clipboard.') ~= nil,
+  said_since(before, 'the room is open. Send this link') ~= nil
+    and said_since(before, 'on the clipboard.') ~= nil,
   true
 )
 
@@ -652,7 +652,7 @@ local window_before = vim.fn.bufname('%')
 vim.cmd('SelvageOpen')
 check(
   ':SelvageOpen while hosting is refused with the reason',
-  said_since(before, 'You are hosting, so the files you open are the ones the room has') ~= nil,
+  said_since(before, 'you are the host — the files you open are the ones your guests see') ~= nil,
   true
 )
 check('  and the window is left where it was', vim.fn.bufname('%'), window_before)
@@ -665,9 +665,9 @@ check('  at information level', notices[#notices].level, vim.log.levels.INFO)
 
 before = #notices
 handlers().on_message({ type = 'refused', what = 'host', roomId = 'r-open' })
-check('a refused host is reported', said_since(before, 'Already hosting; leave that session first.') ~= nil, true)
+check('a refused host is reported', said_since(before, 'already hosting; leave that session first.') ~= nil, true)
 handlers().on_message({ type = 'refused', what = 'join', roomId = 'r-open' })
-check('  and a refused join', said_since(before, 'Already in a session; leave that session first.') ~= nil, true)
+check('  and a refused join', said_since(before, 'already in a session; leave that session first.') ~= nil, true)
 
 -- -- a guest holds the token it joined with ------------------------------------------
 --
@@ -703,7 +703,7 @@ before = #notices
 vim.cmd('SelvageCopyInvite')
 check(
   'copying with no session says there is none',
-  said_since(before, 'There is no invite link; host or join a room first.') ~= nil,
+  said_since(before, 'there is no invite link; host or join a room first.') ~= nil,
   true
 )
 
