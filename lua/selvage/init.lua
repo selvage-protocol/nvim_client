@@ -105,6 +105,15 @@ local state = {
   --- Whether the caret is being placed by the follow itself. Neovim gives no reason for a cursor
   --- change, so the follow's own landing is what the move handler must not read as the user's.
   applying_follow = false,
+  --- The host's absence, while the room waits out its grace: the name to say and the deadline the
+  --- countdown is derived from. Nil while the host is present.
+  host_away = nil,
+  --- The repeating timer that redraws the host-away countdown, or nil when none is running.
+  host_away_timer = nil,
+  --- The display name of the room's host, remembered from a peers report so the sentence that says
+  --- they left can name them: `host.detached` carries no name, and `peer.left` has already removed
+  --- them from the room by the time it arrives.
+  host_name = nil,
   --- A go-to whose landing cannot be made yet: the peer id and the label the refusal would
   --- name. A one-shot follow — every room event that could have brought the text tries it
   --- again, and the first landing, refusal or departure clears it.
@@ -222,6 +231,21 @@ end
 --- deadlines are named in and the one the other client shows.
 local function seconds(ms)
   return math.max(0, math.floor((tonumber(ms) or 0) / 1000 + 0.5))
+end
+
+--- The whole seconds left before `deadline`, rounded up: a deadline twelve and a half seconds away
+--- still has thirteen seconds to run and reads so, and a passed one reads zero rather than a
+--- negative count. Derived from the deadline on every read, so the number a person sees is the
+--- room's clock rather than a value printed once when the countdown started.
+---
+--- @param deadline number a `uv.now()` millisecond timestamp
+--- @return integer
+local function until_seconds(deadline)
+  local left = (tonumber(deadline) or 0) - uv.now()
+  if left <= 0 then
+    return 0
+  end
+  return math.ceil(left / 1000)
 end
 
 --- How long after the first caret event a selection reaches the companion.
@@ -1530,6 +1554,12 @@ end
 local SESSION_HIGHLIGHT = 'SelvageSession'
 local SESSION_FRAME = '%#' .. SESSION_HIGHLIGHT .. '#'
 
+--- The sentence a room waiting out its host's absence says, with the leaving host's name and the
+--- whole seconds left before the server's deadline. One home: the row and the one announcement
+--- both read it, so the countdown a person watches and the notice they were given agree. The
+--- deadline is the server's (`host.detached`); nothing here can move it.
+local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and work in it is lost.'
+
 --- The session's own words: which side of the session the person is on, how many are in the
 --- room, and whether the connection is being re-established. Nil when there is no session to
 --- speak of, and nil while the row is turned off (`vim.g.selvage_indicator = false`).
@@ -1545,6 +1575,9 @@ local function session_words()
   end
   if state.status == 'connecting' then
     return 'Selvage: connecting…'
+  end
+  if state.host_away ~= nil then
+    return 'Selvage: ' .. HOST_DISCONNECTED:format(state.host_away.name, until_seconds(state.host_away.deadline))
   end
   if in_session() then
     local here = #state.room_peers + 1
@@ -1693,6 +1726,23 @@ local function refresh_indicator_for(bufnr)
       show_indicator(win)
     end
   end
+end
+
+--- Stops the timer that redraws the host-away countdown, if one is running.
+local function stop_host_away_timer()
+  if state.host_away_timer ~= nil then
+    pcall(vim.fn.timer_stop, state.host_away_timer)
+    state.host_away_timer = nil
+  end
+end
+
+--- Redraws the host-away countdown once a second while it stands. The number is derived from the
+--- deadline on each read, so this is what makes it tick rather than a value stored once.
+local function start_host_away_timer()
+  stop_host_away_timer()
+  state.host_away_timer = vim.fn.timer_start(1000, function()
+    refresh_indicators()
+  end, { ['repeat'] = -1 })
 end
 
 --- Shows the follow in the window, in their own colour. Called wherever the follow moves or
@@ -2488,6 +2538,9 @@ local function reset(land, keep_mirror)
   -- back here rather than left for a window that may never be entered again.
   state.status = 'idle'
   state.reconnecting = false
+  stop_host_away_timer()
+  state.host_away = nil
+  state.host_name = nil
   clear_indicator()
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
@@ -2821,6 +2874,13 @@ local function on_report(report)
     -- The room's own list of who is in it: everyone, not only the peers this client holds a
     -- document for and can draw a caret for.
     state.room_peers = report.peers or {}
+    -- The host's name is remembered here, while they are in the room: the detach frame names no
+    -- one, and the departure has already taken them out of this list by the time it arrives.
+    for _, peer in ipairs(state.room_peers) do
+      if peer.role == 'host' and type(peer.display_name) == 'string' and peer.display_name ~= '' then
+        state.host_name = peer.display_name
+      end
+    end
     -- The report is the room's own membership, so a peer it no longer names is gone even
     -- before the next presence frame redraws: their drawn row and cursor go now, rather than
     -- offering a departed peer in completion or landing on their last caret.
@@ -2884,12 +2944,25 @@ local function on_report(report)
       notify(('The room closed. Your copy is kept at %s.'):format(kept), vim.log.levels.WARN)
     end
   elseif report.kind == 'hostDetached' then
-    notify(
-      ('the host left the room; it closes in %ds unless they come back.'):format(seconds(report.graceMs)),
-      vim.log.levels.WARN
-    )
+    -- The deadline is the server's: `grace_ms` is how long the room has before the host's absence
+    -- destroys it, and the countdown here is only an echo of it, redrawn from the deadline rather
+    -- than printed once. The name is the one remembered from membership, since this frame carries
+    -- none.
+    local name = state.host_name or 'the host'
+    state.host_away = {
+      name = name,
+      deadline = uv.now() + math.max(0, tonumber(report.graceMs) or 0),
+    }
+    notify((HOST_DISCONNECTED):format(name, seconds(report.graceMs)), vim.log.levels.WARN)
+    start_host_away_timer()
+    refresh_indicators()
   elseif report.kind == 'hostAttached' then
-    notify(('%s is hosting again.'):format(tostring((report.peer or {}).display_name or 'the host')))
+    local name = tostring((report.peer or {}).display_name or state.host_name or 'the host')
+    state.host_name = name
+    stop_host_away_timer()
+    state.host_away = nil
+    notify(('%s is back — the session continues.'):format(name))
+    refresh_indicators()
   elseif report.kind == 'sessionError' then
     -- The report's own sentence, and its code is not shown: a refusal the protocol named and
     -- one this session made for itself both say what happened in words already — `the room

@@ -23,9 +23,10 @@
 -- - The expression that fills a hole: `%s` in a pinned sentence is that hole, so the pin is on
 --   the words around it.
 --
--- Four messages are variables — the connect failure, the companion's failure to start, the
--- question said where there is nobody to answer it, and what a room's own refusal says — and
--- their number is pinned, so a fifth cannot arrive unnoticed.
+-- Five messages are variables — the connect failure, the companion's failure to start, the
+-- question said where there is nobody to answer it, what a room's own refusal says, and the
+-- host-disconnected sentence, which the row and its one announcement share so it has one home —
+-- and their number is pinned, so a sixth cannot arrive unnoticed.
 --
 --   nvim --headless -l test/lua/vocabulary.lua      (or scripts/test-lua.sh)
 
@@ -164,8 +165,7 @@ local MESSAGES = {
   -- The list of participants.
   { 'WARN', 'no other participants yet.' },
   -- What the room's own reports say.
-  { 'WARN', 'the host left the room; it closes in %ds unless they come back.' },
-  { 'INFO', '%s is hosting again.' },
+  { 'INFO', '%s is back — the session continues.' },
   { 'WARN', 'the room is gone (%s).' },
   { 'WARN', 'The room closed. Your copy is kept at %s.' },
   { 'WARN', '%d buffers with unsaved changes were kept; :ls lists them.' },
@@ -415,7 +415,7 @@ for _, message in ipairs(MESSAGES) do
 end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
-check('the messages that are not literals are the four this file names', variables, 4)
+check('the messages that are not literals are the five this file names', variables, 5)
 
 -- -- no room id reaches a sentence a user reads ----------------------------------------
 --

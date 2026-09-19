@@ -204,8 +204,13 @@ The session is on screen without any statusline configuration: the window's `win
 indicator, the side of the session (`Selvage: hosting` or `Selvage: guest`) and the participant
 count (`2 people in the room`) in a single string separated by an em dash. While a connection is
 being made the row says `Selvage: connecting…`, and while a dropped one is retried it says
-`Selvage: reconnecting…`. It uses the same mechanism and the same discipline as the follow's row:
-window-local, the person's own row saved and put back, and a follow's row wins while one stands.
+`Selvage: reconnecting…`. While the host is absent the row says who left and what is at stake,
+with the seconds the server has left counted down from its deadline rather than printed once:
+`Selvage: Host disconnected. <name> left — if they return within <n>s the session continues,
+otherwise this room closes and work in it is lost.` The same sentence is announced once when the
+absence begins, and `<name> is back — the session continues.` when the host returns. It uses the
+same mechanism and the same discipline as the follow's row: window-local, the person's own row
+saved and put back, and a follow's row wins while one stands.
 `vim.g.selvage_indicator = false` leaves the row off entirely.
 `%{v:lua.require'selvage'.statusline()}` returns those words for a statusline that wants them
 somewhere else, and with the file itself in front of it: one holding no fetched content has the

@@ -1297,17 +1297,52 @@ handlers().on_message({
   type = 'report',
   report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
 })
-check('the host coming back is announced', said_since(before_attached, 'Ada is hosting again') ~= nil, true)
+check('the host coming back is announced', said_since(before_attached, 'Ada is back — the session continues.') ~= nil, true)
 check('  at information level', notices[#notices].level, vim.log.levels.INFO)
 
 local before_detached = #notices
 handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 30000 } })
 check(
-  'the host going is announced in seconds',
-  said_since(before_detached, 'it closes in 30s unless they come back') ~= nil,
+  'the host going is announced with the cause and the deadline',
+  said_since(
+    before_detached,
+    'Host disconnected. Ada left — if they return within 30s the session continues, otherwise this room closes and work in it is lost.'
+  ) ~= nil,
   true
 )
 check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+check(
+  '  and the row says it too, persistently',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Host disconnected. Ada left', 1, true) ~= nil,
+  true
+)
+
+-- The number is the room's clock, not a value printed once: it is derived from the deadline and
+-- the row is redrawn every second until the host returns or the room goes. The wait polls the row
+-- for the next reading rather than assuming a turn.
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 2000 } })
+check(
+  'the row shows the deadline it was given',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 2s', 1, true) ~= nil,
+  true
+)
+local ticked = vim.wait(4000, function()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
+end, 50)
+check('  and the number counts down', ticked, true)
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+check(
+  '  and the row takes the countdown down when the host returns',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
+  true
+)
 
 local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
