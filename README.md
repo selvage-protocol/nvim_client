@@ -200,15 +200,16 @@ same; the picker refuses its own rows where the row says they are in no document
 peer's document only when it resolves to a readable file inside the shared folder, never creating
 it; anything else says `could not open <path> from the room: <reason>`.
 
-The session itself is on screen without any statusline configuration: the window wears a `winbar`
-row with one combined indicator: `Selvage: hosting` or `Selvage: guest`, followed by an em dash
-separator and the participant count (for example, `2 people in the room`), all in a single string.
-It says `Selvage: connecting…` while a connection is being made and `Selvage: reconnecting…` while
-a dropped one is retried. It is the same mechanism as the follow's row and the same discipline:
-window-local, the person's own row saved and put back, and a follow's row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off
-entirely. `%{v:lua.require'selvage'.statusline()}` returns those words for a statusline that
-wants them somewhere else, and with the file itself in front of it: one holding no fetched content
-has the row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
+The session is on screen without any statusline configuration: the window's `winbar` carries one
+indicator, the side of the session (`Selvage: hosting` or `Selvage: guest`) and the participant
+count (`2 people in the room`) in a single string separated by an em dash. While a connection is
+being made the row says `Selvage: connecting…`, and while a dropped one is retried it says
+`Selvage: reconnecting…`. It uses the same mechanism and the same discipline as the follow's row:
+window-local, the person's own row saved and put back, and a follow's row wins while one stands.
+`vim.g.selvage_indicator = false` leaves the row off entirely.
+`%{v:lua.require'selvage'.statusline()}` returns those words for a statusline that wants them
+somewhere else, and with the file itself in front of it: one holding no fetched content has the
+row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
 
 ### The vendored engine
 
