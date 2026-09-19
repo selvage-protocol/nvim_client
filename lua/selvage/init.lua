@@ -114,6 +114,9 @@ local state = {
   --- they left can name them: `host.detached` carries no name, and `peer.left` has already removed
   --- them from the room by the time it arrives.
   host_name = nil,
+  --- Whether the session highlight is set for the current colorscheme. A colorscheme runs
+  --- `highlight clear`, which takes it, so the flag is dropped there and the group is made again.
+  session_painted = false,
   --- A go-to whose landing cannot be made yet: the peer id and the label the refusal would
   --- name. A one-shot follow — every room event that could have brought the text tries it
   --- again, and the first landing, refusal or departure clears it.
@@ -398,6 +401,36 @@ local function cell_before(line, col)
   return vim.fn.byteidx(line, index)
 end
 
+--- The session row redraw lives with the indicators far below, and a presence report is the other
+--- thing that changes what a row says — the peers in a buffer. Declared here so the draw can call
+--- it; assigned where the row is drawn.
+local refresh_indicators
+
+--- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
+--- (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is `{ [room_path] = { { initials,
+--- colour, label, peerId } } }` and `User SelvagePresence` fires whenever it changes. This client
+--- draws the row itself and depends on none of them.
+local function publish_file_peers()
+  local by_path = {}
+  for _, peer in ipairs(state.peers) do
+    if type(peer.path) == 'string' then
+      local list = by_path[peer.path]
+      if list == nil then
+        list = {}
+        by_path[peer.path] = list
+      end
+      list[#list + 1] = {
+        initials = peer.sign,
+        colour = peer.colour,
+        label = peer.label,
+        peerId = peer.peerId,
+      }
+    end
+  end
+  vim.g.selvage_file_peers = by_path
+  api.nvim_exec_autocmds('User', { pattern = 'SelvagePresence' })
+end
+
 --- Draws the peer carets a presence report resolved, and the ranges behind the ones that
 --- selected something. Every mark is recreated rather than moved: a mark travels with the
 --- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
@@ -501,6 +534,10 @@ local function draw_presence(cursors)
       end
     end
   end
+  -- After the draw, because which peers stand in a buffer is only known once every cursor is
+  -- drawn: that set is what a session row says that a presence frame changes.
+  publish_file_peers()
+  refresh_indicators()
 end
 
 --- The peers the last presence report drew, keyed by peer id: the ones whose caret this client
@@ -671,11 +708,13 @@ local function watch_presence()
   })
   -- A colorscheme runs `highlight clear`, which takes the peer groups the session made with
   -- it: without this the paint cache would skip setting them ever again, leaving carets
-  -- and fills unstyled for the rest of the session.
+  -- and fills unstyled for the rest of the session. The session row's own group goes the same
+  -- way, so its flag is dropped with them.
   api.nvim_create_autocmd('ColorScheme', {
     group = state.presence_group,
     callback = function()
       state.peer_paints = {}
+      state.session_painted = false
       draw_presence(state.cursors)
     end,
   })
@@ -1608,19 +1647,99 @@ local function unfetched_buffer(bufnr)
   return not mirror.written(path)
 end
 
---- The session's own row for a buffer: its words, and the mark a file holding no fetched
---- content carries. Nil when the session has nothing to say.
-local function session_text(bufnr)
-  local words = session_words()
-  if words == nil then
+--- The room path a buffer stands for: a guest's file in the mirror, a host's file under the
+--- session's root, or a `selvage://` buffer for a document the listing does not name. Nil for
+--- anything else, so a buffer that is not the room's gets no marks.
+local function buffer_room_path(bufnr)
+  local name = api.nvim_buf_get_name(bufnr)
+  if name == '' then
     return nil
   end
-  pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
-  return ('%s%s%s%%*'):format(
+  local mirrored = mirror.room_path(name)
+  if mirrored ~= nil then
+    return mirrored
+  end
+  local hosted = room_path(bufnr)
+  if hosted ~= nil then
+    return hosted
+  end
+  if name:sub(1, 10) == 'selvage://' then
+    return name:sub(11)
+  end
+  return nil
+end
+
+--- The peers the last presence report drew in this buffer, as the two cells and the colour the
+--- gutter draws for them — the same `sign` and `highlight` `state.peers` carries, so the row and
+--- the gutter cannot disagree about who is where. Ordered by peer id, so a report that reorders
+--- them does not reorder the row.
+local function file_peer_marks(bufnr)
+  local path = buffer_room_path(bufnr)
+  if path == nil then
+    return {}
+  end
+  local marks = {}
+  for _, peer in ipairs(state.peers) do
+    if peer.path == path and peer.sign ~= nil and peer.highlight ~= nil then
+      marks[#marks + 1] = { sign = peer.sign, highlight = peer.highlight, peerId = peer.peerId }
+    end
+  end
+  table.sort(marks, function(left, right)
+    return tostring(left.peerId) < tostring(right.peerId)
+  end)
+  return marks
+end
+
+--- How the session row is shown: `never` for `vim.g.selvage_indicator = false`, `always` for
+--- `true` or `'always'`, and `changes` — the default — for the row that appears only when it has
+--- something a person must react to rather than a standing line of role and headcount.
+local function indicator_mode()
+  local setting = vim.g.selvage_indicator
+  if setting == false then
+    return 'never'
+  end
+  if setting == true or setting == 'always' then
+    return 'always'
+  end
+  return 'changes'
+end
+
+--- Whether this buffer's row is wanted: an actionable session state, a peer present in this file,
+--- or content the room has not sent yet. Under `always` a live session's row is always wanted.
+local function row_wanted(bufnr)
+  local mode = indicator_mode()
+  if mode == 'never' then
+    return false
+  end
+  if state.reconnecting or state.status == 'connecting' or state.host_away ~= nil then
+    return true
+  end
+  if mode == 'always' then
+    return session_words() ~= nil
+  end
+  return unfetched_buffer(bufnr) or #file_peer_marks(bufnr) > 0
+end
+
+--- The session's own row for a buffer: its words, the mark a file holding no fetched content
+--- carries, and the initial cells of the peers whose caret is in it. Nil when the buffer has no
+--- row to wear — `row_wanted` is that question.
+local function session_text(bufnr)
+  if not row_wanted(bufnr) then
+    return nil
+  end
+  if not state.session_painted then
+    pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
+    state.session_painted = true
+  end
+  local row = ('%s%s%s'):format(
     SESSION_FRAME,
-    words,
+    session_words() or '',
     unfetched_buffer(bufnr) and ' [not fetched]' or ''
   )
+  for _, mark in ipairs(file_peer_marks(bufnr)) do
+    row = row .. (' %%#%s#%s'):format(mark.highlight, mark.sign)
+  end
+  return row .. '%*'
 end
 
 --- The row a window's buffer should wear: the follow's while one stands, the session's
@@ -1706,7 +1825,7 @@ end
 ---
 --- While a follow stands nothing moves: the row is the follow's, the membership report does not
 --- change its words, and the follow's own paths are what re-label it.
-local function refresh_indicators()
+refresh_indicators = function()
   if state.following ~= nil then
     return
   end
@@ -1716,7 +1835,6 @@ local function refresh_indicators()
     end
   end
 end
-
 --- Draws the row again in the windows showing `bufnr`: what one buffer holds is the one
 --- thing the row says that changes without a session event — the mark a file wears while the
 --- room's text has not arrived goes the moment it does.
@@ -2548,6 +2666,9 @@ local function reset(land, keep_mirror)
   state.peers = {}
   state.room_peers = {}
   state.cursors = {}
+  -- The seam a file-list plugin reads is emptied with the session: a badge for a peer is not
+  -- something to leave standing over a room that is gone.
+  publish_file_peers()
   for _, name in pairs(state.peer_groups) do
     pcall(api.nvim_set_hl, 0, name, {})
   end

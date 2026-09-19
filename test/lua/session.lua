@@ -1633,6 +1633,9 @@ local function row(win)
   return vim.api.nvim_get_option_value('winbar', { win = win or 0 })
 end
 
+-- This section pins the always-on row; the conditional default is pinned in its own section below.
+vim.g.selvage_indicator = true
+
 selvage.host('ws://127.0.0.1:1')
 check('a session with nothing on the row yet', row(), own_winbar)
 handlers().on_message({ type = 'status', state = 'connecting' })
@@ -1702,7 +1705,7 @@ vim.g.selvage_indicator = false
 handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
 check('the session row can be turned off', row(), own_winbar)
 check('  and the statusline says nothing then', selvage.statusline(), '')
-vim.g.selvage_indicator = nil
+vim.g.selvage_indicator = true
 handlers().on_message({
   type = 'report',
   report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } } },
@@ -1720,6 +1723,87 @@ check(
   row(),
   '%#SelvageSession#Selvage: guest — 1 person in the room%*'
 )
+selvage.leave()
+
+-- -- the row only when it has something to say ----------------------------------------
+--
+-- The default is not the standing role-and-headcount line: that costs a screen row per window
+-- to repeat two things a person already knows. A row appears when it must — a connection being
+-- made or retried, the host away, content not fetched, or a peer in this file — and goes again.
+-- `vim.g.selvage_indicator = true` above is the old always-on row.
+
+vim.g.selvage_indicator = nil
+vim.cmd('edit! ' .. path)
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-changes' })
+local changes_path = last_of('open') and last_of('open').path
+check('a healthy session leaves the row to the person', row(), own_winbar)
+check(
+  '  while the statusline still reports the session',
+  selvage.statusline(),
+  'Selvage: hosting — 1 person in the room'
+)
+
+-- A peer in this file earns the row: the cells and the colour are the gutter's own, so the two
+-- cannot disagree about who is here.
+local presence_events = 0
+local seam_autocmd = vim.api.nvim_create_autocmd('User', {
+  pattern = 'SelvagePresence',
+  callback = function()
+    presence_events = presence_events + 1
+  end,
+})
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } } },
+})
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-ada',
+      label = 'Ada Lovelace',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#61afef',
+      fill = '#61afef40',
+    },
+  },
+})
+check(
+  'a peer in this file puts their cells on the row',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 2 people in the room %#SelvagePeer1#Ad%*'
+)
+local file_peers = vim.g.selvage_file_peers
+local here = type(file_peers) == 'table' and file_peers[changes_path] or nil
+check('the file-peers seam names them too', here ~= nil and #here, 1)
+check('  with the gutter cells', here ~= nil and here[1].initials, 'Ad')
+check('  and a User event fires with it', presence_events > 0, true)
+vim.api.nvim_del_autocmd(seam_autocmd)
+
+-- The row goes again when the peer does: nothing about this file is left standing.
+handlers().on_message({ type = 'presence', cursors = {} })
+check('the row goes when the peer does', row(), own_winbar)
+
+-- The connection states still earn it.
+handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
+check('a retried connection shows on the row', row(), '%#SelvageSession#Selvage: reconnecting…%*')
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { changes_path } } })
+check('  and goes again when it speaks', row(), own_winbar)
+
+-- The string spelling is the same request as `true`.
+vim.g.selvage_indicator = 'always'
+handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+check(
+  "`'always'` is the always-on row too",
+  row(),
+  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+)
+vim.g.selvage_indicator = nil
+
 selvage.leave()
 
 -- -- a companion that misspeaks ---------------------------------------------------------

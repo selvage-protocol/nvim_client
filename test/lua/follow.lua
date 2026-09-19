@@ -12,6 +12,9 @@ vim.cmd('runtime! plugin/selvage.lua')
 
 -- A name for the sessions this file starts.
 vim.g.selvage_display_name = 'Test User'
+-- This file is about following, not about when the row appears: it pins the always-on row, whose
+-- conditional default has its own section in `test/lua/session.lua`.
+vim.g.selvage_indicator = true
 
 local failures = 0
 
@@ -135,15 +138,44 @@ check('  and the second file with it', path1 ~= path2, true)
 --- room lists, plus this client.
 local named_peers = {}
 
+--- The room path the current buffer stands for: a guest's file in the mirror, or a `selvage://`
+--- buffer for a document the listing does not name.
+local function open_room_path()
+  local name = vim.fn.bufname('%')
+  if name:sub(1, 10) == 'selvage://' then
+    return name:sub(11)
+  end
+  local root = selvage.session().mirror
+  if root ~= nil and name:sub(1, #root + 1) == root .. '/' then
+    return name:sub(#root + 2)
+  end
+  return nil
+end
+
 --- The row the session itself wears in a window with no follow standing, as the indicator
 --- writes it. This file runs a live session, so a row that is not the follow's is the
 --- session's — the words themselves are pinned in `test/lua/session.lua`, and what is pinned
---- here is that the follow's row came down and the session's took its place.
+--- here is that the follow's row came down and the session's took its place. The peer cells are
+--- the ones the gutter draws, in the order the row writes them.
 local function session_row()
   local who = selvage.session().status == 'hosting' and 'hosting' or 'guest'
   local here = #named_peers + 1
   local count = here == 1 and '1 person in the room' or ('%d people in the room'):format(here)
-  return ('%%#SelvageSession#Selvage: %s — %s%%*'):format(who, count)
+  local row = ('%%#SelvageSession#Selvage: %s — %s'):format(who, count)
+  local path = open_room_path()
+  local in_file = {}
+  for _, peer in ipairs(selvage.peers()) do
+    if peer.path == path and peer.sign ~= nil and peer.highlight ~= nil then
+      in_file[#in_file + 1] = peer
+    end
+  end
+  table.sort(in_file, function(left, right)
+    return tostring(left.peerId) < tostring(right.peerId)
+  end)
+  for _, peer in ipairs(in_file) do
+    row = row .. (' %%#%s#%s'):format(peer.highlight, peer.sign)
+  end
+  return row .. '%*'
 end
 
 local function peers_report(peers)
