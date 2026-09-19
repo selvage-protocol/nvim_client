@@ -88,9 +88,9 @@ end
 --- `SelvageFetch` names what the mirror needs: a real directory that this editor's own
 --- extensions — ripgrep, ctags, a language server — read for themselves, so it has to be
 --- filled. The other client has the twin command since its room became a real directory too,
---- and the phrase for it is this one in both: `Fetch the room's content into the mirror`
---- described the mechanism rather than the command, and the two clients were not naming the
---- same intent with the same words. The README says why; `AGENTS.md` §4 is the rule.
+--- and the phrase for it is this one in both: `Download a file from the room`, which says what
+--- the command does rather than naming the mirror it fills. The README says why; `AGENTS.md`
+--- §4 is the rule.
 local TITLES = {
   SelvageHost = 'Host a session',
   SelvageJoin = 'Join a session from an invite link',
@@ -117,21 +117,21 @@ local TITLES = {
 --- the one whose room had nothing open: no document and no tree is a join with no other news.
 local MESSAGES = {
   -- Hosting and joining.
-  { 'INFO', 'the room is open (sharing %s); the invite link is on the clipboard.' },
-  { 'INFO', 'the room is open (sharing %s); :SelvageCopyInvite copies the invite link.' },
-  { 'INFO', 'you are already hosting; the invite link is on the clipboard.' },
+  { 'INFO', 'the room is open. Send this link to your friend — it is on the clipboard.' },
+  { 'INFO', 'the room is open; :SelvageCopyInvite copies the invite link.' },
+  { 'INFO', 'you are already hosting this session; the invite link is on the clipboard.' },
   { 'WARN', 'a session is already being opened.' },
   { 'INFO', 'joined the room — opening %s.' },
   { 'INFO', 'joined the room — opening %s; %d more in the room.' },
   { 'INFO', 'joined the room.' },
   { 'INFO', 'joined the room; the room has no open documents yet.' },
   { 'INFO', 'joined the room; the room has no open documents yet; %d files mirrored at %s.' },
-  { 'WARN', 'you are hosting; joining another session ends this room for everyone.' },
-  { 'WARN', 'you are in a session; joining another session leaves it.' },
-  { 'WARN', 'you are in a session; hosting a session means leaving it first.' },
+  { 'WARN', 'you are hosting this session; joining another session ends this room for everyone.' },
+  { 'WARN', 'you are in this session; joining another session leaves it.' },
+  { 'WARN', 'you are in this session; hosting a session means leaving it first.' },
   -- The room's documents, and the invite.
   { 'INFO', 'the room has no open documents yet.' },
-  { 'INFO', 'you are hosting, so the files you open are the ones the room has.' },
+  { 'INFO', 'you are the host — the files you open are the ones your guests see.' },
   { 'WARN', 'join a session first.' },
   { 'WARN', 'no shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
@@ -157,8 +157,8 @@ local MESSAGES = {
   { 'INFO', 'the name others see is "%s"; :SelvageDisplayName <name> to change it.' },
   { 'INFO', 'display name set to "%s".' },
   { 'ERROR', 'a name is needed; the session was not started.' },
-  { 'ERROR', 'that name is %s. Pick a shorter one.' },
-  { 'ERROR', 'the configured name is %s, so %s. Set a shorter one in %s.' },
+  { 'ERROR', 'this name is %s; a name is refused rather than shortened.' },
+  { 'ERROR', 'this name is %s; a name is refused rather than shortened, so %s. Set a shorter one in %s.' },
   { 'ERROR', 'no display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.' },
   -- The list of participants.
   { 'WARN', 'no other participants yet.' },
@@ -171,6 +171,9 @@ local MESSAGES = {
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
   { 'ERROR', 'could not save %s; the file on disk is behind the room%s.' },
   { 'ERROR', 'the connection ended and the session is over; it could not be re-established.' },
+  -- The one refusal the session itself maps from a code rather than repeating: the capacity
+  -- policy the server states with `x.room_full`.
+  { 'ERROR', 'the room is full — it seats no more people.' },
   -- What this front-end refuses on its own.
   { 'ERROR', '%s is not valid UTF-8, so it is not shared.' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared.' },
@@ -201,7 +204,7 @@ local MESSAGES = {
   { 'WARN', '%s is no longer in the room; the host no longer has it.' },
   { 'WARN', "%s is inside the mirror, which holds the room's files, so it is not written; write outside the mirror to keep it." },
   { 'ERROR', '%s could not be written into the mirror.' },
-  { 'INFO', 'you are hosting, so the files a mirror would hold are already on your disk.' },
+  { 'INFO', 'your files are already on your disk, so there is nothing to fetch while you host.' },
   { 'INFO', 'the room lists no files to fetch.' },
   { 'INFO', 'fetching opens them in the room, so every peer receives them.' },
   { 'INFO', 'fetching opens %s in the room, so every peer receives it.' },

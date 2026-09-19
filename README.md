@@ -146,7 +146,7 @@ creating it; anything else says `could not open <path> from the room: <reason>`.
 
 The session itself is on screen without any statusline configuration: the window wears a `winbar`
 row saying which end of the session this is and how many people are in it —
-`Selvage: hosting — 2 here`, `Selvage: guest — 2 here`, `Selvage: connecting…` while a connection
+`Selvage: hosting — 2 people in the room`, `Selvage: guest — 2 people in the room`, `Selvage: connecting…` while a connection
 is being made and `Selvage: reconnecting…` while a dropped one is retried. It is the same mechanism
 as the follow's row and the same discipline: window-local, the person's own row saved and put back,
 and a follow's row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off

@@ -141,7 +141,9 @@ local named_peers = {}
 --- here is that the follow's row came down and the session's took its place.
 local function session_row()
   local who = selvage.session().status == 'hosting' and 'hosting' or 'guest'
-  return ('%%#SelvageSession#Selvage: %s — %d here%%*'):format(who, #named_peers + 1)
+  local here = #named_peers + 1
+  local count = here == 1 and '1 person in the room' or ('%d people in the room'):format(here)
+  return ('%%#SelvageSession#Selvage: %s — %s%%*'):format(who, count)
 end
 
 local function peers_report(peers)
@@ -808,7 +810,7 @@ check(
 check('  which the session reports', selvage.following(), nil)
 check('  which the global reports', vim.g.selvage_following, nil)
 check('  which the window reports', vim.api.nvim_get_option_value('winbar', { win = 0 }), session_row())
-check('  which the statusline reports', selvage.statusline(), 'Selvage: guest — 2 here')
+check('  which the statusline reports', selvage.statusline(), 'Selvage: guest — 2 people in the room')
 
 -- An edit in the followed document itself ends it the same way.
 local before_refollow = #notices

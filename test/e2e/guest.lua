@@ -77,7 +77,7 @@ harness.wait('the room text to land', harness.deadline_ms, function()
 end, harness.observe)
 harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
   return vim.api.nvim_get_option_value('winbar', { win = 0 })
-    == '%#SelvageSession#Selvage: guest — 2 here%*'
+    == '%#SelvageSession#Selvage: guest — 2 people in the room%*'
 end, function()
   return vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
 end)

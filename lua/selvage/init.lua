@@ -1034,7 +1034,7 @@ function M.open(path)
     return
   end
   if state.role == 'host' then
-    notify('you are hosting, so the files you open are the ones the room has.', vim.log.levels.INFO)
+    notify('you are the host — the files you open are the ones your guests see.', vim.log.levels.INFO)
     return
   end
   local paths = M.offered()
@@ -1168,7 +1168,7 @@ function M.fetch(path)
     return
   end
   if state.role == 'host' then
-    notify('you are hosting, so the files a mirror would hold are already on your disk.', vim.log.levels.INFO)
+    notify('your files are already on your disk, so there is nothing to fetch while you host.', vim.log.levels.INFO)
     return
   end
   if mirror.root() == nil then
@@ -1539,9 +1539,10 @@ local function session_words()
     return 'Selvage: connecting…'
   end
   if in_session() then
-    return ('Selvage: %s — %d here'):format(
+    local here = #state.room_peers + 1
+    return ('Selvage: %s — %s'):format(
       state.status == 'hosting' and 'hosting' or 'guest',
-      #state.room_peers + 1
+      here == 1 and '1 person in the room' or ('%d people in the room'):format(here)
     )
   end
   return nil
@@ -2541,22 +2542,50 @@ local take_invite
 --- message, which answers with a value the person never chose to see: `no such room: <room id>`
 --- names what could not be found and not the way back from it. A connection that never got as
 --- far as a handshake carries no code — the engine has only its own words about a socket — and
---- the two causes of one are the server at that address and the address itself.
+--- the two causes of one are the server at that address and the address itself, so a host is
+--- told to check the address it dialled and a guest the link it pasted.
 ---
+--- `connect` names which of the two this was — `{ what = 'host', address = … }` or
+--- `{ what = 'join' }` — because the two say different sentences.
+---
+--- @param connect table|nil `what` and, for a host, `address`
 --- @param code string|nil the protocol's own code for a refusal, absent for a socket
 --- @param message string|nil the failure's own words
 --- @return string
-local function connect_failure(code, message)
+local function connect_failure(connect, code, message)
+  local what = connect and connect.what or 'join'
+  local why
   if code == 'room_unknown' then
-    return 'there is no room at that link — check the whole link with the person hosting it.'
+    why = 'That invite names a room the server does not have. Ask the host for a fresh invite.'
+  elseif code == 'token_invalid' then
+    why = 'That invite is no longer valid. Ask the host for a fresh invite.'
+  elseif code == 'host_present' then
+    why = 'That room already has a host.'
+  elseif code == 'x.room_full' then
+    why = 'The room is full — it seats no more people.'
+  elseif code == 'room_gone' then
+    why = 'That room is gone.'
+  elseif code == 'unsupported_version' then
+    why = ('This client and that server speak different versions (%s).'):format(
+      tostring(message or '')
+    )
+  elseif tostring(message or ''):find('^server full') ~= nil then
+    -- The server's own capacity policy, stated in the close reason rather than in a code:
+    -- the room is up, so this is not a connection that failed to reach one.
+    why = 'The server is full. Try again in a few minutes.'
+  elseif code == nil or code == '' or code == 'hello_required' then
+    if what == 'host' then
+      why = 'No server answered — check the address is the one the server printed, and that the server is running.'
+    else
+      why = 'No server answered — check the invite is complete, and that the server is running at the address it names.'
+    end
+  else
+    why = tostring(message or '')
   end
-  if code == 'token_invalid' then
-    return 'that link was refused — paste the whole link exactly as the host sent it.'
+  if what == 'host' then
+    return ('could not host on %s. %s'):format(tostring(connect.address or ''), why)
   end
-  if code == nil or code == '' then
-    return 'could not reach the server — check that it is running and that this is the address it printed.'
-  end
-  return tostring(message or '')
+  return 'could not join the session. ' .. why
 end
 
 local function on_status(message)
@@ -2584,13 +2613,10 @@ local function on_status(message)
     -- A host's next move is pasting the link to a guest, so the room copies its page
     -- link without being asked; `:SelvageCopyInvite` stays for later copies. What is
     -- copied is never the wire address: only the page link leaves this editor.
-    local root = state.root == nil and '(no folder)' or (state.root == '' and '/' or state.root)
     if take_invite() then
-      notify(('the room is open (sharing %s); the invite link is on the clipboard.'):format(root))
+      notify('the room is open. Send this link to your friend — it is on the clipboard.')
     else
-      notify(
-        ('the room is open (sharing %s); :SelvageCopyInvite copies the invite link.'):format(root)
-      )
+      notify('the room is open; :SelvageCopyInvite copies the invite link.')
     end
     share_current()
     watch_buffers()
@@ -2610,7 +2636,7 @@ local function on_status(message)
   elseif message.state == 'error' then
     -- This state is only ever a connection that failed: the companion sends it when the open
     -- behind a host or join throws.
-    notify(connect_failure(message.code, message.message), vim.log.levels.ERROR)
+    notify(connect_failure(state.connect, message.code, message.message), vim.log.levels.ERROR)
     -- Nothing is standing after it, so the row goes with the failure: the notification is
     -- what says why, and a word about a session that is not open would outlive it.
     refresh_indicators()
@@ -2821,11 +2847,16 @@ local function on_report(report)
   elseif report.kind == 'hostAttached' then
     notify(('%s is hosting again.'):format(tostring((report.peer or {}).display_name or 'the host')))
   elseif report.kind == 'sessionError' then
-    -- The report's own sentence. Its code is not shown: a refusal the protocol named and one
-    -- this session made for itself both say what happened in words already — `the room seats
-    -- at most 2 peers`, `will not share .env with the room…` — and a code is a lookup, not a
-    -- sentence.
-    notify(tostring(report.message or ''), vim.log.levels.ERROR)
+    -- The report's own sentence, and its code is not shown: a refusal the protocol named and
+    -- one this session made for itself both say what happened in words already — `the room
+    -- seats at most 2 peers`, `will not share .env with the room…` — and a code is a lookup,
+    -- not a sentence. The one exception is the capacity policy this server states with a code
+    -- of its own, which a person wants said rather than spelled out.
+    if report.code == 'x.room_full' then
+      notify('the room is full — it seats no more people.', vim.log.levels.ERROR)
+    else
+      notify(tostring(report.message or ''), vim.log.levels.ERROR)
+    end
   elseif report.kind == 'applyRefused' then
     notify(
       ('the editor would not apply the room\'s change to %s; the file may be read-only.'):format(
@@ -2997,11 +3028,10 @@ end
 --- never shortened, because the room must see the name its owner chose or no name at all.
 local MAX_DISPLAY_NAME = 32
 
---- How long `name` is beside the limit, in the word a person counts in. The room counts
---- UTF-16 code units, and a sentence about someone's own name is no place for the unit: what
---- is refused is the name as it was typed, and `characters` is what its owner counted.
+--- How long `name` is beside the limit, in the unit the room counts and the sentence both
+--- clients use: UTF-16 code units, so an astral character costs two.
 local function over_long(name)
-  return ('%d characters and the limit is %d'):format(utf16.len(name), MAX_DISPLAY_NAME)
+  return ('%d UTF-16 code units and the limit is %d'):format(utf16.len(name), MAX_DISPLAY_NAME)
 end
 
 --- Whether a name with nobody to re-ask fits the limit, saying so when it does not. A false
@@ -3013,7 +3043,7 @@ local function acceptable(name, source, did)
     return true
   end
   notify(
-    ('the configured name is %s, so %s. Set a shorter one in %s.'):format(
+    ('this name is %s; a name is refused rather than shortened, so %s. Set a shorter one in %s.'):format(
       over_long(name),
       did,
       source
@@ -3131,7 +3161,7 @@ local function resolve_display_name(callback)
       end
       if utf16.len(name) > MAX_DISPLAY_NAME then
         notify(
-          ('that name is %s. Pick a shorter one.'):format(over_long(name)),
+          ('this name is %s; a name is refused rather than shortened.'):format(over_long(name)),
           vim.log.levels.ERROR
         )
         ask()
@@ -3458,7 +3488,7 @@ function M.host(url)
   local wanted = vim.trim(url or '')
   if state.status == 'hosting' then
     if take_invite() then
-      notify('you are already hosting; the invite link is on the clipboard.')
+      notify('you are already hosting this session; the invite link is on the clipboard.')
     end
     return
   end
@@ -3471,7 +3501,7 @@ function M.host(url)
   end
   if in_session() then
     local can_leave = confirm_leave(
-      'you are in a session; hosting a session means leaving it first.',
+      'you are in this session; hosting a session means leaving it first.',
       'Leave and host'
     )
     if not can_leave then
@@ -3485,6 +3515,7 @@ function M.host(url)
       local process = ensure()
       if process ~= nil then
         capture_root()
+        state.connect = { what = 'host', address = address }
         process:send({
           type = 'host',
           serverUrl = address,
@@ -3527,12 +3558,12 @@ function M.join(invite)
     local can_leave
     if state.role == 'host' then
       can_leave = confirm_leave(
-        'you are hosting; joining another session ends this room for everyone.',
+        'you are hosting this session; joining another session ends this room for everyone.',
         'Leave and join'
       )
     else
       can_leave = confirm_leave(
-        'you are in a session; joining another session leaves it.',
+        'you are in this session; joining another session leaves it.',
         'Leave and join'
       )
     end
@@ -3549,6 +3580,7 @@ function M.join(invite)
         -- The invite this guest joined by is kept as it arrived: it is the permission the
         -- room was entered with, so it is the guest's to hand on (`:SelvageCopyInvite`).
         state.invite = link
+        state.connect = { what = 'join' }
         process:send({
           type = 'join',
           -- The companion dials the wire URL: a pasted page link resolves to its
@@ -3636,7 +3668,10 @@ function M.set_display_name(name)
     return
   end
   if utf16.len(wanted) > MAX_DISPLAY_NAME then
-    notify(('that name is %s. Pick a shorter one.'):format(over_long(wanted)), vim.log.levels.ERROR)
+    notify(
+      ('this name is %s; a name is refused rather than shortened.'):format(over_long(wanted)),
+      vim.log.levels.ERROR
+    )
     return
   end
   vim.g.selvage_display_name = wanted

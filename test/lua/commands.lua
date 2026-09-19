@@ -513,7 +513,7 @@ check('a join while hosting asks first', confirmations, 1)
 check(
   '  naming what joining it does, never the room id',
   question and question.text,
-  'you are hosting; joining another session ends this room for everyone.'
+  'you are hosting this session; joining another session ends this room for everyone.'
 )
 check('  offering to leave and join', question and question.choices, '&Leave and join\n&Cancel')
 check('  a declined question joins nothing', count_type('join'), joins_before)
@@ -538,7 +538,7 @@ check('a host while a guest asks first', confirmations, asks_before + 1)
 check(
   '  saying that hosting means leaving',
   question and question.text,
-  'you are in a session; hosting a session means leaving it first.'
+  'you are in this session; hosting a session means leaving it first.'
 )
 check('  offering to leave and host', question and question.choices, '&Leave and host\n&Cancel')
 check('  a declined question hosts nothing', count_type('host'), hosts_before)
@@ -589,8 +589,8 @@ check(
 )
 check(
   '  and says so',
-  said_since(before, 'the room is open (sharing ') ~= nil
-    and said_since(before, 'the invite link is on the clipboard.') ~= nil,
+  said_since(before, 'the room is open. Send this link') ~= nil
+    and said_since(before, 'on the clipboard.') ~= nil,
   true
 )
 
@@ -652,7 +652,7 @@ local window_before = vim.fn.bufname('%')
 vim.cmd('SelvageOpen')
 check(
   ':SelvageOpen while hosting is refused with the reason',
-  said_since(before, 'you are hosting, so the files you open are the ones the room has') ~= nil,
+  said_since(before, 'you are the host — the files you open are the ones your guests see') ~= nil,
   true
 )
 check('  and the window is left where it was', vim.fn.bufname('%'), window_before)

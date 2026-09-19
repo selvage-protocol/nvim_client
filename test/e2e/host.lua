@@ -37,7 +37,7 @@ harness.wait_for_file('the guest to report it has joined', harness.deadline_ms, 
 -- against a real server, which is what makes the count a fact about the room.
 harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
   return vim.api.nvim_get_option_value('winbar', { win = 0 })
-    == '%#SelvageSession#Selvage: hosting — 2 here%*'
+    == '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
 end, function()
   return vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
 end)
