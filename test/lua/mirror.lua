@@ -925,6 +925,17 @@ check(
   true
 )
 
+-- Removing the path from the listing takes the mark with it: `unfetched_buffer` reads the
+-- grant, so a window already showing the buffer is redrawn when the listing changes rather
+-- than keeping a mark for a file the room no longer lists.
+handle({ type = 'report', report = { kind = 'grant', paths = {} } })
+check(
+  'a path the room stops listing loses the mark at once',
+  winbar():find(' [not fetched]', 1, true) == nil,
+  true
+)
+handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
+
 -- Entering it again is not news: the sentence is for the open, and the buffer is still empty.
 local hint_repeated = #notices
 vim.api.nvim_exec_autocmds('BufEnter', { buffer = vim.api.nvim_get_current_buf() })

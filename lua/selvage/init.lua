@@ -2777,6 +2777,10 @@ local function on_report(report)
             notice_gone(path)
           end
         end
+        -- The grant is what `unfetched_buffer` reads, so a window already showing a buffer the
+        -- listing no longer names is carrying a mark that is now wrong: the row is redrawn here
+        -- rather than waiting for the next keystroke or session event.
+        refresh_indicators()
       end
     end
   elseif report.kind == 'peers' then
