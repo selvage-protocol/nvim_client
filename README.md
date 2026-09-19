@@ -201,11 +201,11 @@ peer's document only when it resolves to a readable file inside the shared folde
 it; anything else says `could not open <path> from the room: <reason>`.
 
 The session itself is on screen without any statusline configuration: the window wears a `winbar`
-row saying which end of the session this is (`Selvage: hosting` or `Selvage: guest`) and how many
-people are in it (`2 people in the room`). It says `Selvage: connecting…` while a connection is
-being made and `Selvage: reconnecting…` while a dropped one is retried. It is the same mechanism
-as the follow's row and the same discipline: window-local, the person's own row saved and put back,
-and a follow's row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off
+row with one combined indicator: `Selvage: hosting` or `Selvage: guest`, followed by an em dash
+separator and the participant count (for example, `2 people in the room`), all in a single string.
+It says `Selvage: connecting…` while a connection is being made and `Selvage: reconnecting…` while
+a dropped one is retried. It is the same mechanism as the follow's row and the same discipline:
+window-local, the person's own row saved and put back, and a follow's row wins while one stands. `vim.g.selvage_indicator = false` leaves the row off
 entirely. `%{v:lua.require'selvage'.statusline()}` returns those words for a statusline that
 wants them somewhere else, and with the file itself in front of it: one holding no fetched content
 has the row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
