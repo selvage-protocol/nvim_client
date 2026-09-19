@@ -200,16 +200,31 @@ same; the picker refuses its own rows where the row says they are in no document
 peer's document only when it resolves to a readable file inside the shared folder, never creating
 it; anything else says `could not open <path> from the room: <reason>`.
 
-The session is on screen without any statusline configuration: the window's `winbar` carries one
-indicator, the side of the session (`Selvage: hosting` or `Selvage: guest`) and the participant
-count (`2 people in the room`) in a single string separated by an em dash. While a connection is
-being made the row says `Selvage: connecting…`, and while a dropped one is retried it says
-`Selvage: reconnecting…`. It uses the same mechanism and the same discipline as the follow's row:
-window-local, the person's own row saved and put back, and a follow's row wins while one stands.
-`vim.g.selvage_indicator = false` leaves the row off entirely.
+The session is on screen without any statusline configuration: the window's `winbar`, when it has
+something to say. In a healthy session the row is empty — the side of the session and the
+headcount are two facts a person already knows, and a terminal line per window is the scarcest
+space there is — and the row appears only while it must: a connection being made
+(`Selvage: connecting…`), a dropped one being retried (`Selvage: reconnecting…`), the host away,
+a peer present in the file in front of the person, or a file whose content has not been fetched
+(`[not fetched]`). `vim.g.selvage_indicator = true` (or `'always'`) keeps the old standing row of
+role and headcount; `vim.g.selvage_indicator = false` leaves the row off entirely.
+
+While the host is absent the row says who left and what is at stake, with the seconds the server
+has left counted down from its deadline rather than printed once: `Selvage: Host disconnected.
+<name> left — if they return within <n>s the session continues, otherwise this room closes and
+work in it is lost.` The same sentence is announced once when the absence begins, and `<name> is
+back — the session continues.` when the host returns. It uses the same mechanism and the same
+discipline as the follow's row: window-local, the person's own row saved and put back, and a
+follow's row wins while one stands.
 `%{v:lua.require'selvage'.statusline()}` returns those words for a statusline that wants them
 somewhere else, and with the file itself in front of it: one holding no fetched content has the
 row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
+
+Which peers are in the file in front of the person is shown in the row as the same two cells and
+the same colour the gutter draws, so the two cannot disagree, and published for everyone else as
+`vim.g.selvage_file_peers`, a map of room path to `{ initials, colour, label, peerId }`, with a
+`User SelvagePresence` autocmd fired whenever it changes. netrw, oil.nvim, nvim-tree, telescope,
+lualine and heirline each decorate from that one table, and this client depends on none of them.
 
 ### The vendored engine
 
@@ -399,13 +414,17 @@ The directory is a **cache of the room and never a source of truth**. It lives u
 hosts) and never inside the person's project, one directory per session inside the room's, named
 for the process that owns it. The session that made it removes it on the way out, and a directory
 a crashed session left behind is pruned by the next one: only a directory whose process is gone is
-removed, so a second Neovim mirroring the same room keeps its own.
+removed, so a second Neovim mirroring the same room keeps its own. The one ending that keeps the
+directory is a room closing under a guest: whatever the person did in the mirror during the grace
+is not in the room and reaches no one, so nothing there is a cache of anything the room still has
+and the directory stays, with a sentence saying where.
 
 A room that dies under a guest does not leave its buffers in the window: `roomGone`, and the
 connection the engine gave up on, land every window showing one on a fresh empty buffer, wipe the
 room's buffers that hold nothing the person changed, and keep the ones that do, saying how many,
-because the session that could save them is over. A host is left alone: its buffers are its own
-files. Pinned by `test/lua/session.lua`.
+because the session that could save them is over, and keep the mirror itself with the sentence
+`The room closed. Your copy is kept at <path>.` A host is left alone: its buffers, and its files,
+are its own. Pinned by `test/lua/session.lua`.
 
 A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not
 run Neovim's write path, and the file is written by this client from the buffer, as the save the

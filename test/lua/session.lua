@@ -1297,17 +1297,52 @@ handlers().on_message({
   type = 'report',
   report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
 })
-check('the host coming back is announced', said_since(before_attached, 'Ada is hosting again') ~= nil, true)
+check('the host coming back is announced', said_since(before_attached, 'Ada is back — the session continues.') ~= nil, true)
 check('  at information level', notices[#notices].level, vim.log.levels.INFO)
 
 local before_detached = #notices
 handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 30000 } })
 check(
-  'the host going is announced in seconds',
-  said_since(before_detached, 'it closes in 30s unless they come back') ~= nil,
+  'the host going is announced with the cause and the deadline',
+  said_since(
+    before_detached,
+    'Host disconnected. Ada left — if they return within 30s the session continues, otherwise this room closes and work in it is lost.'
+  ) ~= nil,
   true
 )
 check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+check(
+  '  and the row says it too, persistently',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Host disconnected. Ada left', 1, true) ~= nil,
+  true
+)
+
+-- The number is the room's clock, not a value printed once: it is derived from the deadline and
+-- the row is redrawn every second until the host returns or the room goes. The wait polls the row
+-- for the next reading rather than assuming a turn.
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 2000 } })
+check(
+  'the row shows the deadline it was given',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 2s', 1, true) ~= nil,
+  true
+)
+local ticked = vim.wait(4000, function()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
+end, 50)
+check('  and the number counts down', ticked, true)
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+check(
+  '  and the row takes the countdown down when the host returns',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
+  true
+)
 
 local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
@@ -1379,6 +1414,53 @@ local before_clean = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
 check('an unchanged room buffer goes with the room', vim.api.nvim_buf_is_valid(only_buf), false)
 check('  and nothing was kept to announce', said_since(before_clean, 'were kept') ~= nil, false)
+
+-- -- a closed room keeps a guest's mirror ------------------------------------------
+--
+-- A room can close under a guest: a host who does not come back inside the grace makes the
+-- server destroy it, and whatever the guest did in the mirror during the grace is not in the
+-- room and reaches no one. Deleting the directory would destroy the only copy, so it is kept
+-- and the person told where it is.
+
+selvage.join('ws://127.0.0.1:1/session?room=r-kept&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-kept' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'grant', paths = { 'kept/one.txt', 'kept/two.txt' } },
+})
+local kept_root = selvage.session().mirror
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'kept/one.txt' } },
+})
+vim.cmd('SelvageOpen kept/one.txt')
+local kept_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(kept_buf, 0, -1, false, { 'guest work' })
+-- The save is what puts the guest's typing on disk, the way the room's text is written when it
+-- arrives: this is the copy the closed room must not take with it.
+handlers().on_message({ type = 'save', id = 4243, path = 'kept/one.txt' })
+check('the guest saved work into the mirror', vim.fn.readfile(kept_root .. '/kept/one.txt')[1], 'guest work')
+-- A file the guest made in the mirror outside the editor is theirs too, and it goes the same way.
+vim.fn.writefile({ 'notes the room never heard' }, kept_root .. '/kept/scratch.txt')
+
+local before_kept = #notices
+handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+check('the room closing keeps the guest mirror', vim.fn.isdirectory(kept_root), 1)
+check(
+  '  holding the work the guest saved',
+  vim.fn.readfile(kept_root .. '/kept/one.txt')[1],
+  'guest work'
+)
+check(
+  '  and a file the guest made outside the editor',
+  vim.fn.readfile(kept_root .. '/kept/scratch.txt')[1],
+  'notes the room never heard'
+)
+check(
+  '  and the person is told where it is',
+  said_since(before_kept, ('The room closed. Your copy is kept at %s.'):format(kept_root)) ~= nil,
+  true
+)
 
 -- A report's cause is part of what it says: the sentence is the fact and the parenthetical is
 -- why, and a report that carries a reason must not lose it. The kind name is not a sentence.
@@ -1551,6 +1633,9 @@ local function row(win)
   return vim.api.nvim_get_option_value('winbar', { win = win or 0 })
 end
 
+-- This section pins the always-on row; the conditional default is pinned in its own section below.
+vim.g.selvage_indicator = true
+
 selvage.host('ws://127.0.0.1:1')
 check('a session with nothing on the row yet', row(), own_winbar)
 handlers().on_message({ type = 'status', state = 'connecting' })
@@ -1620,7 +1705,7 @@ vim.g.selvage_indicator = false
 handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
 check('the session row can be turned off', row(), own_winbar)
 check('  and the statusline says nothing then', selvage.statusline(), '')
-vim.g.selvage_indicator = nil
+vim.g.selvage_indicator = true
 handlers().on_message({
   type = 'report',
   report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } } },
@@ -1638,6 +1723,87 @@ check(
   row(),
   '%#SelvageSession#Selvage: guest — 1 person in the room%*'
 )
+selvage.leave()
+
+-- -- the row only when it has something to say ----------------------------------------
+--
+-- The default is not the standing role-and-headcount line: that costs a screen row per window
+-- to repeat two things a person already knows. A row appears when it must — a connection being
+-- made or retried, the host away, content not fetched, or a peer in this file — and goes again.
+-- `vim.g.selvage_indicator = true` above is the old always-on row.
+
+vim.g.selvage_indicator = nil
+vim.cmd('edit! ' .. path)
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-changes' })
+local changes_path = last_of('open') and last_of('open').path
+check('a healthy session leaves the row to the person', row(), own_winbar)
+check(
+  '  while the statusline still reports the session',
+  selvage.statusline(),
+  'Selvage: hosting — 1 person in the room'
+)
+
+-- A peer in this file earns the row: the cells and the colour are the gutter's own, so the two
+-- cannot disagree about who is here.
+local presence_events = 0
+local seam_autocmd = vim.api.nvim_create_autocmd('User', {
+  pattern = 'SelvagePresence',
+  callback = function()
+    presence_events = presence_events + 1
+  end,
+})
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } } },
+})
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-ada',
+      label = 'Ada Lovelace',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#61afef',
+      fill = '#61afef40',
+    },
+  },
+})
+check(
+  'a peer in this file puts their cells on the row',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 2 people in the room %#SelvagePeer1#Ad%*'
+)
+local file_peers = vim.g.selvage_file_peers
+local here = type(file_peers) == 'table' and file_peers[changes_path] or nil
+check('the file-peers seam names them too', here ~= nil and #here, 1)
+check('  with the gutter cells', here ~= nil and here[1].initials, 'Ad')
+check('  and a User event fires with it', presence_events > 0, true)
+vim.api.nvim_del_autocmd(seam_autocmd)
+
+-- The row goes again when the peer does: nothing about this file is left standing.
+handlers().on_message({ type = 'presence', cursors = {} })
+check('the row goes when the peer does', row(), own_winbar)
+
+-- The connection states still earn it.
+handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
+check('a retried connection shows on the row', row(), '%#SelvageSession#Selvage: reconnecting…%*')
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { changes_path } } })
+check('  and goes again when it speaks', row(), own_winbar)
+
+-- The string spelling is the same request as `true`.
+vim.g.selvage_indicator = 'always'
+handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+check(
+  "`'always'` is the always-on row too",
+  row(),
+  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+)
+vim.g.selvage_indicator = nil
+
 selvage.leave()
 
 -- -- a companion that misspeaks ---------------------------------------------------------

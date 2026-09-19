@@ -102,6 +102,21 @@ local state = {
   --- out loud. The indicator's own rows live in `saved_winbars`, one per window and buffer.
   --- A local view state, never advertised: nothing about it reaches the room.
   following = nil,
+  --- Whether the caret is being placed by the follow itself. Neovim gives no reason for a cursor
+  --- change, so the follow's own landing is what the move handler must not read as the user's.
+  applying_follow = false,
+  --- The host's absence, while the room waits out its grace: the name to say and the deadline the
+  --- countdown is derived from. Nil while the host is present.
+  host_away = nil,
+  --- The repeating timer that redraws the host-away countdown, or nil when none is running.
+  host_away_timer = nil,
+  --- The display name of the room's host, remembered from a peers report so the sentence that says
+  --- they left can name them: `host.detached` carries no name, and `peer.left` has already removed
+  --- them from the room by the time it arrives.
+  host_name = nil,
+  --- Whether the session highlight is set for the current colorscheme. A colorscheme runs
+  --- `highlight clear`, which takes it, so the flag is dropped there and the group is made again.
+  session_painted = false,
   --- A go-to whose landing cannot be made yet: the peer id and the label the refusal would
   --- name. A one-shot follow — every room event that could have brought the text tries it
   --- again, and the first landing, refusal or departure clears it.
@@ -219,6 +234,21 @@ end
 --- deadlines are named in and the one the other client shows.
 local function seconds(ms)
   return math.max(0, math.floor((tonumber(ms) or 0) / 1000 + 0.5))
+end
+
+--- The whole seconds left before `deadline`, rounded up: a deadline twelve and a half seconds away
+--- still has thirteen seconds to run and reads so, and a passed one reads zero rather than a
+--- negative count. Derived from the deadline on every read, so the number a person sees is the
+--- room's clock rather than a value printed once when the countdown started.
+---
+--- @param deadline number a `uv.now()` millisecond timestamp
+--- @return integer
+local function until_seconds(deadline)
+  local left = (tonumber(deadline) or 0) - uv.now()
+  if left <= 0 then
+    return 0
+  end
+  return math.ceil(left / 1000)
 end
 
 --- How long after the first caret event a selection reaches the companion.
@@ -371,6 +401,36 @@ local function cell_before(line, col)
   return vim.fn.byteidx(line, index)
 end
 
+--- The session row redraw lives with the indicators far below, and a presence report is the other
+--- thing that changes what a row says — the peers in a buffer. Declared here so the draw can call
+--- it; assigned where the row is drawn.
+local refresh_indicators
+
+--- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
+--- (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is `{ [room_path] = { { initials,
+--- colour, label, peerId } } }` and `User SelvagePresence` fires whenever it changes. This client
+--- draws the row itself and depends on none of them.
+local function publish_file_peers()
+  local by_path = {}
+  for _, peer in ipairs(state.peers) do
+    if type(peer.path) == 'string' then
+      local list = by_path[peer.path]
+      if list == nil then
+        list = {}
+        by_path[peer.path] = list
+      end
+      list[#list + 1] = {
+        initials = peer.sign,
+        colour = peer.colour,
+        label = peer.label,
+        peerId = peer.peerId,
+      }
+    end
+  end
+  vim.g.selvage_file_peers = by_path
+  api.nvim_exec_autocmds('User', { pattern = 'SelvagePresence' })
+end
+
 --- Draws the peer carets a presence report resolved, and the ranges behind the ones that
 --- selected something. Every mark is recreated rather than moved: a mark travels with the
 --- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
@@ -474,6 +534,10 @@ local function draw_presence(cursors)
       end
     end
   end
+  -- After the draw, because which peers stand in a buffer is only known once every cursor is
+  -- drawn: that set is what a session row says that a presence frame changes.
+  publish_file_peers()
+  refresh_indicators()
 end
 
 --- The peers the last presence report drew, keyed by peer id: the ones whose caret this client
@@ -644,11 +708,13 @@ local function watch_presence()
   })
   -- A colorscheme runs `highlight clear`, which takes the peer groups the session made with
   -- it: without this the paint cache would skip setting them ever again, leaving carets
-  -- and fills unstyled for the rest of the session.
+  -- and fills unstyled for the rest of the session. The session row's own group goes the same
+  -- way, so its flag is dropped with them.
   api.nvim_create_autocmd('ColorScheme', {
     group = state.presence_group,
     callback = function()
       state.peer_paints = {}
+      state.session_painted = false
       draw_presence(state.cursors)
     end,
   })
@@ -1477,7 +1543,12 @@ local function land(peer_id)
     return false, 'missing'
   end
   local row, col = document:position(cursor.head)
-  if not pcall(api.nvim_win_set_cursor, 0, { row + 1, col }) then
+  -- The follow's own placement is not a move the user made: Neovim reports no reason for a cursor
+  -- change, so the flag is what tells the move handler this caret is the follow's, not theirs.
+  state.applying_follow = true
+  local placed = pcall(api.nvim_win_set_cursor, 0, { row + 1, col })
+  state.applying_follow = false
+  if not placed then
     return false, 'unresolvable'
   end
   -- The landing moved the caret, so the room hears it through the coalesced publish
@@ -1522,6 +1593,12 @@ end
 local SESSION_HIGHLIGHT = 'SelvageSession'
 local SESSION_FRAME = '%#' .. SESSION_HIGHLIGHT .. '#'
 
+--- The sentence a room waiting out its host's absence says, with the leaving host's name and the
+--- whole seconds left before the server's deadline. One home: the row and the one announcement
+--- both read it, so the countdown a person watches and the notice they were given agree. The
+--- deadline is the server's (`host.detached`); nothing here can move it.
+local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and work in it is lost.'
+
 --- The session's own words: which side of the session the person is on, how many are in the
 --- room, and whether the connection is being re-established. Nil when there is no session to
 --- speak of, and nil while the row is turned off (`vim.g.selvage_indicator = false`).
@@ -1537,6 +1614,9 @@ local function session_words()
   end
   if state.status == 'connecting' then
     return 'Selvage: connecting…'
+  end
+  if state.host_away ~= nil then
+    return 'Selvage: ' .. HOST_DISCONNECTED:format(state.host_away.name, until_seconds(state.host_away.deadline))
   end
   if in_session() then
     local here = #state.room_peers + 1
@@ -1567,19 +1647,99 @@ local function unfetched_buffer(bufnr)
   return not mirror.written(path)
 end
 
---- The session's own row for a buffer: its words, and the mark a file holding no fetched
---- content carries. Nil when the session has nothing to say.
-local function session_text(bufnr)
-  local words = session_words()
-  if words == nil then
+--- The room path a buffer stands for: a guest's file in the mirror, a host's file under the
+--- session's root, or a `selvage://` buffer for a document the listing does not name. Nil for
+--- anything else, so a buffer that is not the room's gets no marks.
+local function buffer_room_path(bufnr)
+  local name = api.nvim_buf_get_name(bufnr)
+  if name == '' then
     return nil
   end
-  pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
-  return ('%s%s%s%%*'):format(
+  local mirrored = mirror.room_path(name)
+  if mirrored ~= nil then
+    return mirrored
+  end
+  local hosted = room_path(bufnr)
+  if hosted ~= nil then
+    return hosted
+  end
+  if name:sub(1, 10) == 'selvage://' then
+    return name:sub(11)
+  end
+  return nil
+end
+
+--- The peers the last presence report drew in this buffer, as the two cells and the colour the
+--- gutter draws for them — the same `sign` and `highlight` `state.peers` carries, so the row and
+--- the gutter cannot disagree about who is where. Ordered by peer id, so a report that reorders
+--- them does not reorder the row.
+local function file_peer_marks(bufnr)
+  local path = buffer_room_path(bufnr)
+  if path == nil then
+    return {}
+  end
+  local marks = {}
+  for _, peer in ipairs(state.peers) do
+    if peer.path == path and peer.sign ~= nil and peer.highlight ~= nil then
+      marks[#marks + 1] = { sign = peer.sign, highlight = peer.highlight, peerId = peer.peerId }
+    end
+  end
+  table.sort(marks, function(left, right)
+    return tostring(left.peerId) < tostring(right.peerId)
+  end)
+  return marks
+end
+
+--- How the session row is shown: `never` for `vim.g.selvage_indicator = false`, `always` for
+--- `true` or `'always'`, and `changes` — the default — for the row that appears only when it has
+--- something a person must react to rather than a standing line of role and headcount.
+local function indicator_mode()
+  local setting = vim.g.selvage_indicator
+  if setting == false then
+    return 'never'
+  end
+  if setting == true or setting == 'always' then
+    return 'always'
+  end
+  return 'changes'
+end
+
+--- Whether this buffer's row is wanted: an actionable session state, a peer present in this file,
+--- or content the room has not sent yet. Under `always` a live session's row is always wanted.
+local function row_wanted(bufnr)
+  local mode = indicator_mode()
+  if mode == 'never' then
+    return false
+  end
+  if state.reconnecting or state.status == 'connecting' or state.host_away ~= nil then
+    return true
+  end
+  if mode == 'always' then
+    return session_words() ~= nil
+  end
+  return unfetched_buffer(bufnr) or #file_peer_marks(bufnr) > 0
+end
+
+--- The session's own row for a buffer: its words, the mark a file holding no fetched content
+--- carries, and the initial cells of the peers whose caret is in it. Nil when the buffer has no
+--- row to wear — `row_wanted` is that question.
+local function session_text(bufnr)
+  if not row_wanted(bufnr) then
+    return nil
+  end
+  if not state.session_painted then
+    pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
+    state.session_painted = true
+  end
+  local row = ('%s%s%s'):format(
     SESSION_FRAME,
-    words,
+    session_words() or '',
     unfetched_buffer(bufnr) and ' [not fetched]' or ''
   )
+  for _, mark in ipairs(file_peer_marks(bufnr)) do
+    row = row .. (' %%#%s#%s'):format(mark.highlight, mark.sign)
+  end
+  return row .. '%*'
 end
 
 --- The row a window's buffer should wear: the follow's while one stands, the session's
@@ -1665,7 +1825,7 @@ end
 ---
 --- While a follow stands nothing moves: the row is the follow's, the membership report does not
 --- change its words, and the follow's own paths are what re-label it.
-local function refresh_indicators()
+refresh_indicators = function()
   if state.following ~= nil then
     return
   end
@@ -1675,7 +1835,6 @@ local function refresh_indicators()
     end
   end
 end
-
 --- Draws the row again in the windows showing `bufnr`: what one buffer holds is the one
 --- thing the row says that changes without a session event — the mark a file wears while the
 --- room's text has not arrived goes the moment it does.
@@ -1685,6 +1844,23 @@ local function refresh_indicator_for(bufnr)
       show_indicator(win)
     end
   end
+end
+
+--- Stops the timer that redraws the host-away countdown, if one is running.
+local function stop_host_away_timer()
+  if state.host_away_timer ~= nil then
+    pcall(vim.fn.timer_stop, state.host_away_timer)
+    state.host_away_timer = nil
+  end
+end
+
+--- Redraws the host-away countdown once a second while it stands. The number is derived from the
+--- deadline on each read, so this is what makes it tick rather than a value stored once.
+local function start_host_away_timer()
+  stop_host_away_timer()
+  state.host_away_timer = vim.fn.timer_start(1000, function()
+    refresh_indicators()
+  end, { ['repeat'] = -1 })
 end
 
 --- Shows the follow in the window, in their own colour. Called wherever the follow moves or
@@ -1763,6 +1939,18 @@ local function watch_follow_window()
     group = state.follow_group,
     callback = indicator_window_enter,
   })
+  -- A caret the user moved ends the follow: the next frame would drag it back, and a follow that
+  -- fought the person is the behaviour they remember as broken. A move the follow itself made is
+  -- behind `applying_follow`, not read here.
+  api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+    group = state.follow_group,
+    callback = function()
+      if state.applying_follow or state.following == nil then
+        return
+      end
+      end_follow('moved')
+    end,
+  })
   api.nvim_create_autocmd('BufLeave', {
     group = state.follow_group,
     callback = follow_window_leave,
@@ -1789,6 +1977,8 @@ end_follow = function(why)
   end
   if why == 'stopped' then
     notify(('stopped following %s.'):format(following.label))
+  elseif why == 'moved' then
+    notify(('Stopped following %s — you moved.'):format(following.label), vim.log.levels.WARN)
   elseif why == 'left' then
     notify(('%s left the room, so following stopped.'):format(following.label), vim.log.levels.WARN)
   end
@@ -2447,8 +2637,18 @@ end
 --- `disconnected`): the buffers and the window still showing them are the room's, and the room
 --- is not. Every other ending leaves them where they are — the person asked, and a leave does
 --- not close the room for anyone else.
-local function reset(land)
+---
+--- `keep_mirror` is for a room that closed under a guest rather than being left: the directory is
+--- then kept and its path returned, because it holds work the room never received and deleting it
+--- would leave the person with nowhere to recover it. A leave, a new session and a host's own
+--- files are not that, and their mirror is removed as before.
+---
+--- @param land boolean|nil
+--- @param keep_mirror boolean|nil
+--- @return string|nil the kept mirror's path, when one was kept
+local function reset(land, keep_mirror)
   local held = land and room_buffers() or nil
+  local kept = keep_mirror and mirror.root() or nil
   -- The session is over before anything else moves, and the indicators go with it: landing a
   -- dead room's buffers switches windows, and a switch is a `BufEnter` — an indicator that
   -- still read a live session would put its row back on a session that is gone. Setting the
@@ -2456,6 +2656,9 @@ local function reset(land)
   -- back here rather than left for a window that may never be entered again.
   state.status = 'idle'
   state.reconnecting = false
+  stop_host_away_timer()
+  state.host_away = nil
+  state.host_name = nil
   clear_indicator()
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
@@ -2463,6 +2666,9 @@ local function reset(land)
   state.peers = {}
   state.room_peers = {}
   state.cursors = {}
+  -- The seam a file-list plugin reads is emptied with the session: a badge for a peer is not
+  -- something to leave standing over a room that is gone.
+  publish_file_peers()
   for _, name in pairs(state.peer_groups) do
     pcall(api.nvim_set_hl, 0, name, {})
   end
@@ -2493,7 +2699,8 @@ local function reset(land)
   state.suppress_unfetched = false
   -- The grant belongs to the session, and a session that has ended grants nothing: the folder it
   -- was rooted at, the listing the room carried, and the mirror those two made on disk. The room
-  -- is the truth and the directory is a cache of it, so nothing in it is worth keeping.
+  -- is the truth and the directory is a cache of it, so a mirror is removed unless `keep_mirror`
+  -- says the room closed under the person and the cache holds the only copy of their work.
   state.root = nil
   state.grant = {}
   state.unlisted = {}
@@ -2501,7 +2708,7 @@ local function reset(land)
   state.unmutated = {}
   state.gone = {}
   state.unfetched = {}
-  mirror.teardown()
+  mirror.teardown(keep_mirror)
   if state.group ~= nil then
     api.nvim_del_augroup_by_id(state.group)
     state.group = nil
@@ -2519,6 +2726,7 @@ local function reset(land)
     state.follow_group = nil
   end
   state.saved_winbars = {}
+  return kept
 end
 
 --- Ends the session this front-end is in, leaving the companion process for what comes next: one
@@ -2787,6 +2995,13 @@ local function on_report(report)
     -- The room's own list of who is in it: everyone, not only the peers this client holds a
     -- document for and can draw a caret for.
     state.room_peers = report.peers or {}
+    -- The host's name is remembered here, while they are in the room: the detach frame names no
+    -- one, and the departure has already taken them out of this list by the time it arrives.
+    for _, peer in ipairs(state.room_peers) do
+      if peer.role == 'host' and type(peer.display_name) == 'string' and peer.display_name ~= '' then
+        state.host_name = peer.display_name
+      end
+    end
     -- The report is the room's own membership, so a peer it no longer names is gone even
     -- before the next presence frame redraws: their drawn row and cursor go now, rather than
     -- offering a departed peer in completion or landing on their last caret.
@@ -2842,14 +3057,33 @@ local function on_report(report)
     -- The window is part of that: a buffer still shown for the dead room reads as one that is
     -- still there, so the room's buffers are landed as well.
     notify(('the room is gone (%s).'):format(tostring(report.reason)), vim.log.levels.WARN)
-    reset(true)
+    -- The mirror is kept: it is a cache of the room, but whatever the person did in it during the
+    -- grace is not in the room and has nowhere else to be recovered from, so the directory stays
+    -- and they are told where.
+    local kept = reset(true, true)
+    if kept ~= nil then
+      notify(('The room closed. Your copy is kept at %s.'):format(kept), vim.log.levels.WARN)
+    end
   elseif report.kind == 'hostDetached' then
-    notify(
-      ('the host left the room; it closes in %ds unless they come back.'):format(seconds(report.graceMs)),
-      vim.log.levels.WARN
-    )
+    -- The deadline is the server's: `grace_ms` is how long the room has before the host's absence
+    -- destroys it, and the countdown here is only an echo of it, redrawn from the deadline rather
+    -- than printed once. The name is the one remembered from membership, since this frame carries
+    -- none.
+    local name = state.host_name or 'the host'
+    state.host_away = {
+      name = name,
+      deadline = uv.now() + math.max(0, tonumber(report.graceMs) or 0),
+    }
+    notify((HOST_DISCONNECTED):format(name, seconds(report.graceMs)), vim.log.levels.WARN)
+    start_host_away_timer()
+    refresh_indicators()
   elseif report.kind == 'hostAttached' then
-    notify(('%s is hosting again.'):format(tostring((report.peer or {}).display_name or 'the host')))
+    local name = tostring((report.peer or {}).display_name or state.host_name or 'the host')
+    state.host_name = name
+    stop_host_away_timer()
+    state.host_away = nil
+    notify(('%s is back — the session continues.'):format(name))
+    refresh_indicators()
   elseif report.kind == 'sessionError' then
     -- The report's own sentence, and its code is not shown: a refusal the protocol named and
     -- one this session made for itself both say what happened in words already — `the room

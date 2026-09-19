@@ -465,18 +465,25 @@ function M.setup(room, paths)
   return state.root, blocked, created
 end
 
---- Removes this session's mirror. The room is the truth, so nothing in the directory is worth
---- keeping, and a directory that outlived its session is a cache a later one would have to
---- reason about. The room's own directory goes too once nothing is left in it, so that a cache
---- nobody is using does not grow one empty directory per room forever.
-function M.teardown()
+--- Removes this session's mirror, unless `keep` asks for it to stay. The room is the truth, so
+--- nothing in the directory is worth keeping while the room lives on, and a directory that
+--- outlived its session is a cache a later one would have to reason about. The room's own
+--- directory goes too once nothing is left in it, so that a cache nobody is using does not grow
+--- one empty directory per room forever.
+---
+--- `keep` is for a session the person did not choose to end, a room that closed under them: the
+--- directory then holds work the room never received, and removing it would destroy the only copy.
+--- The in-memory state is let go either way; what `keep` spares is the bytes on disk.
+---
+--- @param keep boolean|nil
+function M.teardown(keep)
   local root = state.root
   local room = state.room
   state.root = nil
   state.room = nil
   state.listed = {}
   state.written = {}
-  if root == nil then
+  if root == nil or keep then
     return
   end
   if not remove_tree(root) then

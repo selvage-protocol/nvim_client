@@ -12,6 +12,9 @@ vim.cmd('runtime! plugin/selvage.lua')
 
 -- A name for the sessions this file starts.
 vim.g.selvage_display_name = 'Test User'
+-- This file is about following, not about when the row appears: it pins the always-on row, whose
+-- conditional default has its own section in `test/lua/session.lua`.
+vim.g.selvage_indicator = true
 
 local failures = 0
 
@@ -135,15 +138,44 @@ check('  and the second file with it', path1 ~= path2, true)
 --- room lists, plus this client.
 local named_peers = {}
 
+--- The room path the current buffer stands for: a guest's file in the mirror, or a `selvage://`
+--- buffer for a document the listing does not name.
+local function open_room_path()
+  local name = vim.fn.bufname('%')
+  if name:sub(1, 10) == 'selvage://' then
+    return name:sub(11)
+  end
+  local root = selvage.session().mirror
+  if root ~= nil and name:sub(1, #root + 1) == root .. '/' then
+    return name:sub(#root + 2)
+  end
+  return nil
+end
+
 --- The row the session itself wears in a window with no follow standing, as the indicator
 --- writes it. This file runs a live session, so a row that is not the follow's is the
 --- session's — the words themselves are pinned in `test/lua/session.lua`, and what is pinned
---- here is that the follow's row came down and the session's took its place.
+--- here is that the follow's row came down and the session's took its place. The peer cells are
+--- the ones the gutter draws, in the order the row writes them.
 local function session_row()
   local who = selvage.session().status == 'hosting' and 'hosting' or 'guest'
   local here = #named_peers + 1
   local count = here == 1 and '1 person in the room' or ('%d people in the room'):format(here)
-  return ('%%#SelvageSession#Selvage: %s — %s%%*'):format(who, count)
+  local row = ('%%#SelvageSession#Selvage: %s — %s'):format(who, count)
+  local path = open_room_path()
+  local in_file = {}
+  for _, peer in ipairs(selvage.peers()) do
+    if peer.path == path and peer.sign ~= nil and peer.highlight ~= nil then
+      in_file[#in_file + 1] = peer
+    end
+  end
+  table.sort(in_file, function(left, right)
+    return tostring(left.peerId) < tostring(right.peerId)
+  end)
+  for _, peer in ipairs(in_file) do
+    row = row .. (' %%#%s#%s'):format(peer.highlight, peer.sign)
+  end
+  return row .. '%*'
 end
 
 local function peers_report(peers)
@@ -1291,6 +1323,46 @@ check(
   said_since(before_gone_follow, 'no participant matches "Zed"') ~= nil,
   true
 )
+
+-- -- a deliberate local move ends the follow ------------------------------------------
+--
+-- The follow places the caret again on every frame, so a move of the user's own would be
+-- yanked back a moment later. Moving is the person choosing where to be, so the follow gives way
+-- and says so. The follow's own placement is not that: Neovim reports no reason for a cursor
+-- change, so the landing sets a flag and the handler here ignores its own caret.
+
+selvage.follow('Ada Lovelace')
+check('a follow stands before the move', selvage.following(), 'Ada Lovelace')
+local before_move = #notices
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds('CursorMoved', { buffer = vim.api.nvim_get_current_buf() })
+check('a local cursor move ends the follow', selvage.following(), nil)
+check(
+  '  saying the user moved',
+  said_since(before_move, 'Stopped following Ada Lovelace — you moved.') ~= nil,
+  true
+)
+check('  and the caret stays where the user put it', cursor(), '1,0')
+
+-- The landing's own cursor set is the follow's, not the user's: an editor that reports a
+-- programmatic set as a move must not make the follow end itself. The set is wrapped so it
+-- fires the event the way a real editor does, inside the placement.
+local real_set_cursor = vim.api.nvim_win_set_cursor
+vim.api.nvim_win_set_cursor = function(win, position)
+  local placed, err = real_set_cursor(win, position)
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = vim.api.nvim_win_get_buf(win) })
+  return placed, err
+end
+local before_landing_move = #notices
+selvage.follow('Ada Lovelace')
+vim.api.nvim_win_set_cursor = real_set_cursor
+check("the landing's own cursor set does not end the follow", selvage.following(), 'Ada Lovelace')
+check(
+  '  and says nothing about a move',
+  said_since(before_landing_move, 'you moved') == nil,
+  true
+)
+selvage.stop_following()
 
 -- Leaving ends the follow silently: the session going says its own sentence, and none of
 -- the follow's. `leave` says `left the session` for itself; the pin is that no sentence
