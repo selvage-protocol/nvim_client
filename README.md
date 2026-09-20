@@ -18,7 +18,19 @@ You need:
 - A `selvaged` to connect to. A host starts one and notes the address it prints; a guest joins with
   the invite link the host copies, and needs nothing else from the server side.
 
-Install with your plugin manager:
+Install with your plugin manager. With Neovim 0.12 or newer, the built-in one needs no third-party dependency (still experimental, but stable enough for daily use, and it needs `git` on `PATH`):
+
+```lua
+-- vim.pack (Neovim 0.12+), pinned to v0.1.0
+vim.pack.add({
+  {
+    src = 'https://github.com/selvage-protocol/nvim_client',
+    version = vim.version.range('0.1'),
+  },
+})
+```
+
+`vim.pack` runs no install hook, so run `npm ci` inside the plugin directory once, then update with `vim.pack.update()`:
 
 ```lua
 -- lazy.nvim
