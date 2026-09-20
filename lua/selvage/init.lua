@@ -3485,6 +3485,22 @@ local function confirm_leave(question, button)
   return vim.fn.confirm(question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
 end
 
+--- The box the first-run question and `:SelvageChangeServer`'s change both ask through: the
+--- server address, starting from `default`. Answers `callback(address)` for a non-empty,
+--- trimmed reply; a cancelled or emptied one calls nothing, so the caller's own state stands.
+local function ask_server_url(default, callback)
+  vim.ui.input({
+    prompt = 'The Selvage server to host on — if you started one yourself, it printed this address: ',
+    default = default,
+  }, function(input)
+    local address = vim.trim(input or '')
+    if address == '' then
+      return
+    end
+    callback(address)
+  end)
+end
+
 --- The server to mint a room on: the configured address, else the remembered one with no
 --- question asked, else one question starting from the demo default (`DEFAULT_SERVER_URL`).
 --- Asked once, then reused: an argument or `vim.g.selvage_server_url` uses another, and
@@ -3504,16 +3520,8 @@ local function resolve_server_url(callback)
     notify('a server address is needed, e.g. :SelvageHost ws://127.0.0.1:8080.', vim.log.levels.ERROR)
     return
   end
-  vim.ui.input({
-    prompt = 'The Selvage server to host on — if you started one yourself, it printed this address: ',
-    default = DEFAULT_SERVER_URL,
-  }, function(input)
-    local address = vim.trim(input or '')
-    if address == '' then
-      return
-    end
-    callback(address)
-  end)
+
+  ask_server_url(DEFAULT_SERVER_URL, callback)
 end
 
 --- The page CopyInvite links to: `vim.g.selvage_web_origin` when it names an
@@ -3918,6 +3926,48 @@ function M.set_display_name(name)
     state.process:send({ type = 'rename', displayName = wanted })
   end
   notify(('display name set to "%s".'):format(wanted))
+end
+
+--- The palette-reachable answer to "how do I change which server I am using", without hosting
+--- first: reports the server the next host uses and offers to change it through the same box
+--- the first-run question asks. `vim.g.selvage_server_url` outranks the remembered address
+--- (`resolve_server_url()`), so writing the remembered one while it is set would be silently
+--- ignored by the next host; this says the global is in force instead of pretending to change
+--- anything. Either way the write only reaches the *next* host, never a live room.
+function M.change_server(url)
+  local wanted = vim.trim(url or '')
+  local configured = vim.g.selvage_server_url
+  local configured_str = configured ~= nil and vim.trim(tostring(configured)) or ''
+  if configured_str ~= '' then
+    notify(
+      ('the "vim.g.selvage_server_url" setting fixes the server at %s; change it in your config to use a different one.'):format(
+        configured_str
+      )
+    )
+    return
+  end
+  if wanted ~= '' then
+    remember_last_server(wanted)
+    notify(('will host on %s next. Leave this session and host again to move there.'):format(wanted))
+    return
+  end
+  local current = last_server or read_last_server()
+  if current == nil then
+    notify('no server is remembered yet; the next host asks.')
+  else
+    notify(('the next host uses %s.'):format(current))
+  end
+  if not can_prompt() then
+    return
+  end
+  local base = current or DEFAULT_SERVER_URL
+  ask_server_url(base, function(address)
+    if address == base then
+      return
+    end
+    remember_last_server(address)
+    notify(('will host on %s next. Leave this session and host again to move there.'):format(address))
+  end)
 end
 
 return M

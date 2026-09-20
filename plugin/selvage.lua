@@ -63,6 +63,10 @@ command('SelvageDisplayName', function(args)
   require('selvage').set_display_name(args.args)
 end, { nargs = '?', desc = 'Set the name other participants see' })
 
+command('SelvageChangeServer', function(args)
+  require('selvage').change_server(args.args)
+end, { nargs = '?', desc = 'Change the server' })
+
 command('SelvageGoTo', function(args)
   require('selvage').go_to(args.args)
 end, {

@@ -220,6 +220,117 @@ check('a configured address is not asked about', prompted, nil)
 check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:9999')
 vim.g.selvage_server_url = nil
 
+-- -- :SelvageChangeServer reports the address in force and offers to change it ----------
+--
+-- The palette-reachable answer to "how do I change which server I am using", without hosting
+-- first, against a known remembered address: an explicit host pins it back to
+-- 'ws://127.0.0.1:5555', undoing what the configured host above left behind.
+
+vim.cmd('SelvageHost ws://127.0.0.1:5555')
+vim.ui.input = builtin_input
+local last_server_file = vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_server')
+
+before = #notices
+prompted = nil
+answer_with('ws://127.0.0.1:6666')
+vim.cmd('SelvageChangeServer')
+check(
+  'a bare :SelvageChangeServer reports the remembered address',
+  said_since(before, 'the next host uses ws://127.0.0.1:5555.') ~= nil,
+  true
+)
+check('  and asks through the same box the first run does', prompted ~= nil, true)
+check('  in the plugin\u{2019}s words', prompted and prompted.prompt:find('Selvage server to host on', 1, true) ~= nil, true)
+check('  starting from the address in force', prompted and prompted.default, 'ws://127.0.0.1:5555')
+check(
+  '  and the change is confirmed',
+  said_since(before, 'will host on ws://127.0.0.1:6666 next. Leave this session and host again to move there.')
+    ~= nil,
+  true
+)
+check('  and remembered for the next host', table.concat(vim.fn.readfile(last_server_file), '\n'), 'ws://127.0.0.1:6666')
+prompted = nil
+vim.cmd('SelvageHost')
+check('    and a bare host reuses it without asking', prompted, nil)
+check('      and hosts on it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:6666')
+
+-- Submitting the box unchanged changes nothing: a dismissed or unedited answer is not a change.
+before = #notices
+answer_with(function(opts)
+  return opts.default
+end)
+vim.cmd('SelvageChangeServer')
+check(
+  'answering with the address already in force writes nothing',
+  said_since(before, 'will host on') == nil,
+  true
+)
+check('  and it is still what the next host uses', table.concat(vim.fn.readfile(last_server_file), '\n'), 'ws://127.0.0.1:6666')
+
+-- Nothing remembered and nothing configured: the report says so, and the box starts from the
+-- demo default, exactly as the first :SelvageHost question does.
+vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
+vim.ui.input = builtin_input
+package.loaded['selvage'] = nil
+selvage = require('selvage')
+before = #notices
+answer_with(function(opts)
+  return opts.default
+end)
+vim.cmd('SelvageChangeServer')
+check(
+  'nothing remembered is reported as such',
+  said_since(before, 'no server is remembered yet; the next host asks.') ~= nil,
+  true
+)
+check('  and the box starts from the demo default', prompted and prompted.default, 'ws://100.64.0.3:8080')
+
+-- An explicit argument sets the address directly: no box is opened.
+before = #notices
+prompted = nil
+vim.cmd('SelvageChangeServer ws://127.0.0.1:4444')
+check('an explicit argument opens no box', prompted, nil)
+check(
+  '  and writes the address down',
+  said_since(before, 'will host on ws://127.0.0.1:4444 next. Leave this session and host again to move there.')
+    ~= nil,
+  true
+)
+check('  remembered for the next host', table.concat(vim.fn.readfile(last_server_file), '\n'), 'ws://127.0.0.1:4444')
+
+-- A configured address outranks the remembered one: the command says so and changes nothing,
+-- neither for a bare invocation nor for an explicit argument — writing the memento while the
+-- setting is in force would be a change the next host silently ignores.
+vim.g.selvage_server_url = 'ws://127.0.0.1:9999'
+before = #notices
+prompted = nil
+vim.cmd('SelvageChangeServer')
+check(
+  'a configured address is reported as being in force',
+  said_since(before, 'the "vim.g.selvage_server_url" setting fixes the server at ws://127.0.0.1:9999') ~= nil,
+  true
+)
+check('  and no box is opened', prompted, nil)
+check(
+  '  and the remembered address is untouched',
+  table.concat(vim.fn.readfile(last_server_file), '\n'),
+  'ws://127.0.0.1:4444'
+)
+
+before = #notices
+vim.cmd('SelvageChangeServer ws://127.0.0.1:1234')
+check(
+  'an explicit argument is trapped by the setting too',
+  said_since(before, 'the "vim.g.selvage_server_url" setting fixes the server at ws://127.0.0.1:9999') ~= nil,
+  true
+)
+check(
+  '  the argument is not written while the setting outranks it',
+  table.concat(vim.fn.readfile(last_server_file), '\n'),
+  'ws://127.0.0.1:4444'
+)
+vim.g.selvage_server_url = nil
+
 -- -- a bare :SelvageJoin takes the invite from the clipboard -------------------------
 --
 -- The host has just sent the link and pasting it is the next thing the person does, so the box
