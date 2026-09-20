@@ -1,0 +1,110 @@
+name: release
+
+# A release is the git tag. Neovim plugins are consumed by plugin managers
+# straight from a tag (`lazy.nvim`, `vim-plug`, `packer` per the README) plus
+# `npm ci` for the companion, so there is nothing to build and nothing to
+# attach: the tag plus a GitHub Release with notes IS the release. Adding a
+# bundle nobody consumes would be machinery for its own sake.
+#
+# Only `workflow_dispatch` runs this. A pull request must never be able to
+# publish or release, and a tag push does not trigger it either: the dispatch
+# run asserts the companion version, runs the companion suite, then creates
+# the tag and the release together, so a tag trigger would either
+# double-publish or race the run that owns the tag.
+#
+# `package.json:3` (`selvage-nvim-companion`, private) carries the version the
+# run asserts against its input. `lua/` and `plugin/` carry no version string.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, without the leading v (must match package.json; the tag v<version> is created)"
+        required: true
+        default: "0.1.0"
+      dry_run:
+        description: "Assert the version and run the companion suite without tagging or releasing"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# `contents: write` creates and pushes the tag and the GitHub Release. Nothing
+# else is granted.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18.0"
+          cache: npm
+
+      - run: npm ci
+
+      # The companion version is the release version: refuse to tag anything else.
+      - name: assert the companion version matches the input
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$pkg" != "${{ inputs.version }}" ]; then
+            printf 'package.json version %s != input %s; bump package.json first\n' "$pkg" "${{ inputs.version }}" >&2
+            exit 1
+          fi
+
+      - run: npm run typecheck
+
+      # The companion's suite only, same as ci.yml: the two-instance proof
+      # needs a built `selvaged` and a real Neovim, which the runner has
+      # neither of.
+      - run: npm test
+
+      - name: stop before tagging on a dry run
+        if: inputs.dry_run
+        run: |
+          echo "dry_run: version asserted and suite green, tagging and releasing nothing."
+
+      - name: create and push the tag
+        if: inputs.dry_run == false
+        run: |
+          version="${{ inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git rev-parse "v${version}" >/dev/null 2>&1; then
+            echo "tag v${version} already exists at $(git rev-list -n 1 "v${version}")"
+          else
+            git tag -a "v${version}" -m "v${version}"
+            git push origin "v${version}"
+          fi
+
+      - name: create the GitHub Release
+        if: inputs.dry_run == false
+        run: |
+          version="${{ inputs.version }}"
+          cat > release-notes.md <<EOF
+          # Selvage for Neovim v${version}
+
+          Install from the tag with your plugin manager, then \`npm ci\` for
+          the companion (see the README):
+
+          \`\`\`lua
+          -- lazy.nvim
+          { 'selvage-protocol/nvim_client', tag = 'v${version}', build = 'npm ci' }
+          \`\`\`
+
+          Companion \`selvage-nvim-companion\` is at \`package.json:3\` version
+          \`${version}\`, asserted by this release run before tagging. No
+          registry, no bundle: the tag plus these notes is the release.
+          EOF
+          if gh release view "v${version}" >/dev/null 2>&1; then
+            echo "release v${version} already exists; leaving it untouched."
+          else
+            gh release create "v${version}" --title "v${version}" --notes-file release-notes.md
+          fi
