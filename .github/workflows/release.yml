@@ -1,0 +1,146 @@
+name: release
+
+# A release is the git tag. Neovim plugins are consumed by plugin managers
+# straight from a tag (`lazy.nvim`, `vim-plug`, `packer` per the README) plus
+# `npm ci` for the companion, so there is nothing to build and nothing to
+# attach: the tag plus a GitHub Release with notes IS the release. Adding a
+# bundle nobody consumes would be machinery for its own sake.
+#
+# The owner triggers a release from this workflow. `workflow_dispatch` (with a
+# `version` input) is the manual button; pushing a tag `v*` runs the same job
+# for a release cut by hand. Either way the job is idempotent: the companion
+# version is asserted first, an existing tag must point at this run's commit
+# before the release is touched, and an existing release is left alone.
+# A pull request runs ci.yml instead and can never publish or release.
+#
+# `package.json:3` (`selvage-nvim-companion`, private) carries the version the
+# run asserts against. `lua/` and `plugin/` carry no version string.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, without the leading v (must match package.json; the tag v<version> is created)"
+        required: true
+        default: "0.1.0"
+      dry_run:
+        description: "Assert the version and run the companion suite without tagging or releasing"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# `contents: write` creates and pushes the tag and the GitHub Release. Nothing
+# else is granted.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.18.0"
+          cache: npm
+
+      - run: npm ci
+
+      # The release version comes from the dispatch input, or from the tag
+      # name on a tag push. It passes through `env` rather than a workflow
+      # expression inside `run:`, and anything outside `X.Y.Z` stops the job
+      # before anything is asserted, tagged or released.
+      - name: resolve the release version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$DISPATCH_VERSION" ]; then
+            version="$DISPATCH_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*)
+              ;;
+            *)
+              printf 'refusing: %s is not a release version\n' "$version" >&2
+              exit 1
+              ;;
+          esac
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      # The companion version is the release version: refuse to tag anything else.
+      - name: assert the companion version matches
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$pkg" != "$RELEASE_VERSION" ]; then
+            printf 'package.json version %s != release %s; bump package.json first\n' "$pkg" "$RELEASE_VERSION" >&2
+            exit 1
+          fi
+
+      - run: npm run typecheck
+
+      # The companion's suite only, same as ci.yml: the two-instance proof
+      # needs a built `selvaged` and a real Neovim, which the runner has
+      # neither of.
+      - run: npm test
+
+      - name: stop before tagging on a dry run
+        if: inputs.dry_run == true
+        run: |
+          echo "dry_run: version asserted and suite green, tagging and releasing nothing."
+
+      # Tags are resolved against `origin`, not local refs: the checkout may
+      # not have fetched them. An existing tag must point at this run's
+      # commit; anything else is someone else's release and stops the job.
+      - name: create and push the tag
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if remote_sha=$(git ls-remote --exit-code --refs origin "refs/tags/v${RELEASE_VERSION}" 2>/dev/null | cut -f1); then
+            echo "tag v${RELEASE_VERSION} already exists at ${remote_sha}"
+            if [ "$remote_sha" != "$GITHUB_SHA" ]; then
+              printf 'refusing: tag v%s points at %s, not this run\n' "$RELEASE_VERSION" "$remote_sha" >&2
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "v${RELEASE_VERSION}" -m "v${RELEASE_VERSION}"
+            git push origin "v${RELEASE_VERSION}"
+          fi
+
+      - name: create the GitHub Release
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md <<EOF
+          # Selvage for Neovim v${RELEASE_VERSION}
+
+          Install from the tag with your plugin manager, then \`npm ci\` for
+          the companion (see the README):
+
+          \`\`\`lua
+          -- lazy.nvim
+          { 'selvage-protocol/nvim_client', tag = 'v${RELEASE_VERSION}', build = 'npm ci' }
+          \`\`\`
+
+          Companion \`selvage-nvim-companion\` is at \`package.json:3\` version
+          \`${RELEASE_VERSION}\`, asserted by this release run before tagging. No
+          registry, no bundle: the tag plus these notes is the release.
+          EOF
+          if gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "release v${RELEASE_VERSION} already exists; leaving it untouched."
+          else
+            gh release create "v${RELEASE_VERSION}" --title "v${RELEASE_VERSION}" --notes-file release-notes.md
+          fi
