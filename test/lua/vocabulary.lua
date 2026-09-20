@@ -99,6 +99,7 @@ local TITLES = {
   SelvageOpen = 'Open a document from the room',
   SelvageLeave = 'Leave the session',
   SelvageDisplayName = 'Set the name other participants see',
+  SelvageChangeServer = 'Change the server',
   SelvagePeers = "List the room's participants",
   SelvageGoTo = 'Go to a participant',
   SelvageFollow = 'Follow a participant',
@@ -162,6 +163,11 @@ local MESSAGES = {
   { 'ERROR', 'this name is %s; a name is refused rather than shortened.' },
   { 'ERROR', 'this name is %s; a name is refused rather than shortened, so %s. Set a shorter one in %s.' },
   { 'ERROR', 'no display name is set and there is no one to ask; set vim.g.selvage_display_name or SELVAGE_DISPLAY_NAME, or run :SelvageDisplayName.' },
+  -- The server address.
+  { 'INFO', 'no server is remembered yet; the next host asks.' },
+  { 'INFO', 'the next host uses %s.' },
+  { 'INFO', 'will host on %s next. Leave this session and host again to move there.' },
+  { 'INFO', 'the "vim.g.selvage_server_url" setting fixes the server at %s; change it in your config to use a different one.' },
   -- The list of participants.
   { 'WARN', 'no other participants yet.' },
   -- What the room's own reports say.
