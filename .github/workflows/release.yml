@@ -101,12 +101,17 @@ jobs:
       # Tags are resolved against `origin`, not local refs: the checkout may
       # not have fetched them. An existing tag must point at this run's
       # commit; anything else is someone else's release and stops the job.
+      # An annotated tag's own ref resolves to the tag object, not the commit
+      # it names, so both the plain ref and its peeled `^{}` form are queried
+      # and the peeled (commit) sha is preferred when present.
       - name: create and push the tag
         if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if remote_sha=$(git ls-remote --exit-code --refs origin "refs/tags/v${RELEASE_VERSION}" 2>/dev/null | cut -f1); then
+          remote_refs=$(git ls-remote origin "refs/tags/v${RELEASE_VERSION}" "refs/tags/v${RELEASE_VERSION}^{}" 2>/dev/null)
+          if [ -n "$remote_refs" ]; then
+            remote_sha=$(printf '%s\n' "$remote_refs" | tail -n1 | cut -f1)
             echo "tag v${RELEASE_VERSION} already exists at ${remote_sha}"
             if [ "$remote_sha" != "$GITHUB_SHA" ]; then
               printf 'refusing: tag v%s points at %s, not this run\n' "$RELEASE_VERSION" "$remote_sha" >&2
