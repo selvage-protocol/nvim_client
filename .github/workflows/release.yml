@@ -129,11 +129,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_minor="${RELEASE_VERSION%.*}"
           cat > release-notes.md <<EOF
           # Selvage for Neovim v${RELEASE_VERSION}
 
-          Install from the tag with your plugin manager, then \`npm ci\` for
-          the companion (see the README):
+          Install with Neovim 0.12's built-in \`vim.pack\` (needs no third-party
+          dependency), then \`npm ci\` for the companion (see the README):
+
+          \`\`\`lua
+          -- vim.pack (Neovim 0.12+)
+          vim.pack.add({
+            { src = 'https://github.com/selvage-protocol/nvim_client', version = vim.version.range('${release_minor}') },
+          })
+          \`\`\`
+
+          \`vim.pack\` runs no install hook, so run \`npm ci\` inside the plugin
+          directory once installed, then update with \`vim.pack.update()\`.
+
+          A third-party manager works the same way, with its own build hook:
 
           \`\`\`lua
           -- lazy.nvim
