@@ -16,6 +16,11 @@ import type { Notification, Request } from './ipc.ts';
  * `SELVAGE_COMPANION_LOG` names a file. The two sides of this IPC are two processes, so the
  * order the messages actually crossed in is the one thing a log of either side alone cannot
  * show; this is where a convergence question gets answered.
+ *
+ * What crosses includes a host's `invite`, which carries the room's token: an invite is a bearer
+ * credential for as long as the room lives, so the file is written for its owner alone. The mode
+ * applies to a file this creates; one that is already there keeps the mode it has, and a trace a
+ * person kept from an earlier session is theirs to leave as it is.
  */
 const traceFile = process.env['SELVAGE_COMPANION_LOG'];
 
@@ -27,6 +32,7 @@ function trace(direction: '>' | '<', payload: unknown): void {
     appendFileSync(
       traceFile,
       `${new Date().toISOString()} ${String(process.pid)} ${direction} ${JSON.stringify(payload)}\n`,
+      { mode: 0o600 },
     );
   } catch {
     // A trace that cannot be written is not worth failing a session over.
