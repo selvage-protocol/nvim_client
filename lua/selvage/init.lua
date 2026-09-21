@@ -3217,6 +3217,13 @@ local function on_message(message)
       -- The room's text has landed, so a file that was empty until now is not: the row's
       -- mark for it goes with the text.
       refresh_indicator_for(document.bufnr)
+      -- And the caret the room has not heard: a buffer for a room document exists as soon as
+      -- the handshake names it, while the text is a later message — a caret published in
+      -- between is one the companion has no document for yet, and the bridge drops those
+      -- rather than inventing a document. A programmatic write fires no `TextChanged`, so
+      -- this apply is the only moment left to publish it again; without it a peer who has
+      -- not moved is a peer whose caret nobody draws.
+      schedule_selection()
     end
     state.process:send({ type = 'applied', id = message.id, ok = ok })
     -- The room's text moved under the follow: land again where the peer's caret resolves

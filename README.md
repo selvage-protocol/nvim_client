@@ -225,8 +225,11 @@ over the document when a peer moves. Every mark is cleared and recreated when pr
 every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
-entering a buffer), coalesced into one `selection` per 100 ms, and `selectionCleared` goes out
-when there is no shared document in front of the user.
+entering a buffer), coalesced into one `selection` per 100 ms, and once more when the room's own
+edit lands in the buffer: a buffer for a room document exists before the document's text does, so
+the caret published in between is one the companion had no document for, and a write the room
+makes fires no `TextChanged` to publish it again. `selectionCleared` goes out when there is no
+shared document in front of the user.
 
 Following moves the follower's caret: Neovim has no viewport-only state that survives a redraw, so
 being where a peer is means the cursor is there, and the next keystroke lands there too. That is
