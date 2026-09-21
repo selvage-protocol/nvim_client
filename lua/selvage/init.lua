@@ -3419,11 +3419,10 @@ end
 --- `vim.g.selvage_server_url` always win — so moving the demo is this one line.
 local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 
---- The page CopyInvite links to when nothing is configured: the Pi page served
---- next to the demo from `ai_notes/docs/runbook-pi-demo.md`. An overridable default,
---- never a commitment — `vim.g.selvage_web_origin` always wins — so moving the
---- page is this one line.
-local DEFAULT_WEB_ORIGIN = 'https://lumi-raspberrypi.muskellunge-yo.ts.net:8444'
+--- The page CopyInvite links to when nothing is configured: the published demo page.
+--- An overridable default, never a commitment — `vim.g.selvage_web_origin` always
+--- wins — so moving the page is this one line.
+local DEFAULT_WEB_ORIGIN = 'https://selvage.dontblameme.dev'
 
 --- The last server address a host was started on, so the next bare `:SelvageHost` reuses
 --- it without asking. The file below is what outlives this Neovim; this is what answers
@@ -3525,7 +3524,7 @@ local function resolve_server_url(callback)
 end
 
 --- The page CopyInvite links to: `vim.g.selvage_web_origin` when it names an
---- absolute `https:` origin, else the Pi page default (`DEFAULT_WEB_ORIGIN`). A
+--- absolute `https:` origin, else the demo page default (`DEFAULT_WEB_ORIGIN`). A
 --- non-HTTPS or unparsable value falls back rather than minting a cleartext link
 --- carrying the room's token. A trailing slash is not a second page, so it is
 --- stripped before the link is built.
