@@ -1,8 +1,9 @@
 -- The companion process: one per Neovim instance, started on the first command that needs it.
 --
 -- Newline-delimited JSON both ways (`README.md`, "The local IPC"). Neovim hands `on_stdout` a
--- list of strings split on `\n` where the last element is a partial line, so the reassembly
--- here is the mirror of `companion/ipc.ts`'s.
+-- list of strings split on `\n` where the last element is a partial line, so a line is
+-- reassembled here the way `companion/ipc.ts` reassembles the other direction's: to the same
+-- byte bound, and with the chunks of a line kept apart until the newline that ends it arrives.
 
 local M = {}
 
@@ -25,12 +26,32 @@ local STOP_GRACE_MS = 2000
 --- How often it is looked in on while that runs out.
 local STOP_POLL_MS = 50
 
+--- How many bytes a line from the companion may hold before it is shed rather than collected.
+---
+--- The same number `companion/ipc.ts` refuses to accumulate past: a whole-document `open` is one
+--- JSON line, so a bound below that would refuse real work, and no bound at all lets one runaway
+--- write — or a companion whose framing has gone wrong — grow this process's memory for as long
+--- as it keeps writing. Past it the line is shed to the newline that ends it, and said once.
+local MAX_LINE_BYTES = 32 * 1024 * 1024
+
 --- Starts the companion.
 --- @param handlers table on_message(message), on_exit(code)
 --- @param command string[]|nil the process to run; the companion itself unless a test needs one
 ---   that does not go on its own when its stdin is closed
 function M.start(handlers, command)
-  local self = setmetatable({ pending = '', queue = {}, flushing = false, exited = false }, Companion)
+  local self = setmetatable({
+    -- The chunks of the line being reassembled, and how many bytes they hold. A line arrives in
+    -- chunks of at most 128 KiB and may be a whole document, so appending each chunk to one
+    -- string would copy everything before it every time; they are joined once, when the newline
+    -- that ends the line arrives.
+    pending = {},
+    pending_bytes = 0,
+    -- Whether the line that ran past `MAX_LINE_BYTES` is being shed to its newline.
+    dropping = false,
+    queue = {},
+    flushing = false,
+    exited = false,
+  }, Companion)
   local argv = command
   if argv == nil then
     local node = vim.fn.exepath('node')
@@ -68,23 +89,67 @@ function M.start(handlers, command)
   return self
 end
 
+--- Takes one callback's worth of what the companion wrote.
+---
+--- Neovim splits the stream on `\n` and hands over the tail of the line the call before left
+--- unfinished as `data[1]`, every element before the last as a whole line, and the last as the
+--- next unfinished tail. A line is therefore the chunks collected for it plus `data[1]`, and it
+--- is whole exactly when the call carries a line after it.
 function Companion:receive(data, on_message)
   if #data == 0 then
     return
   end
-  self.pending = self.pending .. data[1]
+  if self.dropping then
+    -- The tail of the line being shed, which carries no newline of its own: a call holding
+    -- nothing but it is that line still running, and the newline that ends it is in the first
+    -- whole line the next such call carries.
+    if #data == 1 then
+      return
+    end
+    self.dropping = false
+  else
+    self.pending[#self.pending + 1] = data[1]
+    self.pending_bytes = self.pending_bytes + #data[1]
+  end
+  if #data == 1 then
+    -- Nothing ended in this call, so the line is still the one being collected — and past the
+    -- bound it is one nothing will read: what is collected goes, and the rest of the line with
+    -- it, rather than being gathered chunk by chunk until a newline that may never come.
+    if self.pending_bytes > MAX_LINE_BYTES then
+      self.dropping = true
+      self.pending = {}
+      self.pending_bytes = 0
+      vim.notify(
+        ('selvage: the companion wrote a line past %d bytes with no newline in it; dropping it'):format(
+          MAX_LINE_BYTES
+        ),
+        vim.log.levels.WARN
+      )
+    end
+    return
+  end
   for index = 2, #data do
-    local line = self.pending
-    self.pending = data[index]
+    local line = table.concat(self.pending)
+    self.pending = { data[index] }
+    self.pending_bytes = #data[index]
     if line:gsub('%s', '') ~= '' then
-      local ok, message = pcall(vim.json.decode, line)
-      -- Decoded is not shaped: a bare string or number decodes fine and would fail only when
-      -- something indexes it, far from the line that caused it. Said the way an undecodable
-      -- line is and dropped before any handler runs.
-      if ok and type(message) == 'table' and type(message.type) == 'string' then
-        on_message(message)
+      if #line > MAX_LINE_BYTES then
+        -- A whole line past the bound, delivered in one call: nothing this process answers is
+        -- that long, so it goes the way a shed one does.
+        vim.notify(
+          ('selvage: the companion wrote a line past %d bytes; dropping it'):format(MAX_LINE_BYTES),
+          vim.log.levels.WARN
+        )
       else
-        vim.notify('selvage: unreadable message from the companion', vim.log.levels.WARN)
+        local ok, message = pcall(vim.json.decode, line)
+        -- Decoded is not shaped: a bare string or number decodes fine and would fail only when
+        -- something indexes it, far from the line that caused it. Said the way an undecodable
+        -- line is and dropped before any handler runs.
+        if ok and type(message) == 'table' and type(message.type) == 'string' then
+          on_message(message)
+        else
+          vim.notify('selvage: unreadable message from the companion', vim.log.levels.WARN)
+        end
       end
     end
   end

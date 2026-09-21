@@ -556,7 +556,8 @@ front-end notifies, with the level it notifies it at. Both clients say the same 
 moment and keep only the presentation around it to themselves, so a reworded sentence fails this
 suite here rather than drifting away from the other editor's. `test/lua/leave.lua` starts a real
 job, one that ignores its stdin, to check what `:SelvageLeave` does to a companion that does not
-go on its own.
+go on its own, and reads the framing of what the companion writes off the same object: a line
+arriving in pieces, and one past the bound being shed to the newline that ends it.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes, each
 loading the real plugin and starting its own real companion, one hosting and one joining over a

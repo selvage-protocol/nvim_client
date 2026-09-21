@@ -8,8 +8,9 @@
 # summary a guest's join says whatever order the room speaks in (`test/lua/join.lua` for the
 # listing-first order, `test/lua/joinorder.lua` for documents first), what the
 # commands themselves decide (`test/lua/commands.lua`), the words the two clients share
-# (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), and what
-# stopping the process does to it (`test/lua/leave.lua`,
+# (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), and the
+# framing of what the companion writes beside what stopping the process does to it
+# (`test/lua/leave.lua`,
 # against a real job), and going to a participant and following one (`test/lua/follow.lua`),
 # and the pickers asking through `vim.ui.select` with no external picker required
 # (`test/lua/pickers.lua`), and the plugin as the package it is installed as — the real
