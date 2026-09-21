@@ -271,5 +271,41 @@ open(grant .. '/linked.txt')
 check('  once per path, not once per visit', said_since(before_revisit_link, 'is not a regular file'), 0)
 selvage.leave()
 
+-- A link to a *directory* is the shape the leaf's own type check does not catch — the name travels
+-- through the link and the file behind it is an ordinary file — and it is refused here all the
+-- same, by the buffer's own name: Neovim resolves the directory part of a name when it sets one,
+-- so what `room_path` measures is the file's real path, which is outside the grant. The leaf the
+-- check reads is never the link's. This pins that, because the leaf check is not what catches it:
+-- a Neovim that stopped resolving the directory part would hand this a name inside the grant, and
+-- the `lstat` would find the ordinary file the link points at and publish it.
+vim.fn.mkdir(outside .. '/inner', 'p')
+vim.fn.mkdir(grant .. '/plain', 'p')
+vim.fn.writefile({ 'nor this' }, outside .. '/inner/deeper.txt')
+vim.fn.writefile({ 'behind the link' }, outside .. '/hidden.txt')
+vim.fn.writefile({ 'the room\'s own' }, grant .. '/plain/inner.txt')
+vim.fn.delete(grant .. '/escape')
+luv.fs_symlink(outside, grant .. '/escape')
+set_cwd(grant)
+vim.cmd('edit ' .. vim.fn.fnameescape(grant .. '/escape/hidden.txt'))
+check(
+  'the name a path through a directory link is opened under is the resolved one',
+  vim.api.nvim_buf_get_name(0),
+  outside .. '/hidden.txt'
+)
+local before_escaping = #notices
+local before_escaping_sends = #sent
+start_hosting('r-grant-6')
+open(grant .. '/escape/hidden.txt')
+open(grant .. '/escape/inner/deeper.txt')
+open(grant .. '/plain/inner.txt')
+check('a path through a directory link is not shared', opens_of('escape/hidden.txt', before_escaping_sends), 0)
+check('  nor a file two steps behind it', opens_of('escape/inner/deeper.txt', before_escaping_sends), 0)
+check(
+  '  and says so about the file it resolved to',
+  said_since(before_escaping, outside .. '/hidden.txt is outside'),
+  1
+)check('  while a file in a plain directory is shared', opens_of('plain/inner.txt', before_escaping_sends), 1)
+selvage.leave()
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
