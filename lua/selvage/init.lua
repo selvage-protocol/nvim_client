@@ -3428,11 +3428,6 @@ end
 --- `vim.g.selvage_server_url` always win — so moving the demo is this one line.
 local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 
---- The page CopyInvite links to when nothing is configured: the published demo page.
---- An overridable default, never a commitment — `vim.g.selvage_web_origin` always
---- wins — so moving the page is this one line.
-local DEFAULT_WEB_ORIGIN = 'https://selvage.dontblameme.dev'
-
 --- A scheme at the start of a typed value: `ws`, `wss`, `http`, `https`. Its presence is what
 --- separates a URL from an address someone typed out of their head, and the bare form is the
 --- one that has to be completed rather than refused.
@@ -3458,18 +3453,19 @@ local function normalise_server_address(text)
   return (addressed:gsub('/session$', ''))
 end
 
---- The page origin from whatever was typed in a page-origin position, where the default is the
---- other one: a page is served over TLS or it is not served to the room at all, so a bare host
---- means `https://<host>`. A scheme that is not https is left for the caller to refuse rather
---- than rewritten — a cleartext page link carries the room's token, and that is not a guess to
---- make on someone's behalf.
-local function normalise_page_origin(text)
-  local trimmed = vim.trim(text or '')
-  if trimmed == '' then
-    return ''
+--- The page a server's room is linked at: the server's own origin, over the scheme a browser
+--- speaks. One address decides the whole invite — the page the guest opens and the socket they
+--- join on are the same host — so a room cannot be linked at a page that dials another server,
+--- which is what a separate page setting used to allow.
+local function page_origin(base)
+  local wanted = vim.trim(base or ''):gsub('/+$', '')
+  if wanted:match('^wss://') ~= nil then
+    return 'https://' .. wanted:sub(7)
   end
-  local addressed = has_scheme(trimmed) and trimmed or ('https://' .. trimmed)
-  return (addressed:gsub('/+$', ''))
+  if wanted:match('^ws://') ~= nil then
+    return 'http://' .. wanted:sub(6)
+  end
+  return wanted
 end
 
 --- The last server address a host was started on, so the next bare `:SelvageHost` reuses
@@ -3571,22 +3567,6 @@ local function resolve_server_url(callback)
   ask_server_url(DEFAULT_SERVER_URL, callback)
 end
 
---- The page CopyInvite links to: `vim.g.selvage_web_origin` when it names an
---- absolute `https:` origin, else the demo page default (`DEFAULT_WEB_ORIGIN`). A
---- non-HTTPS or unparsable value falls back rather than minting a cleartext link
---- carrying the room's token. A trailing slash is not a second page, so it is
---- stripped before the link is built.
-local function web_origin()
-  local configured = vim.g.selvage_web_origin
-  if configured ~= nil then
-    local trimmed = normalise_page_origin(tostring(configured))
-    if trimmed:match('^https://%S+$') ~= nil then
-      return trimmed
-    end
-  end
-  return DEFAULT_WEB_ORIGIN
-end
-
 --- Percent-encodes a query value the way the page builds its link: the unreserved
 --- characters stand, everything else rides as uppercase `%XX`.
 local function encode_component(text)
@@ -3603,13 +3583,13 @@ local function decode_component(text)
   end))
 end
 
---- Reads the room, its token and any server out of a query string. Keys match
---- whole, so a `bedroom=` lookalike does not pass, and empty values do not count.
+--- Reads the room and its token out of a query string. Keys match whole, so a `bedroom=`
+--- lookalike does not pass, and empty values do not count.
 local function query_parts(query)
   local found = {}
   for pair in tostring(query):gmatch('[^&]+') do
     local key, value = pair:match('^([^=]*)=(.*)$')
-    if (key == 'room' or key == 'token' or key == 'server') and found[key] == nil then
+    if (key == 'room' or key == 'token') and found[key] == nil then
       if value ~= nil and value ~= '' then
         found[key] = decode_component(value)
       end
@@ -3639,8 +3619,9 @@ local function parse_wire_invite(text)
   return { base = (trimmed:sub(1, mark - 1):gsub('/session$', '')), room = parts.room, token = parts.token }
 end
 
---- Reads a pasted page link back into the room, its token, and any server — the
---- page's own parsing, mirrored so a copied link joins the same way it loads.
+--- Reads a pasted page link back into the room and its token — the page's own parsing,
+--- mirrored so a copied link joins the same way it loads. The server is the link's origin, so
+--- nothing in the query names one.
 local function parse_page_link(text)
   local trimmed = vim.trim(text or '')
   if trimmed:match('^https?://%S+$') == nil then
@@ -3654,32 +3635,29 @@ local function parse_page_link(text)
   if parts == nil then
     return nil
   end
-  return { room = parts.room, token = parts.token, server = parts.server }
+  return { room = parts.room, token = parts.token, origin = trimmed:sub(1, mark - 1) }
 end
 
---- The guest link for a room: the page URL carrying room and token, with `server`
---- only when the room lives off the page default — the shape the page itself
---- offers and reads back.
-local function build_page_link(room, token, server)
-  local link = web_origin() .. '/?room=' .. encode_component(room) .. '&token=' .. encode_component(token)
-  if server ~= DEFAULT_SERVER_URL then
-    link = link .. '&server=' .. encode_component(server)
-  end
-  return link
+--- The guest link for a room: the page the room's own server serves, carrying room and token.
+--- The link *is* the server — its origin is the address the guest dials — so it carries nothing
+--- else.
+local function build_page_link(room, token, base)
+  return page_origin(base)
+    .. '/?room='
+    .. encode_component(room)
+    .. '&token='
+    .. encode_component(token)
 end
 
---- The wire URL an invite joins on: a page link resolves to its room's server (the
---- page default when the link carries none), while a `ws://` invite — the fallback
---- for rooms off the page default — joins as it always has.
+--- The wire URL an invite joins on: a page link resolves to the server its own origin names,
+--- while a `ws://` invite — a room whose server serves no page, or a guest that reached one
+--- that way — joins as it stands.
 local function resolve_invite_to_wire(link)
   local page = parse_page_link(link)
   if page == nil then
     return link
   end
-  local server = page.server
-  if server == nil or server == '' then
-    server = DEFAULT_SERVER_URL
-  end
+  local server = (page.origin:gsub('^https://', 'wss://'):gsub('^http://', 'ws://'))
   return (server:gsub('/+$', '')) .. '/session?room=' .. encode_component(page.room) .. '&token=' .. encode_component(page.token)
 end
 
