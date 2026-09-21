@@ -112,8 +112,8 @@ There is no `setup()` call.
 A first session:
 
 1. Start `selvaged` and note the address it prints.
-2. `:SelvageHost` shares the current buffer. Answer its one question with that address — the host
-   alone is enough, since `selvage.dontblameme.dev` means `wss://selvage.dontblameme.dev` — and
+2. `:SelvageHost` shares the current buffer. Answer its one question with that address (the host
+   alone is enough, since `selvage.dontblameme.dev` means `wss://selvage.dontblameme.dev`), and
    the invite link goes on the clipboard as the room opens.
 3. Send the link. The other person runs `:SelvageJoin <invite>`, which joins the room and opens its
    first document.
@@ -174,22 +174,21 @@ A `disconnected` report is the end of the session. The engine reconnected on its
 out of attempts, so the plugin says so and lets the documents go. The companion process is left
 running, and the next `:SelvageHost` or `:SelvageJoin` reuses it.
 
-`version` is the one thing this IPC has that an in-process adapter does not need. A remote edit is
-computed against the companion's mirror of the buffer and applied to the buffer itself, and those
-are two processes: a keystroke made in between is a message still in the pipe, so the range would
-land on text it was not computed from. Both sides therefore count changes, one for a local edit and
-one for an applied remote edit; the `applyEdit` carries the count it was computed against, and the
-plugin refuses one that does not match. A refusal does not end the edit: the companion knows the
-mirror has taken a change the front-end counted after the range was computed, so it offers the same
-edit again moved through that change, and the peer's text lands where the buffer now has the text
-it was computed from. A keystroke that was in the pipe stays where the user put it; only a range
-whose local changes overlap it cannot be moved, and for that one the room's text is what the
-buffer ends on.
+`version` is the document version the range was computed against, counted on each side. A remote
+edit is computed against the companion's mirror of the buffer and applied to the buffer itself, and
+those are two processes: a keystroke made in between is a message still in the pipe, so the range
+would land on text it was not computed from. Both sides therefore count changes, one for a local
+edit and one for an applied remote edit; the `applyEdit` carries the count it was computed
+against, and the plugin refuses one that does not match. A refusal does not end the edit: the
+companion knows the mirror has taken a change the front-end counted after the range was computed,
+so it offers the same edit again moved through that change, and the peer's text lands where the
+buffer now has the text it was computed from. A keystroke that was in the pipe stays where the
+user put it; only a range whose local changes overlap it cannot be moved, and for that one the
+room's text is what the buffer ends on.
 
 Setting `SELVAGE_COMPANION_LOG` to a path makes the companion append every message it sends and
 receives, with the time and the process id. The plugin and the companion are two processes, so one
-end's log cannot show the order the messages crossed in, and a convergence question needs that
-order.
+end's log cannot show the order the messages crossed in.
 
 ### Remote cursors
 
@@ -297,20 +296,19 @@ With none of the three, the one question starts from the demo server `ws://100.6
 Everywhere a *server* address is typed — the argument, the question's answer, the setting, a
 remembered one — the host on its own is enough, and it means the published shape: a bare host is
 completed to `wss://<host>`, because the room is dialled over TLS. The `/session` path every
-Selvage server answers belongs to the engine, which adds it to whatever base it is given, so an
-address that already names it (`wss://host/session`) loses it rather than gaining a second one;
-any other path is kept, since a server behind a prefix was addressed deliberately.
+Selvage server answers belongs to the engine, which adds it to whatever base it is given:
+`wss://host` and `wss://host/session` both reach `wss://host/session`, and any other path is kept.
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach is reported rather than claimed, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
-| `:SelvageChangeServer [serverUrl]` | Report the server the next host uses, and set it, without hosting first. With no argument it reports the address in force and, where there is somebody to ask, opens the same box `:SelvageHost`'s first question does, prefilled with it. While `vim.g.selvage_server_url` is set that global outranks the remembered address, so the command says so and changes nothing; writing the remembered value would be a change the next host silently ignores. Either way the write reaches the next host only, never a room already open. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach says why, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageChangeServer [serverUrl]` | Report the server the next host uses, and set it, without hosting first. With no argument it reports the address in force and, where there is somebody to ask, opens the same box `:SelvageHost`'s first question does, prefilled with it. While `vim.g.selvage_server_url` is set that global outranks the remembered address, so the command says so and changes nothing. Either way the write reaches the next host only, never a room already open. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the page link the host copies, whose origin is the server the room lives on; a `ws://` link joins as it stands, which is how a room whose server serves no page is handed on. A value that is not an invite link, typed or pasted, is refused at once. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers, its grant and the documents it holds, and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
 | `:SelvageFetch [path]` | Download a file from the room: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file, and a project-wide search is partial until the paths it covers have been fetched; this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
-| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A session the server gave no invite to says that rather than that there is no room, and a clipboard that refuses the link says why rather than claiming it. A host copies the page its own server serves, carrying the room and its token: one address for the page and the socket both, so a link is never sent to a page that dials another server — the page the room's origin names is the one a guest opens, and it joins on the socket at that same origin. A guest holds the token it joined with, because the invite *is* the permission, so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. |
-| `:SelvageLeave` | Leave the session and stop the companion. With no session it says so rather than claiming to have left one. |
+| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A session the server gave no invite to says so, and a clipboard that refuses the link says why. A host copies the page its own server serves, carrying the room and its token: one address for the page and the socket both. A guest holds the token it joined with, because the invite *is* the permission, so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. |
+| `:SelvageLeave` | Leave the session and stop the companion. With no session it says so. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
 | `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart, and a typed name whose caret has not arrived yet waits for it. |
 | `:SelvageFollow [name]` | Follow a participant: land where they are and keep landing there as they move, across documents, until something ends it. Typing in a shared document stops it. Takes its name the way `:SelvageGoTo` does. |
@@ -325,17 +323,16 @@ what the command would have done and leaves the session alone.
 The name other participants see is resolved when a session starts, in this order:
 `vim.g.selvage_display_name`, the `SELVAGE_DISPLAY_NAME` environment variable, the remembered
 answer, then a prompt pre-filled with the login name. The pre-fill is a suggestion: a cancelled or
-emptied prompt refuses the session rather than seating a room under a name nobody chose, and a
-process with nobody to ask refuses it too, saying how to configure one.
+emptied prompt refuses the session, and a process with nobody to ask refuses it too, saying how to
+configure one.
 `require('selvage').display_name()` is `nil` until one is set or remembered. `:SelvageDisplayName`
 sets the global and writes it down, and a prompted answer is written down too, so neither this
 Neovim nor the next one asks again. It renames a live session; a direct write to the global is
 picked up by the next host or join. A name is at most **32 UTF-16 code units**, the unit the
 protocol counts, so an astral character costs two, and one over that is refused rather than
-shortened, because a room must see the name its owner chose or none at all. A name typed at the
-prompt that is too long says how long it is and asks again; one that arrived from the global or
-the environment has nobody to re-ask, so the session is not started and the refusal names the
-setting to change.
+shortened. A name typed at the prompt that is too long says how long it is and asks again; one that
+arrived from the global or the environment has nobody to re-ask, so the session is not started and
+the refusal names the setting to change.
 
 `vim.g.selvage_open_on_join = false` keeps the join from changing the window, while still opening
 the room's documents as buffers `:SelvageOpen` reaches.
@@ -345,12 +342,10 @@ a document the room changed by default, while a guest's mirror is not refreshed 
 save in it is refused and the file keeps what it last held. `vim.g.selvage_open_on_join` and this
 are read when a session starts, so a change to either applies to the next host or join.
 `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, completed the
-same way an argument is, so a bare host there means `wss://<host>`. The page a copied invite
-links to is not configurable: it is the room's own server, over the scheme a browser speaks
-(`wss://` as `https://`, `ws://` as `http://`), because the link *is* that server. A server
-started with `--page <dir>` serves the guest page from its own origin, which is what makes one
-address enough. `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to
-answer.
+same way an argument is, so a bare host there means `wss://<host>`. The page a copied invite links
+to is the room's own server, over the scheme a browser speaks (`wss://` as `https://`, `ws://` as
+`http://`). A server started with `--page <dir>` serves the guest page from its own origin.
+`vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
 ### Pickers
 
@@ -386,11 +381,10 @@ root rather than sharing an empty document; a refusal is reported.
 
 ## The mirror
 
-A guest does not only keep the room's documents: it materialises the room as a real directory, so
-that the tools a person already uses (fzf and Telescope, ripgrep, ctags, a language server, a tree
-plugin, `fd`, `:find`) see the room as a project rather than as a set of buffers. Those programs
-are separate processes; they read the filesystem and cannot see a buffer name, a URI scheme or an
-in-process source.
+A guest keeps the room's documents and materialises the room as a real directory, so that the
+tools a person already uses (fzf and Telescope, ripgrep, ctags, a language server, a tree plugin,
+`fd`, `:find`) see the room as a project. Those programs are separate processes; they read the
+filesystem and cannot see a buffer name, a URI scheme or an in-process source.
 
 The **shape** is materialised, the **content** is not. Every path the room's listing names exists
 in the mirror, with the directories on the way to it, so a tree plugin walks the whole room; a
@@ -430,11 +424,10 @@ so the document stays open in the same buffer, with the same text and the same n
 writes the file back, and makes the file's directory again when the removal took it with the file:
 the room already has the text, because a guest's edits travel as they are typed, and the file is
 only this session's cache of it, so a `:w` is a save and not `E212` over a buffer left modified.
-The file that comes back is not in the room's listing. Entering the name again is not the mirror
-saying the file is not the room's: while the session still holds the document, a name for it
-routes to the buffer that already holds it and nothing is said. Once it does not (the buffer was
-wiped, or the session is over) a fresh buffer for the path is refused like any other file in the
-mirror the room does not list, once per path.
+The file that comes back is not in the room's listing. While the session still holds the document,
+entering its name again routes to the buffer that already holds it and nothing is said. Once it does
+not (the buffer was wiped, or the session is over) a fresh buffer for the path is refused like any
+other file in the mirror the room does not list, once per path.
 
 The directory is a cache of the room and never a source of truth. It lives under
 `stdpath('cache')/selvage/<room>/`, never a temporary directory (`/tmp` is RAM-backed on some
