@@ -10,15 +10,16 @@ are listed under "What is not here yet".
 
 You need:
 
-- Neovim 0.10 or newer.
+- Neovim 0.12 or newer.
+- A `git` executable: the plugin managers below fetch the repository with it.
 - Node 22.18 or newer on `PATH`, with the companion's dependencies installed by `npm ci` in the
   plugin directory. A guest needs both too: the sync engine runs at each end, so joining takes the
   same Node and the same install as hosting.
 - A `selvaged` to connect to. Start one and note the address it prints; a guest needs the invite
   link the host sends and nothing else from the server side.
 
-Install with your plugin manager. Neovim 0.12 and newer has one built in, needing no third-party
-plugin and no install hook, but `git` on `PATH`:
+Install with your plugin manager. The one built into Neovim 0.12 and newer needs no third-party
+plugin and no install hook:
 
 ```lua
 -- vim.pack (Neovim 0.12+), pinned to v0.1.0
@@ -62,48 +63,49 @@ Or clone the repository, run `npm ci` inside it, and point your plugin manager a
 
 ### With Nix
 
-`nix run .#nvim` from a checkout, or `nix run github:selvage-protocol/nvim_client#nvim`, gives a
-Neovim with the plugin on its runtime path and Node on `PATH`, assembled from the flake; no `npm ci`
-is involved, because the companion's dependencies are built from `package-lock.json`.
+`nix run github:selvage-protocol/nvim_client#nvim` gives a Neovim with the plugin on its runtime
+path and Node on `PATH`; `nix run .#nvim` does the same from a checkout. Nothing here runs `npm ci`:
+the companion's dependencies are built from `package-lock.json`, and the plugin declares the Node it
+needs.
 
-To install the plugin in your own configuration, add the flake as an input and take its overlay,
-which puts the plugin where a Neovim package set expects to find one, so `pkgs.vimPlugins.selvage`
-names it:
+In Home Manager, add the flake as an input and take the plugin straight from it:
 
 ```nix
 # flake.nix
-inputs.nvim_client.url = "github:selvage-protocol/nvim_client";
+inputs.nvim-client.url = "github:selvage-protocol/nvim_client";
+```
 
-# NixOS: nixpkgs.overlays. A flake-based home-manager setup: wherever its `pkgs` is built.
-nixpkgs.overlays = [ inputs.nvim_client.overlays.default ];
+```nix
+programs.neovim.plugins = [
+  inputs.nvim-client.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
+`overlays.default` gives the same plugin the name `pkgs.vimPlugins.selvage`. An overlay belongs
+wherever the package set is built, which on NixOS is `nixpkgs.overlays`:
+
+```nix
+nixpkgs.overlays = [ inputs.nvim-client.overlays.default ];
 
 programs.neovim.plugins = [ pkgs.vimPlugins.selvage ];
 ```
 
-A Neovim you put in `environment.systemPackages` yourself takes the same plugin, and is the same
-quantity — an overlay, then the plugin named where plugins go:
+A Neovim you wrap yourself takes it in `configure.packages`:
 
 ```nix
 environment.systemPackages = [
   (pkgs.neovim.override {
-    configure.packages.selvage.start = [ pkgs.vimPlugins.selvage ];
+    configure.packages.selvage.start = [
+      inputs.nvim-client.packages.${pkgs.stdenv.hostPlatform.system}.default
+    ];
   })
 ];
 ```
 
-Without the overlay, the plugin is the flake's default package:
-
-```nix
-programs.neovim.plugins = [
-  inputs.nvim_client.packages.${pkgs.stdenv.hostPlatform.system}.default
-];
-```
-
-Node is not something you have to arrange: the plugin declares `nodejs_22` as a runtime dependency,
-and a nixpkgs Neovim wrapper built with it — home-manager's `programs.neovim.plugins`, or
-`pkgs.neovim.override { configure.packages.selvage.start = [ … ]; }` — puts it on the wrapped
-Neovim's `PATH`. A Neovim that is not wrapped that way needs Node 22.18 or newer on `PATH`, as
-every other install route here does.
+A wrapper built with runtime-dependency wrapping puts the plugin's `nodejs_22` on the wrapped
+Neovim's `PATH`, which is why none of this asks for a Node of your own. One built without it leaves
+the companion nowhere to find Node, which says so (`node is not on PATH`); add `pkgs.nodejs_22`
+alongside the plugin, the way that wrapper takes packages.
 
 There is no `setup()` call.
 
