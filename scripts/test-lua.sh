@@ -12,12 +12,14 @@
 # stopping the process does to it (`test/lua/leave.lua`,
 # against a real job), and going to a participant and following one (`test/lua/follow.lua`),
 # and the pickers asking through `vim.ui.select` with no external picker required
-# (`test/lua/pickers.lua`).
+# (`test/lua/pickers.lua`), and the plugin as the package it is installed as — the real
+# companion process started from it, with nothing stubbed (`test/lua/installed.lua`).
 #
 #   scripts/test-lua.sh
 #
 # Not part of the workflow: it needs a Neovim, and the runner has none. `npm test` covers the
-# companion, which is where every rule lives.
+# companion, which is where every rule lives. The last file also needs `npm ci` to have run, the
+# same as running the plugin itself does.
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -36,3 +38,6 @@ nvim --headless -l test/lua/vocabulary.lua
 nvim --headless -l test/lua/warnings.lua
 nvim --headless -l test/lua/leave.lua
 nvim --headless -l test/lua/follow.lua
+# The checkout as the installed plugin, which is what `SELVAGE_PLUGIN_ROOT` names: the file
+# asserts that it is what Neovim loaded before it starts the companion for real.
+SELVAGE_PLUGIN_ROOT="$repo_root" nvim --headless -l test/lua/installed.lua
