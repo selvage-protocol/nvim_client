@@ -112,8 +112,9 @@ There is no `setup()` call.
 A first session:
 
 1. Start `selvaged` and note the address it prints.
-2. `:SelvageHost` shares the current buffer. Answer its one question with that address; the invite
-   link goes on the clipboard as the room opens.
+2. `:SelvageHost` shares the current buffer. Answer its one question with that address — the host
+   alone is enough, since `selvage.dontblameme.dev` means `wss://selvage.dontblameme.dev` — and
+   the invite link goes on the clipboard as the room opens.
 3. Send the link. The other person runs `:SelvageJoin <invite>`, which joins the room and opens its
    first document.
 4. Both edit the same file, and each sees the other's text and caret as they type.
@@ -286,15 +287,22 @@ for once and remembered across restarts, so later bare `:SelvageHost` calls reus
 With none of the three, the one question starts from the demo server `ws://100.64.0.3:8080`.
 `:SelvageChangeServer` reports or changes the address without hosting first.
 
+Everywhere a *server* address is typed — the argument, the question's answer, the setting, a
+remembered one — the host on its own is enough, and it means the published shape: a bare host is
+completed to `wss://<host>`, because the room is dialled over TLS. The `/session` path every
+Selvage server answers belongs to the engine, which adds it to whatever base it is given, so an
+address that already names it (`wss://host/session`) loses it rather than gaining a second one;
+any other path is kept, since a server behind a prefix was addressed deliberately.
+
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach is reported rather than claimed, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageChangeServer [serverUrl]` | Report the server the next host uses, and set it, without hosting first. With no argument it reports the address in force and, where there is somebody to ask, opens the same box `:SelvageHost`'s first question does, prefilled with it. While `vim.g.selvage_server_url` is set that global outranks the remembered address, so the command says so and changes nothing; writing the remembered value would be a change the next host silently ignores. Either way the write reaches the next host only, never a room already open. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the https page link the host copies; a `ws://` link still joins as the advanced fallback for rooms off the page default. A value that is not an invite link, typed or pasted, is refused at once. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers, its grant and the documents it holds, and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
 | `:SelvageFetch [path]` | Download a file from the room: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file, and a project-wide search is partial until the paths it covers have been fetched; this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
-| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A host copies the page invite: an `https://` link opening the guest page with the room and its token (`&server=` only for rooms off the page default). A guest holds the token it joined with, because the invite *is* the permission, so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. |
+| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A session the server gave no invite to says that rather than that there is no room, and a clipboard that refuses the link says why rather than claiming it. A host copies the page invite: an `https://` link opening the guest page with the room and its token (`&server=` only for rooms off the page default). A guest holds the token it joined with, because the invite *is* the permission, so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. |
 | `:SelvageLeave` | Leave the session and stop the companion. With no session it says so rather than claiming to have left one. |
 | `:SelvagePeers` | List the room's participants: each peer the room names, with the sign, whole display name and room path of the ones the gutter drew, in the colour their caret is drawn in. |
 | `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart, and a typed name whose caret has not arrived yet waits for it. |
@@ -329,9 +337,11 @@ the room's documents as buffers `:SelvageOpen` reaches.
 a document the room changed by default, while a guest's mirror is not refreshed either way, so a
 save in it is refused and the file keeps what it last held. `vim.g.selvage_open_on_join` and this
 are read when a session starts, so a change to either applies to the next host or join.
-`vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, and
+`vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for — completed the
+same way an argument is, so a bare host there means `wss://<host>` — and
 `vim.g.selvage_web_origin` is the page a host's `:SelvageCopyInvite` links to, defaulting to the
-page `https://selvage.dontblameme.dev`. It must name an https origin; anything
+page `https://selvage.dontblameme.dev`. It must name an https origin, given in full or as a bare
+host, which means `https://<host>`; anything
 else falls back to the default, so a host's copied link never carries the room's token over
 cleartext. `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 

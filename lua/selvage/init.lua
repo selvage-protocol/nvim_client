@@ -2742,7 +2742,7 @@ end
 
 --- Puts this session's page link on the clipboard and the unnamed register; defined below,
 --- declared here because the host confirm above runs before its definition loads.
-local take_invite
+local hand_on_invite
 
 --- What a host or join that could not open says, as one sentence a person can act on.
 ---
@@ -2820,11 +2820,20 @@ local function on_status(message)
   elseif message.state == 'hosting' then
     -- A host's next move is pasting the link to a guest, so the room copies its page
     -- link without being asked; `:SelvageCopyInvite` stays for later copies. What is
-    -- copied is never the wire address: only the page link leaves this editor.
-    if take_invite() then
+    -- copied is never the wire address: only the page link leaves this editor. A copy that
+    -- did not happen says which way it did not happen — a refused clipboard and a link this
+    -- connection never held are different faults, and naming the copy command for either
+    -- would answer a person with a command that has nothing to copy.
+    local handed, why = hand_on_invite()
+    if handed == 'copied' then
       notify('the room is open. Send this link to your friend — it is on the clipboard.')
+    elseif handed == 'register' then
+      notify(
+        ('the room is open, but the invite link could not be copied (%s).'):format(why),
+        vim.log.levels.WARN
+      )
     else
-      notify('the room is open; :SelvageCopyInvite copies the invite link.')
+      notify('the room is open, but this connection holds no invite link to send.', vim.log.levels.WARN)
     end
     share_current()
     watch_buffers()
@@ -3424,6 +3433,45 @@ local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
 --- wins — so moving the page is this one line.
 local DEFAULT_WEB_ORIGIN = 'https://selvage.dontblameme.dev'
 
+--- A scheme at the start of a typed value: `ws`, `wss`, `http`, `https`. Its presence is what
+--- separates a URL from an address someone typed out of their head, and the bare form is the
+--- one that has to be completed rather than refused.
+local function has_scheme(text)
+  return text:match('^%a[%w+.-]*://') ~= nil
+end
+
+--- The address the engine dials, from whatever was typed in a server-address position.
+---
+--- A person types a host, not a URL: `selvage.dontblameme.dev` means the published shape,
+--- which is TLS, so a bare address means `wss://<host>`. The endpoint path is not part of a
+--- server address — the engine appends `/session` to the base it is given — so an address that
+--- already names the endpoint loses it, or the room would be dialled at `/session/session`,
+--- and a trailing slash is not a second server. Any other path is kept: a server behind a
+--- prefix was addressed deliberately, not mistyped.
+local function normalise_server_address(text)
+  local trimmed = vim.trim(text or '')
+  if trimmed == '' then
+    return ''
+  end
+  local addressed = has_scheme(trimmed) and trimmed or ('wss://' .. trimmed)
+  addressed = (addressed:gsub('/+$', ''))
+  return (addressed:gsub('/session$', ''))
+end
+
+--- The page origin from whatever was typed in a page-origin position, where the default is the
+--- other one: a page is served over TLS or it is not served to the room at all, so a bare host
+--- means `https://<host>`. A scheme that is not https is left for the caller to refuse rather
+--- than rewritten — a cleartext page link carries the room's token, and that is not a guess to
+--- make on someone's behalf.
+local function normalise_page_origin(text)
+  local trimmed = vim.trim(text or '')
+  if trimmed == '' then
+    return ''
+  end
+  local addressed = has_scheme(trimmed) and trimmed or ('https://' .. trimmed)
+  return (addressed:gsub('/+$', ''))
+end
+
 --- The last server address a host was started on, so the next bare `:SelvageHost` reuses
 --- it without asking. The file below is what outlives this Neovim; this is what answers
 --- without reading it twice in one process. `vim.g.selvage_server_url` is the setting that
@@ -3531,9 +3579,9 @@ end
 local function web_origin()
   local configured = vim.g.selvage_web_origin
   if configured ~= nil then
-    local trimmed = vim.trim(tostring(configured))
+    local trimmed = normalise_page_origin(tostring(configured))
     if trimmed:match('^https://%S+$') ~= nil then
-      return (trimmed:gsub('/+$', ''))
+      return trimmed
     end
   end
   return DEFAULT_WEB_ORIGIN
@@ -3693,35 +3741,47 @@ local function resolve_invite(callback)
   end)
 end
 
---- Puts this session's invite on the clipboard and the unnamed register, or answers false when
---- there is none to put there. Two moments reach for the invite — hosting again, and
---- `:SelvageCopyInvite` — and each has its own sentence about it.
+--- Puts this session's invite on the clipboard and the unnamed register, and answers what
+--- became of it: `'copied'` when the system clipboard took the link, `'register'` and the
+--- reason when only this Neovim's own registers did, `'no-session'` when there is no session
+--- to hand one on from, and `'no-invite'` when the session stands but this connection holds no
+--- link for it.
+---
+--- Nothing is consumed here: the link is derived from the session every time it is asked for,
+--- so one copy leaves the next one with just as much to put on the clipboard.
 ---
 --- What a host copies is its page link, never the wire address it holds. A guest holds the
 --- token it joined with — the invite *is* the permission — so the link its host sent is the
 --- guest's to hand on, as it stands: the page link keeps the origin the host sent it from, and
 --- a guest that reached the room over `ws://` has no other address for it.
-take_invite = function()
+hand_on_invite = function()
   -- An invite that outlived its session is not one to hand on: a failed join leaves the link
   -- remembered, and a room nobody is in is not a room to invite anyone to.
   if not in_session() then
-    return false
+    return 'no-session'
   end
   local invite = state.invite
   if invite == nil then
-    return false
+    return 'no-invite'
   end
   local link = invite
   if state.role ~= 'guest' then
     local wire = parse_wire_invite(invite)
     if wire == nil then
-      return false
+      return 'no-invite'
     end
     link = build_page_link(wire.room, wire.token, wire.base)
   end
   vim.fn.setreg('"', link)
-  pcall(vim.fn.setreg, '+', link)
-  return true
+  -- The system clipboard is not this editor's to command: a Neovim with no clipboard provider
+  -- takes the link into the unnamed register and nowhere else on the machine, so a sentence
+  -- saying the clipboard has it would claim what the code cannot do. The unnamed register is
+  -- written first and stands either way, so the link is never lost, only less reachable.
+  local copied, why = pcall(vim.fn.setreg, '+', link)
+  if not copied then
+    return 'register', tostring(why)
+  end
+  return 'copied'
 end
 
 --- Mints a room and shares the current buffer.
@@ -3732,8 +3792,21 @@ end
 function M.host(url)
   local wanted = vim.trim(url or '')
   if state.status == 'hosting' then
-    if take_invite() then
+    local handed, why = hand_on_invite()
+    if handed == 'copied' then
       notify('you are already hosting this session; the invite link is on the clipboard.')
+    elseif handed == 'register' then
+      notify(
+        ('you are already hosting this session, but the invite link could not be copied (%s).'):format(
+          why
+        ),
+        vim.log.levels.WARN
+      )
+    else
+      notify(
+        'you are already hosting this session, but this connection holds no invite link to send.',
+        vim.log.levels.WARN
+      )
     end
     return
   end
@@ -3755,6 +3828,10 @@ function M.host(url)
     end_session()
   end
   local function with_url(address)
+    -- Whatever was typed — an argument, an answer to the first-run question, a remembered one — is
+    -- completed here, so one place decides what a bare host means and the command that reports
+    -- an address reports the address a host would dial.
+    address = normalise_server_address(address)
     remember_last_server(address)
     resolve_display_name(function(display_name)
       local process = ensure()
@@ -3844,10 +3921,22 @@ function M.join(invite)
   resolve_invite(with_invite)
 end
 
---- Puts the invite on the clipboard and the unnamed register, and says where it is.
+--- Puts the invite on the clipboard and the unnamed register, and says where it is. A session
+--- that stands without a link to hand on is not a session that is absent: the sentence for the
+--- one says what was missing, and `host or join a room first` is left for the window that is
+--- in no session at all.
 function M.copy_invite()
-  if not take_invite() then
+  local handed, why = hand_on_invite()
+  if handed == 'no-session' then
     notify('there is no invite link; host or join a room first.', vim.log.levels.WARN)
+    return
+  end
+  if handed == 'no-invite' then
+    notify('this session holds no invite link to copy.', vim.log.levels.WARN)
+    return
+  end
+  if handed == 'register' then
+    notify(('the invite link could not be copied (%s).'):format(why), vim.log.levels.WARN)
     return
   end
   notify('the invite link is on the clipboard.')
@@ -3936,7 +4025,7 @@ end
 function M.change_server(url)
   local wanted = vim.trim(url or '')
   local configured = vim.g.selvage_server_url
-  local configured_str = configured ~= nil and vim.trim(tostring(configured)) or ''
+  local configured_str = configured ~= nil and normalise_server_address(tostring(configured)) or ''
   if configured_str ~= '' then
     notify(
       ('the "vim.g.selvage_server_url" setting fixes the server at %s; change it in your config to use a different one.'):format(
@@ -3946,21 +4035,25 @@ function M.change_server(url)
     return
   end
   if wanted ~= '' then
-    remember_last_server(wanted)
-    notify(('will host on %s next. Leave this session and host again to move there.'):format(wanted))
+    local address = normalise_server_address(wanted)
+    remember_last_server(address)
+    notify(('will host on %s next. Leave this session and host again to move there.'):format(address))
     return
   end
   local current = last_server or read_last_server()
   if current == nil then
     notify('no server is remembered yet; the next host asks.')
   else
-    notify(('the next host uses %s.'):format(current))
+    notify(('the next host uses %s.'):format(normalise_server_address(current)))
   end
   if not can_prompt() then
     return
   end
-  local base = current or DEFAULT_SERVER_URL
+  -- The box and its answer are completed before either is used, so the address this command
+  -- reports is the address the next host dials, bare host or not.
+  local base = normalise_server_address(current or DEFAULT_SERVER_URL)
   ask_server_url(base, function(address)
+    address = normalise_server_address(address)
     if address == base then
       return
     end
