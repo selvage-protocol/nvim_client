@@ -131,6 +131,7 @@ check('  at info level', notices[#notices] ~= nil and notices[#notices].level or
 -- buffer is the only moment left to publish the caret again. Without that publish a peer who has
 -- not moved is a peer whose caret nobody draws: the host's row cannot name them and `:SelvageGoTo`
 -- has nothing to go to.
+--- The `selection` messages this session sent for `path`: the caret it has told the room about.
 local function selections_for(path)
   local count = 0
   for _, message in ipairs(sent) do

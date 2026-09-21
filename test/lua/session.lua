@@ -1652,6 +1652,7 @@ vim.cmd('edit! ' .. path)
 local own_winbar = 'my own row %f'
 vim.opt.winbar = own_winbar
 
+--- The row a window wears, as the editor holds it: the statusline string, items and all.
 local function row(win)
   return vim.api.nvim_get_option_value('winbar', { win = win or 0 })
 end
