@@ -1628,6 +1628,58 @@ handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomI
 check('a new session refuses it again', opens_of(latin_room), 0)
 check('  and says so again', said_since(before_again, latin_room) ~= nil, true)
 
+-- -- a binary file opened in the host's own window ----------------------------------
+--
+-- The guard above reads the buffer's text, and a binary file never reaches it: Neovim reads a
+-- file whose bytes are not UTF-8 as Latin-1, so every byte becomes a character and the buffer's
+-- text is well-formed UTF-8 whatever the file holds. Sharing that transliteration put it in the
+-- room, and a peer's later edit made the room's save policy write it back over the host's own
+-- file. The file's own bytes are what is judged, as the companion judges them when a peer asks
+-- the room for the path.
+
+local binary_path = '.tmp/lua-binary.bin'
+local binary_room = vim.fn.fnamemodify(binary_path, ':.')
+local handle = assert(io.open(binary_path, 'wb'))
+handle:write(string.char(0, 1, 2, 255, 254, 128) .. 'binary\n')
+handle:close()
+
+selvage.leave()
+vim.cmd('edit! ' .. vim.fn.fnameescape(binary_path))
+local binary_buf = vim.api.nvim_get_current_buf()
+check(
+  'a binary file opens as a buffer whose text is valid UTF-8',
+  require('selvage.utf16').valid(
+    table.concat(vim.api.nvim_buf_get_lines(binary_buf, 0, -1, true), '\n')
+  ),
+  true
+)
+
+local before_binary = #notices
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-binary' })
+check('a binary file is not shared, however its buffer reads', opens_of(binary_room), 0)
+check(
+  '  and the refusal says what it is',
+  said_since(
+    before_binary,
+    binary_room .. ' is a binary file, and a room carries text, so it is not shared.'
+  ) ~= nil,
+  true
+)
+
+-- The file's bytes are the fact, so a buffer the person has typed into is judged the same way:
+-- what is refused is the file, not what the window happens to hold. The same path twice is one
+-- refusal, like the one above.
+vim.api.nvim_buf_set_lines(binary_buf, 0, -1, true, { 'what I typed instead' })
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = binary_buf })
+local said_about_binary = 0
+for _, notice in ipairs(notices) do
+  if notice.message:find(binary_room, 1, true) ~= nil then
+    said_about_binary = said_about_binary + 1
+  end
+end
+check('  said once, whatever the buffer holds', said_about_binary, 1)
+
 -- -- a wiped shared buffer -------------------------------------------------------
 --
 -- `:bwipeout` on a shared buffer ends the buffer, so the room has to hear that this client no

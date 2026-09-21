@@ -32,7 +32,8 @@ local state = {
   --- behind it yet (`DESIGN.md` §4.2).
   grant = {},
   --- The room paths this session refused to share, so the refusal is said once: a buffer that
-  --- is not UTF-8 is entered and left many times over a session.
+  --- is not text a room can carry — not valid UTF-8, or a file whose bytes are not text at all —
+  --- is entered and left many times over a session.
   unshareable = {},
   --- The room paths the mirror refused to write, so the refusal is said once per path: a person
   --- saves a file more than once over a session.
@@ -817,6 +818,84 @@ end
 --- first, and it is defined before that section.
 local end_follow
 
+--- The largest file a session carries, mirroring `MAX_GRANT_FILE_BYTES` in the grant's own rules
+--- (`vendor/bridge/grant.ts`, and `MAX_GRANT_PATH_BYTES` is mirrored the same way in
+--- `mirror.lua`). A file past it is one the companion refuses for its size before it reads a byte,
+--- so the share path does not read one either.
+local MAX_FILE_BYTES = 1024 * 1024
+
+--- Whether a session may carry the file a buffer is named for: its **bytes**, as they stand on
+--- disk, are text — no NUL byte, and well-formed UTF-8. The same gate the companion applies to a
+--- peer's request for the file (`companion/grant.ts`, `decodableText`), reached from the other
+--- side of the same question.
+---
+--- The buffer's own text cannot stand in for it. Neovim reads a file whose bytes are not UTF-8 as
+--- Latin-1 (`'fileencodings'`' own fallback, which is how a `.bin` opens at all), so the buffer
+--- holds a transliteration: every byte became a character, and the text the buffer reports is
+--- well-formed UTF-8 whatever the file was. That text is what a session publishes, and a peer's
+--- later edit made the room's save policy write it back over the host's own file — the file's
+--- original bytes survive that round trip only because the same `'fileencoding'` converts them
+--- back, which stops being true the moment a peer types a character it cannot hold.
+---
+--- `true` when the bytes are text, `false` when they are not, and nil when this cannot be told:
+--- the bytes could not be read, or the file is past the bound above (the companion refuses those
+--- for their size, and says so).
+---
+--- @param name string the file the buffer is named for
+--- @param size integer its size as `lstat` reported it
+--- @return boolean|nil
+local function file_is_text(name, size)
+  if size > MAX_FILE_BYTES then
+    return nil
+  end
+  local fd = uv.fs_open(name, 'r', tonumber('644', 8))
+  if fd == nil then
+    return nil
+  end
+  local bytes
+  local ok = pcall(function()
+    local opened = uv.fs_fstat(fd)
+    -- The descriptor is what the bytes are read from, so the size is read there as well: a name
+    -- the walk was told about may have been another file by the time it is opened.
+    if opened == nil or opened.type ~= 'file' or opened.size > MAX_FILE_BYTES then
+      return
+    end
+    local chunks = {}
+    local read = 0
+    while read < opened.size do
+      local chunk = uv.fs_read(fd, opened.size - read, read)
+      if chunk == nil or #chunk == 0 then
+        break
+      end
+      chunks[#chunks + 1] = chunk
+      read = read + #chunk
+    end
+    -- Fewer bytes than the descriptor holds is not a prefix of the file to judge: it is a file
+    -- that moved under the read, and what it holds now is not what the buffer was read from.
+    if read == opened.size then
+      bytes = table.concat(chunks)
+    end
+  end)
+  uv.fs_close(fd)
+  if not ok or bytes == nil then
+    return nil
+  end
+  return bytes:find('\0', 1, true) == nil and utf16.valid(bytes)
+end
+
+--- Says, once per path, that a file a person opened is not one a room can carry: its bytes are not
+--- text. The companion says the same thing about the same file when a peer asks the room for it.
+local function refuse_binary(path)
+  if state.unshareable[path] ~= nil then
+    return
+  end
+  state.unshareable[path] = true
+  notify(
+    ('%s is a binary file, and a room carries text, so it is not shared.'):format(path),
+    vim.log.levels.ERROR
+  )
+end
+
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
     return
@@ -840,6 +919,14 @@ local function share(bufnr, path)
       state.unshareable[path] = true
       notify(('%s is not valid UTF-8, so it is not shared.'):format(path), vim.log.levels.ERROR)
     end
+    return
+  end
+  -- A buffer's text is not the file's bytes: Neovim decodes a file it cannot read as UTF-8 into
+  -- one, so a buffer can hold text that reads as valid UTF-8 while the file it was read from
+  -- holds a binary. The room is refused the file it cannot carry rather than the transliteration
+  -- of it — the same refusal a peer asking for the path is given, from the same question.
+  if behind ~= nil and file_is_text(api.nvim_buf_get_name(bufnr), behind.size) == false then
+    refuse_binary(path)
     return
   end
   local document = Document.new(bufnr, path, function(message)
