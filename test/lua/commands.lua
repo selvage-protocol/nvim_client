@@ -441,24 +441,35 @@ check('a bare :SelvageJoin offers the invite on the clipboard', prompted and pro
 check('  and joins the room it names', last_of('join') and last_of('join').invite, clipboard)
 
 -- The host copies the page link now, never the wire address: the clipboard offer is
--- that link, and the companion dials the wire URL it resolves to.
-clipboard = 'https://selvage.dontblameme.dev/?room=r-one&token=t&server=ws%3A%2F%2F127.0.0.1%3A8080'
+-- that link, and the companion dials the wire URL its own origin resolves to.
+clipboard = 'https://selvage.example:8443/?room=r-one&token=t'
 before = #notices
 vim.cmd('SelvageJoin')
 check('  a page link is offered too', prompted and prompted.default, clipboard)
 check(
-  '  and joins on the wire URL it names',
+  '  and joins the server its origin names',
   last_of('join') and last_of('join').invite,
-  'ws://127.0.0.1:8080/session?room=r-one&token=t'
+  'wss://selvage.example:8443/session?room=r-one&token=t'
 )
 
--- A page link without a server joins on the page default, the demo it was copied from.
-clipboard = 'https://selvage.dontblameme.dev/?room=r-one&token=t'
+-- The origin is the whole address, so the scheme says which socket it means: a page served in
+-- the clear names a server in the clear.
+clipboard = 'http://127.0.0.1:8080/?room=r-plain&token=t'
 vim.cmd('SelvageJoin')
 check(
-  '  a serverless page link joins on the page default',
+  '  a cleartext page link joins the cleartext server',
   last_of('join') and last_of('join').invite,
-  'ws://100.64.0.3:8080/session?room=r-one&token=t'
+  'ws://127.0.0.1:8080/session?room=r-plain&token=t'
+)
+
+-- The link *is* the server, so a link that names one in its query names nothing: `server` is
+-- an unknown parameter, ignored the way an unknown query parameter is, and the origin stands.
+clipboard = 'https://selvage.example/?room=r-older&token=t&server=ws%3A%2F%2F127.0.0.1%3A9'
+vim.cmd('SelvageJoin')
+check(
+  '  a stale server= parameter moves the link nowhere',
+  last_of('join') and last_of('join').invite,
+  'wss://selvage.example/session?room=r-older&token=t'
 )
 
 clipboard = 'a note the person copied instead'
@@ -538,14 +549,14 @@ check(
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
 
 -- A whole page link pasted at the prompt joins on the wire URL it names.
-answer_with('https://selvage.dontblameme.dev/?room=r-two&token=t2&server=ws%3A%2F%2F127.0.0.1%3A9')
+answer_with('https://selvage.example:8443/?room=r-two&token=t2')
 joins_before = count_type('join')
 before = #notices
 vim.cmd('SelvageJoin')
 check(
   'a pasted page link joins the room it names',
   last_of('join') and last_of('join').invite,
-  'ws://127.0.0.1:9/session?room=r-two&token=t2'
+  'wss://selvage.example:8443/session?room=r-two&token=t2'
 )
 check('  and says nothing about it', said_since(before, 'That does not look like') == nil, true)
 
@@ -599,11 +610,11 @@ check('  and nothing is dialled for it either', count_type('join'), joins_before
 answer_with('Ada')
 joins_before = count_type('join')
 before = #notices
-vim.cmd('SelvageJoin https://selvage.dontblameme.dev/?room=r-arg&token=t&server=ws%3A%2F%2F127.0.0.1%3A9')
+vim.cmd('SelvageJoin https://selvage.example:8443/?room=r-arg&token=t')
 check(
   'a conforming argument joins',
   last_of('join') and last_of('join').invite,
-  'ws://127.0.0.1:9/session?room=r-arg&token=t'
+  'wss://selvage.example:8443/session?room=r-arg&token=t'
 )
 check('  after asking for the name once', prompted ~= nil, true)
 check('  and joins under it', last_of('join') and last_of('join').displayName, 'Ada')
@@ -765,7 +776,7 @@ check('  and asks nothing', confirmations, 0)
 check(
   '  and puts the page link on the clipboard',
   registers['+'],
-  'https://selvage.dontblameme.dev/?room=r-again&token=t&server=ws%3A%2F%2F127.0.0.1%3A2'
+  'http://127.0.0.1:2/?room=r-again&token=t'
 )
 check('  and the unnamed register too', registers['"'], registers['+'])
 check('  and never the wire address', registers['+']:find('ws://', 1, true), nil)
@@ -780,13 +791,9 @@ report_status('hosting', 'r-fresh', 'ws://127.0.0.1:7/session?room=r-fresh&token
 check(
   'a room that opens puts the page link on the clipboard',
   registers['+'],
-  'https://selvage.dontblameme.dev/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
+  'http://127.0.0.1:7/?room=r-fresh&token=t7'
 )
-check(
-  '  and the unnamed register too',
-  registers['"'],
-  'https://selvage.dontblameme.dev/?room=r-fresh&token=t7&server=ws%3A%2F%2F127.0.0.1%3A7'
-)
+check('  and the unnamed register too', registers['"'], registers['+'])
 check(
   '  and never the wire address',
   registers['+'] ~= nil and registers['+']:find('ws://', 1, true),
@@ -799,49 +806,49 @@ check(
   true
 )
 
--- A room on the page default links with no server: the page already knows it.
+-- A room links at the server that serves it: a plain server's page is plain too, because the
+-- link and the socket are the same address over the two schemes a browser and a socket use.
 report_status('hosting', 'r-demo', 'ws://100.64.0.3:8080/session?room=r-demo&token=t')
 registers = {}
 vim.cmd('SelvageCopyInvite')
 check(
-  '  a default-server room links with no server',
+  '  a room links at the server that serves it',
   registers['+'],
-  'https://selvage.dontblameme.dev/?room=r-demo&token=t'
+  'http://100.64.0.3:8080/?room=r-demo&token=t'
 )
 
--- The setting moves the copied link.
+-- A TLS room links at its own https origin: this is the link a person sends, and the page it
+-- opens dials the same host. There is no second address for it to name, which is what a page
+-- setting used to be — and how a room on one server came to be linked at another's page.
+report_status('hosting', 'r-tls', 'wss://selvage.dontblameme.dev/session?room=r-tls&token=ttls')
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  a TLS room links at its own page',
+  registers['+'],
+  'https://selvage.dontblameme.dev/?room=r-tls&token=ttls'
+)
+
+-- A server behind a prefix keeps it: the page is served where the socket is answered.
+report_status('hosting', 'r-prefix', 'wss://selvage.example/prefix/session?room=r-prefix&token=tp')
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  and a server behind a prefix keeps it',
+  registers['+'],
+  'https://selvage.example/prefix/?room=r-prefix&token=tp'
+)
+
+-- The page is no longer an address of its own, so the global that used to move it moves
+-- nothing: a link that could be sent to a page dialling another server is the defect this
+-- removes.
 vim.g.selvage_web_origin = 'https://custom.example:9443/'
 registers = {}
 vim.cmd('SelvageCopyInvite')
 check(
-  '  the web origin setting moves the copied link',
+  '  a page-origin global moves the link nowhere',
   registers['+'],
-  'https://custom.example:9443/?room=r-demo&token=t'
-)
-vim.g.selvage_web_origin = nil
-
--- A non-https setting falls back to the default page rather than minting a
--- cleartext link carrying the room's token.
-vim.g.selvage_web_origin = 'http://custom.example:9443/'
-registers = {}
-vim.cmd('SelvageCopyInvite')
-check(
-  '  an http setting falls back to the default page',
-  registers['+'],
-  'https://selvage.dontblameme.dev/?room=r-demo&token=t'
-)
-vim.g.selvage_web_origin = nil
-
--- A bare page origin is completed the way a bare server address is, with the scheme a page's
--- own default: a page link carries the room's token, so the page is served over TLS or not at
--- all, and an origin that says `http://` is still refused rather than rewritten.
-vim.g.selvage_web_origin = 'custom.example:9443'
-registers = {}
-vim.cmd('SelvageCopyInvite')
-check(
-  '  a bare page origin means https',
-  registers['+'],
-  'https://custom.example:9443/?room=r-demo&token=t'
+  'https://selvage.example/prefix/?room=r-prefix&token=tp'
 )
 vim.g.selvage_web_origin = nil
 
@@ -977,7 +984,7 @@ check(
 check(
   '  and the unnamed register holds it',
   registers['"'],
-  'https://selvage.dontblameme.dev/?room=r-noclip&token=t5&server=ws%3A%2F%2F127.0.0.1%3A53'
+  'http://127.0.0.1:53/?room=r-noclip&token=t5'
 )
 before = #notices
 vim.cmd('SelvageCopyInvite')
