@@ -298,6 +298,22 @@ check(
   'wss://selvage.dontblameme.dev'
 )
 
+-- The box's answer is completed like an argument is: what the command reports is the address
+-- the next host dials, never a bare host the host itself would have to complete.
+before = #notices
+answer_with('selvage.example')
+vim.cmd('SelvageChangeServer')
+check(
+  '  an answer typed into the box is completed before it is reported',
+  said_since(before, 'will host on wss://selvage.example next.') ~= nil,
+  true
+)
+check(
+  '    and written down completed',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  'wss://selvage.example'
+)
+
 -- -- :SelvageChangeServer reports the address in force and offers to change it ----------
 --
 -- The palette-reachable answer to "how do I change which server I am using", without hosting

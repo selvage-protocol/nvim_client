@@ -4049,8 +4049,11 @@ function M.change_server(url)
   if not can_prompt() then
     return
   end
-  local base = current or DEFAULT_SERVER_URL
+  -- The box and its answer are completed before either is used, so the address this command
+  -- reports is the address the next host dials, bare host or not.
+  local base = normalise_server_address(current or DEFAULT_SERVER_URL)
   ask_server_url(base, function(address)
+    address = normalise_server_address(address)
     if address == base then
       return
     end
