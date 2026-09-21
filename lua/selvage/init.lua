@@ -1590,6 +1590,21 @@ local function winbar_key(win, bufnr)
   return win .. ':' .. bufnr
 end
 
+--- Whether a window is a float: a notification, a hover, a completion menu — the editor's own
+--- furniture rather than a window showing a document.
+---
+--- No indicator belongs in one. A float is not a place a person reads the session's rows and it is
+--- often shorter than the row itself: the one line a one-line float has is already spoken for, so
+--- writing a winbar into one is where Neovim raises `E36: Not enough room`. The host-away row is
+--- redrawn by a repeating timer, and Neovim stops a repeating timer after three of its runs raise
+--- an error — which is what the frozen countdown at 27s was found beside, on the configuration
+--- this came from: with `nvim-notify`'s popup on screen the errors accumulated and the timer went;
+--- with no float on screen there is no `E36` at all and the countdown ticks to the end.
+local function floating(win)
+  local ok, config = pcall(api.nvim_win_get_config, win)
+  return ok and config.relative ~= ''
+end
+
 --- The highlight the session's own row is drawn in: the framing that tells its row apart
 --- from a person's own, and the name a colorscheme or a person may style. Linked to `Title`
 --- and defined with `default`, so anything a colorscheme defines for the name wins; a
@@ -1799,7 +1814,12 @@ local function restore_indicators()
       local prev = state.saved_winbars[key]
       if prev ~= nil then
         state.saved_winbars[key] = nil
-        pcall(api.nvim_set_option_value, 'winbar', prev, { win = win })
+        -- A float keeps no row of a person's back: it is not a window showing their buffer, and
+        -- a row it never had is not one to put back. Clearing one is safe where writing one is
+        -- not — removing a winbar needs no line the float has not got.
+        if not floating(win) then
+          pcall(api.nvim_set_option_value, 'winbar', prev, { win = win })
+        end
       elseif state.following == nil then
         local ok, current = pcall(api.nvim_get_option_value, 'winbar', { win = win })
         if ok and is_indicator_row(current) then
@@ -1818,6 +1838,9 @@ end
 --- it leaves. Never the statusline, which is what statusline plugins own.
 local function show_indicator(win)
   win = win or api.nvim_get_current_win()
+  if floating(win) then
+    return
+  end
   local bufnr = api.nvim_win_get_buf(win)
   local key = winbar_key(win, bufnr)
   local ours = indicator_row(bufnr)

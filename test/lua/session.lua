@@ -1367,6 +1367,57 @@ check(
   true
 )
 
+-- -- a float is not a place for the session's row -----------------------------------
+--
+-- The configuration this was found in shows its notifications through `nvim-notify`, whose popup
+-- is a one-line floating window. Writing the row into one is where Neovim raises `E36: Not enough
+-- room`, and on that configuration the countdown stopped after three ticks and kept the number it
+-- last drew: Neovim stops a repeating timer whose runs raise errors. No indicator goes into a
+-- float, and the countdown keeps ticking with one on screen.
+local float_buffer = vim.api.nvim_create_buf(false, true)
+local float_window = vim.api.nvim_open_win(float_buffer, false, {
+  relative = 'editor',
+  row = 1,
+  col = 1,
+  width = 20,
+  height = 1,
+})
+
+--- The row a window carries itself, as opposed to the one it shows from the global option.
+--- @return string
+local function own_row(win)
+  local ok, value = pcall(vim.api.nvim_get_option_value, 'winbar', { win = win, scope = 'local' })
+  return ok and value or ('<error: ' .. tostring(value) .. '>')
+end
+
+handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 4000 } })
+check('a floating window is given no row of the session\'s', own_row(float_window), '')
+check(
+  '  and the window the person is in carries it',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Host disconnected', 1, true) ~= nil,
+  true
+)
+
+-- The countdown's own clock: the float is on screen for the second reading rather than gone
+-- before it, and the row it must not have is still the row it must not have afterwards.
+local ticked_with_float = vim.wait(4000, function()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
+end, 50)
+check('  and the countdown keeps ticking with one on screen', ticked_with_float, true)
+check('  and the float still has no row of the session\'s', own_row(float_window), '')
+
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+check(
+  '  and the row leaves the window when the countdown ends',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
+  true
+)
+vim.api.nvim_win_close(float_window, true)
+vim.api.nvim_buf_delete(float_buffer, { force = true })
+
 local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
 check(
