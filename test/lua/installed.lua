@@ -20,6 +20,10 @@
 
 local failures = 0
 
+--- Counts one assertion, and the failures down to the exit code at the end of the file.
+--- @param name string what was asserted, in the negative
+--- @param got any what it was
+--- @param want any what it should have been
 local function check(name, got, want)
   if got == want then
     print('ok   ' .. name)
