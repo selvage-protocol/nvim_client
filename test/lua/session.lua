@@ -1680,6 +1680,38 @@ for _, notice in ipairs(notices) do
 end
 check('  said once, whatever the buffer holds', said_about_binary, 1)
 
+-- -- a file that could not be read ------------------------------------------------
+--
+-- Judging the bytes means reading them, and a file that moved between the buffer's own read and
+-- this one cannot be judged: what the buffer holds for it is not what the file holds now. Nothing
+-- is shared for it, because text that cannot be checked is text that may be a transliteration of
+-- bytes the file no longer has (`file_is_text`). Entering the buffer again looks again, so a file
+-- that comes back is shared when it does.
+
+local unreadable_path = '.tmp/lua-unreadable.txt'
+local unreadable_room = vim.fn.fnamemodify(unreadable_path, ':.')
+vim.fn.writefile({ 'readable for now' }, unreadable_path)
+selvage.leave()
+vim.cmd('edit! ' .. vim.fn.fnameescape(unreadable_path))
+vim.uv.fs_chmod(unreadable_path, 0)
+
+local before_unreadable = #notices
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-unreadable' })
+if vim.uv.fs_open(unreadable_path, 'r', tonumber('644', 8)) == nil then
+  check('a file that could not be read is not shared', opens_of(unreadable_room), 0)
+  check(
+    '  and the refusal says what happened',
+    said_since(before_unreadable, unreadable_room .. ' could not be read, so it is not shared.') ~= nil,
+    true
+  )
+else
+  -- A process with the privilege to read anything cannot make this file unreadable, and both
+  -- checks above would pass for a reason that has nothing to do with the code.
+  print('note  a file that could not be read is not shared: not run, this process reads anything')
+end
+vim.uv.fs_chmod(unreadable_path, tonumber('644', 8))
+
 -- -- a wiped shared buffer -------------------------------------------------------
 --
 -- `:bwipeout` on a shared buffer ends the buffer, so the room has to hear that this client no

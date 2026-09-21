@@ -837,17 +837,13 @@ local MAX_FILE_BYTES = 1024 * 1024
 --- original bytes survive that round trip only because the same `'fileencoding'` converts them
 --- back, which stops being true the moment a peer types a character it cannot hold.
 ---
---- `true` when the bytes are text, `false` when they are not, and nil when this cannot be told:
---- the bytes could not be read, or the file is past the bound above (the companion refuses those
---- for their size, and says so).
+--- `true` when the bytes are text, `false` when they are not, and nil when the file could not be
+--- read in one piece at all — a file that moved under the read is not a prefix of itself to judge,
+--- and what a buffer holds for it is not what the bytes say.
 ---
 --- @param name string the file the buffer is named for
---- @param size integer its size as `lstat` reported it
 --- @return boolean|nil
-local function file_is_text(name, size)
-  if size > MAX_FILE_BYTES then
-    return nil
-  end
+local function file_is_text(name)
   local fd = uv.fs_open(name, 'r', tonumber('644', 8))
   if fd == nil then
     return nil
@@ -856,8 +852,8 @@ local function file_is_text(name, size)
   local ok = pcall(function()
     local opened = uv.fs_fstat(fd)
     -- The descriptor is what the bytes are read from, so the size is read there as well: a name
-    -- the walk was told about may have been another file by the time it is opened.
-    if opened == nil or opened.type ~= 'file' or opened.size > MAX_FILE_BYTES then
+    -- may have been another file's by the time it is opened.
+    if opened == nil or opened.type ~= 'file' then
       return
     end
     local chunks = {}
@@ -896,6 +892,19 @@ local function refuse_binary(path)
   )
 end
 
+--- Says, once per path, that a file could not be read, so nothing was shared for it. A file that
+--- moved between the buffer's own read and this one is one whose bytes are not known, and what a
+--- session cannot judge is not carried: the text the buffer holds for it may be a transliteration
+--- of bytes it no longer has (`file_is_text`). Entering the buffer again looks again, so this is
+--- said once rather than once per visit.
+local function refuse_unreadable(path)
+  if state.unshareable[path] ~= nil then
+    return
+  end
+  state.unshareable[path] = true
+  notify(('%s could not be read, so it is not shared.'):format(path), vim.log.levels.WARN)
+end
+
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
     return
@@ -925,9 +934,22 @@ local function share(bufnr, path)
   -- one, so a buffer can hold text that reads as valid UTF-8 while the file it was read from
   -- holds a binary. The room is refused the file it cannot carry rather than the transliteration
   -- of it — the same refusal a peer asking for the path is given, from the same question.
-  if behind ~= nil and file_is_text(api.nvim_buf_get_name(bufnr), behind.size) == false then
-    refuse_binary(path)
-    return
+  --
+  -- A file past the bound is not read at all: the companion judges the text the buffer holds and
+  -- refuses one past the session's own bound, in words that say so. What that leaves is a file
+  -- past the bound whose decoded text is not (a UTF-16 file, say), and that one is carried: its
+  -- text is the file's rather than a transliteration of it, so nothing is written back over the
+  -- file that the file did not hold.
+  if behind ~= nil and behind.size <= MAX_FILE_BYTES then
+    local bytes_are_text = file_is_text(api.nvim_buf_get_name(bufnr))
+    if bytes_are_text == false then
+      refuse_binary(path)
+      return
+    end
+    if bytes_are_text == nil then
+      refuse_unreadable(path)
+      return
+    end
   end
   local document = Document.new(bufnr, path, function(message)
     -- A local edit of a shared document ends a follow: with the caret moved by the follow,

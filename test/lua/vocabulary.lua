@@ -190,6 +190,7 @@ local MESSAGES = {
   -- What this front-end refuses on its own.
   { 'ERROR', '%s is not valid UTF-8, so it is not shared.' },
   { 'ERROR', '%s is a binary file, and a room carries text, so it is not shared.' },
+  { 'WARN', '%s could not be read, so it is not shared.' },
   { 'WARN', '%s is outside %s, the folder this session shares, so it is not shared.' },
   { 'WARN', 'this buffer has no file, so it is not shared; the folder this session shares is %s.' },
   { 'WARN', '%s is not a regular file, so it is not shared.' },
