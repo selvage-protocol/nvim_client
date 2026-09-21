@@ -1559,15 +1559,20 @@ local function land(peer_id)
   return true
 end
 
+--- A name or a sentence as part of one of the indicators' rows. The row is evaluated like a
+--- statusline, where `%` starts an item and `%{…}` is a Vimscript expression, and a display name
+--- is whatever the peer typed: every `%` in it arrives doubled, so a name reads as itself rather
+--- than as the item it spells.
+local function row_text(text)
+  return tostring(text or ''):gsub('%%', '%%%%')
+end
+
 --- The indicator's own row for `label`: the peer's name and the way to stop, clickable
 --- where the editor takes a mouse. The `%0@...@ ... %X` label is what makes a click stop
 --- the follow, through the stop command's own handler; a click needs `'mouse'` set, while
 --- the command stops the follow regardless.
 local function indicator_text(label)
-  -- The row is evaluated like a statusline, where `%` starts an item: a name carrying
-  -- one has to arrive doubled.
-  local safe = tostring(label or ''):gsub('%%', '%%%%')
-  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(safe)
+  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(row_text(label))
 end
 
 -- What the indicator's click label calls: a Vim function by name. A Lua `_G` function is
@@ -1669,8 +1674,8 @@ local function buffer_room_path(bufnr)
   return nil
 end
 
---- The peers the last presence report drew in this buffer, as the two cells and the colour the
---- gutter draws for them — the same `sign` and `highlight` `state.peers` carries, so the row and
+--- The peers the last presence report drew in this buffer, with the name and the colour the
+--- gutter draws them by — the same `label` and `highlight` `state.peers` carries, so the row and
 --- the gutter cannot disagree about who is where. Ordered by peer id, so a report that reorders
 --- them does not reorder the row.
 local function file_peer_marks(bufnr)
@@ -1680,14 +1685,36 @@ local function file_peer_marks(bufnr)
   end
   local marks = {}
   for _, peer in ipairs(state.peers) do
-    if peer.path == path and peer.sign ~= nil and peer.highlight ~= nil then
-      marks[#marks + 1] = { sign = peer.sign, highlight = peer.highlight, peerId = peer.peerId }
+    if peer.path == path and peer.label ~= nil and peer.highlight ~= nil then
+      marks[#marks + 1] = {
+        label = peer.label,
+        highlight = peer.highlight,
+        peerId = peer.peerId,
+      }
     end
   end
   table.sort(marks, function(left, right)
     return tostring(left.peerId) < tostring(right.peerId)
   end)
   return marks
+end
+
+--- The peers in `bufnr`, as the row names them: each name in the colour their caret and their
+--- sign are drawn in, and the verb the VS Code client's own hover uses for the same fact —
+--- `<name> is here`, `<a>, <b> are here`. A sign is two cells and cannot spell anyone, so the row
+--- is the one place a person looking at `ma` in the gutter can read whose it is.
+---
+--- Nil when no peer's caret is in this buffer, which is the row having nothing to say about it.
+local function file_peer_words(bufnr)
+  local marks = file_peer_marks(bufnr)
+  if #marks == 0 then
+    return nil
+  end
+  local names = {}
+  for _, mark in ipairs(marks) do
+    names[#names + 1] = ('%%#%s#%s%%*'):format(mark.highlight, row_text(mark.label))
+  end
+  return ('%s %s'):format(table.concat(names, ', '), #marks == 1 and 'is here' or 'are here')
 end
 
 --- How the session row is shown: `never` for `vim.g.selvage_indicator = false`, `always` for
@@ -1721,8 +1748,8 @@ local function row_wanted(bufnr)
 end
 
 --- The session's own row for a buffer: its words, the mark a file holding no fetched content
---- carries, and the initial cells of the peers whose caret is in it. Nil when the buffer has no
---- row to wear — `row_wanted` is that question.
+--- carries, and the peers whose caret is in it, named. Nil when the buffer has no row to wear —
+--- `row_wanted` is that question.
 local function session_text(bufnr)
   if not row_wanted(bufnr) then
     return nil
@@ -1733,11 +1760,12 @@ local function session_text(bufnr)
   end
   local row = ('%s%s%s'):format(
     SESSION_FRAME,
-    session_words() or '',
+    row_text(session_words()),
     unfetched_buffer(bufnr) and ' [not fetched]' or ''
   )
-  for _, mark in ipairs(file_peer_marks(bufnr)) do
-    row = row .. (' %%#%s#%s'):format(mark.highlight, mark.sign)
+  local here = file_peer_words(bufnr)
+  if here ~= nil then
+    row = row .. ' — ' .. here
   end
   return row .. '%*'
 end
