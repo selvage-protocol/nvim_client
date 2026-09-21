@@ -13,6 +13,7 @@ import type {
   Selection,
 } from '../../vendor/engine/presence.ts';
 import type { CompanionEngine } from '../../companion/session.ts';
+import { baseOf } from './base.ts';
 
 export class FakeEngine implements CompanionEngine {
   readonly texts = new Map<string, string>();
@@ -55,7 +56,7 @@ export class FakeEngine implements CompanionEngine {
         awareness_renew_ms: 15_000,
         awareness_expire_ms: 30_000,
       },
-      baseUrl: 'ws://127.0.0.1:0',
+      baseUrl: baseOf('ws://127.0.0.1:0'),
       ...(role === 'host' ? { token: 't-test' } : {}),
     };
   }
