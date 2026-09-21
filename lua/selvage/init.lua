@@ -614,8 +614,8 @@ function M.list_peers()
     chunks[#chunks + 1] = {
       ('  %s  (%s, %s)'):format(
         peer.label,
-        tostring(peer.role or 'peer'),
-        tostring(peer.path or 'no shared document open')
+        tostring(peer.role or 'participant'),
+        tostring(peer.path or 'not in a document')
       ),
     }
   end
@@ -2184,8 +2184,8 @@ local function pick_peer(prompt, on_choice)
     format_item = function(peer)
       return ('%s — %s — %s'):format(
         row_name(peers, peer),
-        tostring(peer.role or 'peer'),
-        tostring(peer.path or 'no shared document open')
+        tostring(peer.role or 'participant'),
+        tostring(peer.path or 'not in a document')
       )
     end,
   }, on_choice)
@@ -3490,7 +3490,7 @@ end
 --- trimmed reply; a cancelled or emptied one calls nothing, so the caller's own state stands.
 local function ask_server_url(default, callback)
   vim.ui.input({
-    prompt = 'The Selvage server to host on — if you started one yourself, it printed this address: ',
+    prompt = 'Selvage server to host on (selvaged printed it when it started): ',
     default = default,
   }, function(input)
     local address = vim.trim(input or '')
