@@ -5,7 +5,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -1602,4 +1603,55 @@ test('a folder that cannot be watched is reported and the session goes on', asyn
   );
   assert.equal(it.engine.disconnected, false, 'a folder that cannot be watched does not end the session');
 });
+
+/** How long a companion started for a test is given to leave on its own before it is killed. */
+const COMPANION_EXIT_MS = 15_000;
+
+/** Waits for a child to exit, killing it and failing when the deadline passes instead. */
+async function exit_of(child: ChildProcess): Promise<number> {
+  // The deadline is cleared when the child goes, so a test that passes leaves no timer holding
+  // the runner open behind it.
+  const expired = new AbortController();
+  try {
+    return await Promise.race([
+      new Promise<number>((resolve_exit, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code) => resolve_exit(code ?? -1));
+      }),
+      delay(COMPANION_EXIT_MS, undefined, { signal: expired.signal }).then(() => {
+        child.kill('SIGKILL');
+        throw new Error(`the companion did not exit within ${COMPANION_EXIT_MS} ms`);
+      }),
+    ]);
+  } finally {
+    expired.abort();
+  }
+}
+
+test(
+  'the trace file is written for its owner alone',
+  { timeout: 30_000 },
+  async () => {
+    // What crosses the pipe includes a host's invite, which carries the room's token: a bearer
+    // credential, so a file that holds it is not left for another account on the machine to read.
+    // The umask is asked for a permissive one, because a strict umask would hide an unfixed
+    // companion behind a 0600 file created by accident and this would pass for the wrong reason.
+    const scratch = mkdtempSync(join(SCRATCH, 'trace-'));
+    const file = join(scratch, 'companion.log');
+    const umask = process.umask(0o022);
+    const child = spawn(process.execPath, [join(resolve(import.meta.dirname, '..'), 'companion', 'main.ts')], {
+      env: { ...process.env, SELVAGE_COMPANION_LOG: file },
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    try {
+      child.stdin.end('{"type":"leave"}\n');
+      assert.equal(await exit_of(child), 0, 'the companion left when its input ended');
+      assert.equal((statSync(file).mode & 0o777).toString(8), '600', 'the trace is readable by others');
+    } finally {
+      process.umask(umask);
+      child.kill('SIGKILL');
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  },
+);
 
