@@ -32,16 +32,31 @@ harness.write_file(harness.invite_file, invite)
 harness.wait_for_file('the guest to report it has joined', harness.deadline_ms, harness.joined_file)
 
 -- The window says what the session is without any statusline configuration: which end this is,
--- and how many people the room holds. The count is the room's own membership report, so the
--- guest that has just reported joining is the second person in it — and this is a real companion
--- against a real server, which is what makes the count a fact about the room.
+-- how many people the room holds, and who is in the file in front of the person. The count is the
+-- room's own membership report, so the guest that has just reported joining is the second person
+-- in it — and this is a real companion against a real server, which is what makes the count a fact
+-- about the room.
+--
+-- The row is drawn only when it has something to say, and a peer whose caret is in this file is
+-- one of those things: the guest joined with this document in its window, so its caret is in it
+-- and the row names it. The name is the whole point — the gutter has two cells for a peer and
+-- this is where the person reading them finds out whose they are — and it arrived over the real
+-- path: the room's presence frame, the bridge, the companion, the row.
 harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
-  return vim.api.nvim_get_option_value('winbar', { win = 0 })
-    == '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
+  return harness.row():find('Selvage: hosting — 2 people in the room', 1, true) ~= nil
 end, function()
-  return vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
+  return vim.inspect(harness.row())
+    .. ' peers '
+    .. vim.inspect(selvage.peers())
+    .. ' statusline '
+    .. vim.inspect(selvage.statusline())
 end)
-harness.log('the window says', vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 })))
+harness.wait('the row to name the guest whose caret is in this file', harness.deadline_ms, function()
+  return harness.row():find(harness.guest_display_name .. ' is here', 1, true) ~= nil
+end, function()
+  return vim.inspect(harness.row()) .. ' peers ' .. vim.inspect(selvage.peers())
+end)
+harness.log('the window says', vim.inspect(harness.row()))
 
 vim.api.nvim_buf_set_lines(bufnr, 0, 0, true, { harness.markers.host })
 harness.log('made the host edit; buffer now', vim.inspect(harness.text()))

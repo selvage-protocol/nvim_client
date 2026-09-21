@@ -47,6 +47,10 @@ function M.setup(role)
   }
   M.joined_file = required('SELVAGE_E2E_JOINED_FILE')
   M.ack_file = required('SELVAGE_E2E_ACK_FILE')
+  -- The two names the instances are in the room under, so a driver can wait for the other's name
+  -- in its own row: the row names the peers whose caret is in the file in front of the person.
+  M.host_display_name = required('SELVAGE_E2E_HOST_DISPLAY_NAME')
+  M.guest_display_name = required('SELVAGE_E2E_GUEST_DISPLAY_NAME')
   -- The guest writes this once the mirror's own phases are done, and the host waits for it before
   -- it reads its own file for the marker: an edit saved in the mirror is a message still on its
   -- way to the room until the host has it.
@@ -155,6 +159,14 @@ function M.fail(message)
   -- Vim's own non-zero exit: it tears the jobs down on the way out, where `os.exit` would leave a
   -- companion process with nowhere to report to — and with no one left to stop it.
   vim.cmd('cq')
+end
+
+--- The row a window wears, as it reads. The `winbar` is an evaluated string — highlight items,
+--- `%f`, `%{…}` — so what a driver compares is the text a person sees rather than the items it is
+--- written with.
+function M.row(win)
+  local raw = vim.api.nvim_get_option_value('winbar', { win = win or 0 })
+  return vim.api.nvim_eval_statusline(raw, { winid = win or 0 }).str
 end
 
 --- The text the plugin holds for the shared document, as the room counts it.
