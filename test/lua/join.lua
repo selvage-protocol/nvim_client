@@ -122,6 +122,51 @@ check('  counting the room\'s other documents', summary:find('1 more in the room
 check('  and nothing about the mirror', summary:find('mirror', 1, true) == nil, true)
 check('  at info level', notices[#notices] ~= nil and notices[#notices].level or nil, vim.log.levels.INFO)
 
+-- -- a remote edit arms the caret again ---------------------------------------------
+--
+-- A room document's buffer exists as soon as the handshake names it, and the room's text is a
+-- later message: the caret the plugin publishes in between is a caret for a document the
+-- companion does not hold yet, and the bridge drops one of those rather than inventing a
+-- document for it. A `nvim_buf_set_text` fires no `TextChanged`, so the edit that fills the
+-- buffer is the only moment left to publish the caret again. Without that publish a peer who has
+-- not moved is a peer whose caret nobody draws: the host's row cannot name them and `:SelvageGoTo`
+-- has nothing to go to.
+--- The `selection` messages this session sent for `path`: the caret it has told the room about.
+local function selections_for(path)
+  local count = 0
+  for _, message in ipairs(sent) do
+    if message.type == 'selection' and message.path == path then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+-- The caret the landing's own buffer publishes, armed when it was opened: waited for rather than
+-- assumed, because the assertion below is about what an edit adds to it.
+vim.wait(2000, function()
+  return selections_for('a/one.lua') > 0
+end, 20)
+local heard = selections_for('a/one.lua')
+check('the caret of a document the room opened is published', heard > 0, true)
+
+handle({
+  type = 'applyEdit',
+  id = message_id(),
+  path = 'a/one.lua',
+  start = 0,
+  ['end'] = 0,
+  text = 'one\n',
+  version = 1,
+})
+check(
+  'a remote edit arms the caret again, so the peer nobody could see is seen',
+  vim.wait(2000, function()
+    return selections_for('a/one.lua') > heard
+  end, 20),
+  true
+)
+
 -- -- the empty-file hint is said once ------------------------------------------------
 --
 -- The four files nobody fetched are still empty placeholders. Opening every one

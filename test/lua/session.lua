@@ -1652,8 +1652,29 @@ vim.cmd('edit! ' .. path)
 local own_winbar = 'my own row %f'
 vim.opt.winbar = own_winbar
 
+--- The row a window wears, as the editor holds it: the statusline string, items and all.
 local function row(win)
   return vim.api.nvim_get_option_value('winbar', { win = win or 0 })
+end
+
+--- What the terminal draws on screen row `number`, as a person reads it: the row is a statusline
+--- string, so its items — highlights, `%f`, `%{…}` — are resolved here and nowhere else. A row
+--- the editor refuses to set leaves the previous one on screen, which is how a name that spells
+--- an item takes the whole row down with it.
+local function screen_row(number)
+  -- The row is evaluated as a statusline when the screen is drawn, and an item that does not
+  -- parse — a peer's name written into it without escaping — raises here instead of drawing.
+  -- Reported as what the row did rather than as a traceback, so a broken row reads as the
+  -- failure it is.
+  local ok, err = pcall(vim.cmd, 'redraw')
+  if not ok then
+    return '<the editor refused to draw the row: ' .. tostring(err) .. '>'
+  end
+  local cells = {}
+  for col = 1, vim.o.columns do
+    cells[#cells + 1] = vim.fn.screenstring(number, col)
+  end
+  return (table.concat(cells):gsub('%s+$', ''))
 end
 
 -- This section pins the always-on row; the conditional default is pinned in its own section below.
@@ -1796,10 +1817,27 @@ handlers().on_message({
   },
 })
 check(
-  'a peer in this file puts their cells on the row',
+  'a peer in this file is named on the row, not drawn as the gutter\'s two cells',
   row(),
-  '%#SelvageSession#Selvage: hosting — 2 people in the room %#SelvagePeer1#Ad%*'
+  '%#SelvageSession#Selvage: hosting — 2 people in the room — %#SelvagePeer1#Ada Lovelace%* is here%*'
 )
+-- And named where a person reads it: the row is a statusline string, so what it says is what the
+-- screen draws once the items are resolved.
+check(
+  '  which the screen draws as the name',
+  screen_row(1),
+  'Selvage: hosting — 2 people in the room — Ada Lovelace is here'
+)
+-- The gutter keeps the two cells and the colour: a window column shows a name and the other
+-- still signs the caret, and the row is what says whose it is.
+local presence = vim.api.nvim_buf_get_extmarks(0, -1, 0, -1, { details = true })
+local signed = 0
+for _, mark in ipairs(presence) do
+  if mark[4].sign_text == 'Ad' then
+    signed = signed + 1
+  end
+end
+check('the gutter still signs the caret with the two cells', signed, 1)
 local file_peers = vim.g.selvage_file_peers
 local here = type(file_peers) == 'table' and file_peers[changes_path] or nil
 check('the file-peers seam names them too', here ~= nil and #here, 1)
@@ -1807,7 +1845,124 @@ check('  with the gutter cells', here ~= nil and here[1].initials, 'Ad')
 check('  and a User event fires with it', presence_events > 0, true)
 vim.api.nvim_del_autocmd(seam_autocmd)
 
+-- Two peers in the file are two names, in one sentence, each in the colour their caret is.
+handlers().on_message({
+  type = 'report',
+  report = {
+    kind = 'peers',
+    peers = {
+      { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' },
+      { peer_id = 'p-bob', display_name = 'Bob', role = 'guest' },
+    },
+  },
+})
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-bob',
+      label = 'Bob',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#c678dd',
+    },
+    {
+      peerId = 'p-ada',
+      label = 'Ada Lovelace',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#61afef',
+    },
+  },
+})
+local groups = {}
+for _, peer in ipairs(selvage.peers()) do
+  groups[peer.peerId] = peer.highlight
+end
+check(
+  'two peers in this file are both named, in peer-id order, each in their own colour',
+  row(),
+  (
+    '%%#SelvageSession#Selvage: hosting — 3 people in the room — %%#%s#Ada Lovelace%%*, %%#%s#Bob%%* are here%%*'
+  ):format(groups['p-ada'], groups['p-bob'])
+)
+check(
+  '  which the screen draws as the two names',
+  screen_row(1),
+  'Selvage: hosting — 3 people in the room — Ada Lovelace, Bob are here'
+)
+
+-- A name is the peer's own text and a row is read like a statusline, where `%` starts an item:
+-- `%f` is the file's name and `%{…%}` is a Vimscript expression the reader's editor evaluates.
+-- What a person reads is the name they were given, and nothing else.
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'peers', peers = { { peer_id = 'p-eve', display_name = '%f', role = 'guest' } } },
+})
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-eve',
+      label = '%f',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#e06c75',
+    },
+  },
+})
+check(
+  'a name that spells a statusline item is drawn as itself',
+  screen_row(1),
+  'Selvage: hosting — 2 people in the room — %f is here'
+)
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-eve',
+      label = '%{1+1%}',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#e06c75',
+    },
+  },
+})
+check(
+  '  and a name that spells an expression is drawn as itself, never evaluated',
+  screen_row(1),
+  'Selvage: hosting — 2 people in the room — %{1+1%} is here'
+)
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-eve',
+      label = '50%',
+      role = 'guest',
+      path = changes_path,
+      anchor = 0,
+      head = 0,
+      colour = '#e06c75',
+    },
+  },
+})
+check(
+  '  and a name ending in a lone `%` is drawn, rather than taking the row down with it',
+  screen_row(1),
+  'Selvage: hosting — 2 people in the room — 50% is here'
+)
+
 -- The row goes again when the peer does: nothing about this file is left standing.
+handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
 handlers().on_message({ type = 'presence', cursors = {} })
 check('the row goes when the peer does', row(), own_winbar)
 

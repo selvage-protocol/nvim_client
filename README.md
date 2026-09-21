@@ -215,18 +215,21 @@ shape, so a peer running Neovim is shown to everyone else with the block one cel
 where that peer sees their own cursor.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
-highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. The
-name is never drawn over the text: the gutter is where it lives, and two cells is all `sign_text`
-takes, so a peer called `thisismylongusername` is `th` there. `:SelvagePeers`
-lists every peer the room names: the sign the gutter drew beside the whole display name and room
-path for the peers this client holds a document for, and the name and role alone for the ones it
-does not. It prints each sign in the very highlight that peer's caret and sign are drawn with.
-Nothing is put over the document when a peer moves. Every mark is cleared and recreated when
-presence changes, and every one goes when the session ends.
+highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. Two
+cells is all `sign_text` takes, so a peer called `thisismylongusername` is `th` there and the
+gutter cannot say who that is: the window's row names them (below). `:SelvagePeers` lists every
+peer the room names: the sign the gutter drew beside the whole display name and room path for the
+peers this client holds a document for, and the name and role alone for the ones it does not. It
+prints each sign in the very highlight that peer's caret and sign are drawn with. Nothing is put
+over the document when a peer moves. Every mark is cleared and recreated when presence changes, and
+every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
-entering a buffer), coalesced into one `selection` per 100 ms, and `selectionCleared` goes out
-when there is no shared document in front of the user.
+entering a buffer), coalesced into one `selection` per 100 ms, and once more when the room's own
+edit lands in the buffer: a buffer for a room document exists before the document's text does, so
+the caret published in between is one the companion had no document for, and a write the room
+makes fires no `TextChanged` to publish it again. `selectionCleared` goes out when there is no
+shared document in front of the user.
 
 Following moves the follower's caret: Neovim has no viewport-only state that survives a redraw, so
 being where a peer is means the cursor is there, and the next keystroke lands there too. That is
@@ -264,11 +267,13 @@ wins while one stands.
 somewhere else, and with the file itself in front of it: one holding no fetched content has the
 row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
 
-Which peers are in the file in front of the person is shown in the row as the same two cells and
-the same colour the gutter draws, so the two cannot disagree, and published for everyone else as
-`vim.g.selvage_file_peers`, a map of room path to `{ initials, colour, label, peerId }`, with a
-`User SelvagePresence` autocmd fired whenever it changes. netrw, oil.nvim, nvim-tree, telescope,
-lualine and heirline each decorate from that one table, and this client depends on none of them.
+Which peers are in the file in front of the person is named in the row — `Ada Lovelace is here`,
+or `Ada Lovelace, Bob are here` — each name in the very colour that peer's caret and sign are drawn
+in, so a reader holding `Ad` in the gutter has the name it stands for one row above it. The same
+peers are published for everyone else as `vim.g.selvage_file_peers`, a map of room path to
+`{ initials, colour, label, peerId }`, with a `User SelvagePresence` autocmd fired whenever it
+changes. netrw, oil.nvim, nvim-tree, telescope, lualine and heirline each decorate from that one
+table, and this client depends on none of them.
 
 ### The vendored engine
 

@@ -155,8 +155,8 @@ end
 --- The row the session itself wears in a window with no follow standing, as the indicator
 --- writes it. This file runs a live session, so a row that is not the follow's is the
 --- session's — the words themselves are pinned in `test/lua/session.lua`, and what is pinned
---- here is that the follow's row came down and the session's took its place. The peer cells are
---- the ones the gutter draws, in the order the row writes them.
+--- here is that the follow's row came down and the session's took its place. The peers in the
+--- file are named, in the order the row writes them and in the colour the gutter draws them.
 local function session_row()
   local who = selvage.session().status == 'hosting' and 'hosting' or 'guest'
   local here = #named_peers + 1
@@ -165,17 +165,25 @@ local function session_row()
   local path = open_room_path()
   local in_file = {}
   for _, peer in ipairs(selvage.peers()) do
-    if peer.path == path and peer.sign ~= nil and peer.highlight ~= nil then
+    if peer.path == path and peer.label ~= nil and peer.highlight ~= nil then
       in_file[#in_file + 1] = peer
     end
   end
   table.sort(in_file, function(left, right)
     return tostring(left.peerId) < tostring(right.peerId)
   end)
-  for _, peer in ipairs(in_file) do
-    row = row .. (' %%#%s#%s'):format(peer.highlight, peer.sign)
+  if #in_file == 0 then
+    return row .. '%*'
   end
-  return row .. '%*'
+  local names = {}
+  for _, peer in ipairs(in_file) do
+    names[#names + 1] = ('%%#%s#%s%%*'):format(peer.highlight, peer.label)
+  end
+  return ('%s — %s %s%%*'):format(
+    row,
+    table.concat(names, ', '),
+    #in_file == 1 and 'is here' or 'are here'
+  )
 end
 
 local function peers_report(peers)

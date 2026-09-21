@@ -76,12 +76,18 @@ harness.wait('the room text to land', harness.deadline_ms, function()
   return harness.text() ~= nil and harness.text() ~= ''
 end, harness.observe)
 harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
-  return vim.api.nvim_get_option_value('winbar', { win = 0 })
-    == '%#SelvageSession#Selvage: guest — 2 people in the room%*'
+  return harness.row():find('Selvage: guest — 2 people in the room', 1, true) ~= nil
 end, function()
-  return vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 }))
+  return vim.inspect(harness.row()) .. ' peers ' .. vim.inspect(selvage.peers())
 end)
-harness.log('the window says', vim.inspect(vim.api.nvim_get_option_value('winbar', { win = 0 })))
+-- And who is in the file in front of the person: the host is in this document, so the row names
+-- it, beside the gutter sign the host's own caret carries.
+harness.wait('the row to name the host whose caret is in this file', harness.deadline_ms, function()
+  return harness.row():find(harness.host_display_name .. ' is here', 1, true) ~= nil
+end, function()
+  return vim.inspect(harness.row()) .. ' peers ' .. vim.inspect(selvage.peers())
+end)
+harness.log('the window says', vim.inspect(harness.row()))
 
 harness.wait('the host edit to arrive', harness.deadline_ms, function()
   return harness.contains(harness.markers.host)
@@ -120,7 +126,7 @@ end
 -- same sign but sit at the column the insert left behind, which is why the wait is for the
 -- marker's column and not for any caret at all.
 local function host_caret()
-  local label = vim.env.SELVAGE_E2E_HOST_DISPLAY_NAME or vim.env.USER or 'neovim'
+  local label = harness.host_display_name
   for _, mark in ipairs(presence_marks()) do
     if mark[2] == 0 and mark[3] == #harness.markers.host - 1 then
       local sign = mark[4].sign_text
