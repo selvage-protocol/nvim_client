@@ -254,8 +254,10 @@ the row off.
 While the host is absent the row says who left and what is at stake, with the seconds the server
 has left counted down from its deadline: `Selvage: Host disconnected.
 <name> left — if they return within <n>s the session continues, otherwise this room closes and
-work in it is lost.` The same sentence is announced once when the absence begins, and `<name> is
-back — the session continues.` when the host returns. The row is window-local and the person's own
+your local copy is kept.` It is the sentence the VS Code client shows, and the copy it names is
+the mirror directory the room-gone teardown keeps, at the path the notice gives. The same
+sentence is announced once when the absence begins, and `<name> is back — the session
+continues.` when the host returns. The row is window-local and the person's own
 row is saved and put back as it arrives and leaves, as the follow's own row is, and a follow's row
 wins while one stands.
 `%{v:lua.require'selvage'.statusline()}` returns those words for a statusline that wants them

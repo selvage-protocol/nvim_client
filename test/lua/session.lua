@@ -1307,7 +1307,7 @@ check(
   'the host going is announced with the cause and the deadline',
   said_since(
     before_detached,
-    'Host disconnected. Ada left — if they return within 30s the session continues, otherwise this room closes and work in it is lost.'
+    'Host disconnected. Ada left — if they return within 30s the session continues, otherwise this room closes and your local copy is kept.'
   ) ~= nil,
   true
 )
@@ -1335,6 +1335,28 @@ local ticked = vim.wait(4000, function()
   return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
 end, 50)
 check('  and the number counts down', ticked, true)
+-- The room's own membership is the all-clear as well as the departure: `host.attached` is the
+-- only frame that says the host is back, so a guest whose socket was down when it arrived is
+-- told by the next membership frame that names them — otherwise the row counts a deadline that
+-- has already passed for the rest of the session.
+handlers().on_message({
+  type = 'report',
+  report = {
+    kind = 'peers',
+    peers = { { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+  },
+})
+check(
+  '  and a membership frame naming the host takes it down too',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
+  true
+)
+handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 2000 } })
+check(
+  '  and the countdown starts again if the host leaves again',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 2s', 1, true) ~= nil,
+  true
+)
 handlers().on_message({
   type = 'report',
   report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },

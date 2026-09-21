@@ -1597,7 +1597,7 @@ local SESSION_FRAME = '%#' .. SESSION_HIGHLIGHT .. '#'
 --- whole seconds left before the server's deadline. One home: the row and the one announcement
 --- both read it, so the countdown a person watches and the notice they were given agree. The
 --- deadline is the server's (`host.detached`); nothing here can move it.
-local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and work in it is lost.'
+local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and your local copy is kept.'
 
 --- The session's own words: which side of the session the person is on, how many are in the
 --- room, and whether the connection is being re-established. Nil when there is no session to
@@ -3006,10 +3006,22 @@ local function on_report(report)
     state.room_peers = report.peers or {}
     -- The host's name is remembered here, while they are in the room: the detach frame names no
     -- one, and the departure has already taken them out of this list by the time it arrives.
+    local host_present = false
     for _, peer in ipairs(state.room_peers) do
-      if peer.role == 'host' and type(peer.display_name) == 'string' and peer.display_name ~= '' then
-        state.host_name = peer.display_name
+      if peer.role == 'host' then
+        host_present = true
+        if type(peer.display_name) == 'string' and peer.display_name ~= '' then
+          state.host_name = peer.display_name
+        end
       end
+    end
+    -- Membership is the all-clear as well as the departure. `host.attached` is the only frame
+    -- that says the host is back, and a guest whose socket was down when it arrived would
+    -- otherwise keep a countdown — and then a deadline that has already passed — standing for
+    -- the rest of the session. A report that names the host means the host is here.
+    if host_present and state.host_away ~= nil then
+      stop_host_away_timer()
+      state.host_away = nil
     end
     -- The report is the room's own membership, so a peer it no longer names is gone even
     -- before the next presence frame redraws: their drawn row and cursor go now, rather than
