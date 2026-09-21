@@ -17,6 +17,7 @@
 import type {
   Cursor,
   EditorHost,
+  GrantedRead,
   LineEnding,
   Report,
   TextChange,
@@ -297,13 +298,14 @@ export class NvimEditorHost implements EditorHost {
    *
    * The path came from a peer and is not trusted, so `companion/grant.ts` holds it to the
    * grant's own rules before a byte is read: it has to be inside the folder, a path the listing
-   * itself would publish, and a plain file at every step of the way. A session with no folder
-   * — a front-end that did not name one — serves nothing.
+   * itself would publish, and a plain file at every step of the way. A session with no folder —
+   * a front-end that did not name one — publishes nothing, so every path is one it would never
+   * have listed, and a peer's guess earns no answer at all.
    */
-  async readGrantedFile(path: string): Promise<string | undefined> {
+  async readGrantedFile(path: string): Promise<GrantedRead> {
     const folder = this.folder;
     if (folder === undefined) {
-      return undefined;
+      return { kind: 'refused', cause: 'not-granted' };
     }
     return readGrantedFile(folder, path);
   }

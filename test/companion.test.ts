@@ -18,6 +18,7 @@ import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/envelope.ts';
 
 import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
+import type { GrantedRead } from '../vendor/bridge/index.ts';
 import { FakeEngine } from './helpers/fake-engine.ts';
 
 /**
@@ -37,7 +38,7 @@ class RecordingHost extends NvimEditorHost {
     super.sharedFolder(root);
   }
 
-  override readGrantedFile(path: string): Promise<string | undefined> {
+  override readGrantedFile(path: string): Promise<GrantedRead> {
     this.reads.push(path);
     return super.readGrantedFile(path);
   }
@@ -1077,7 +1078,33 @@ test('a path through a directory link is refused and reported', async (t) => {
 
   assert.equal(it.engine.text('escape/secret.txt'), '', 'nothing was shared for it');
   assert.deepEqual(refusals(it), [
-    'could not share escape/secret.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
+    'could not share escape/secret.txt: it is not a plain file in the folder this session shares (a directory, a link, or something else that cannot be read as one); nothing was shared for it',
+  ]);
+});
+
+test('a binary file the room asks for is refused as binary, not as deleted', async (t) => {
+  const root = folder(t);
+  // A zip, as it is on disk: a local file header, which has a NUL in its first bytes. The
+  // listing names it — the walk rules on a file's type and the size a session carries, and
+  // does not read it — so the refusal is where a person learns why it cannot be shared, and
+  // it has to be about what the file is rather than about a deletion nobody made.
+  writeFileSync(
+    join(root, 'logs_96234608913.zip'),
+    new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00]),
+  );
+
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  it.engine.emit({ type: 'documentsChanged', documents: ['logs_96234608913.zip'] });
+  await until(
+    'the refusal to be reported',
+    () => refusals(it).length > 0,
+    () => refusals(it),
+  );
+
+  assert.equal(it.engine.text('logs_96234608913.zip'), '', 'nothing was shared for it');
+  assert.deepEqual(refusals(it), [
+    'could not share logs_96234608913.zip: it is a binary file, and a room carries text, so this is not a file that can be shared at all; nothing was shared for it',
   ]);
 });
 
@@ -1116,7 +1143,7 @@ test('one bogus listing is one dialog, never one per path', async (t) => {
   );
   assert.equal(
     refusals(it)[1],
-    'could not share gone-4.txt: it is not a readable file in the folder this window shares (it may have been deleted after the listing was published); nothing was shared for it',
+    'could not share gone-4.txt: there is no readable file there any more (it may have been deleted after the listing was published); nothing was shared for it',
   );
 });
 

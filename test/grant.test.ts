@@ -20,7 +20,18 @@ import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 
 import { MAX_GRANT_FILE_BYTES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
+import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
 import { enumerateGrant, readGrantedFile } from '../companion/grant.ts';
+
+/** The text a read served, or `undefined` when it refused. */
+function served(read: GrantedRead): string | undefined {
+  return read.kind === 'text' ? read.text : undefined;
+}
+
+/** The cause a read refused with, or `undefined` when it served something. */
+function cause(read: GrantedRead): GrantRefusal | undefined {
+  return read.kind === 'refused' ? read.cause : undefined;
+}
 
 const SCRATCH = resolve(import.meta.dirname, '..', '.tmp');
 const ROOT = join(SCRATCH, 'grant-unit');
@@ -98,7 +109,11 @@ test('a listing leaves out secret names and keeps their templates', async () => 
     'kept.txt',
   ]);
   for (const path of ['id_rsa', 'server.pem', '.aws/credentials', '.envrc']) {
-    assert.equal(await readGrantedFile(join(ROOT, 'secrets'), path), undefined, `${path} was served`);
+    assert.equal(
+      cause(await readGrantedFile(join(ROOT, 'secrets'), path)),
+      'not-granted',
+      `${path} was served`,
+    );
   }
 });
 
@@ -154,14 +169,14 @@ test('a listing carries no symbolic link', async () => {
 test('a plain file in the folder is served as its text', async () => {
   await put('served/notes.txt', 'a dokument twö editors share\n');
   assert.equal(
-    await readGrantedFile(join(ROOT, 'served'), 'notes.txt'),
+    served(await readGrantedFile(join(ROOT, 'served'), 'notes.txt')),
     'a dokument twö editors share\n',
   );
 });
 
 test('a nested plain file is served', async () => {
   await put('served/src/main.rs', 'fn main() {}\n');
-  assert.equal(await readGrantedFile(join(ROOT, 'served'), 'src/main.rs'), 'fn main() {}\n');
+  assert.equal(served(await readGrantedFile(join(ROOT, 'served'), 'src/main.rs')), 'fn main() {}\n');
 });
 
 test('a path the grant does not name is refused', async () => {
@@ -169,25 +184,28 @@ test('a path the grant does not name is refused', async () => {
   await put('refused/.env', 'TOKEN=1\n');
   await put('refused/dir/file.txt');
   const root = join(ROOT, 'refused');
-  const notTheGrants = [
+  // The reasons are not one reason, and the answer says which: a path the grant would never
+  // publish is not a file that has gone, and a refusal that blamed a deletion for all of them
+  // is what sent a person looking for a zip that was never deleted.
+  const notTheGrants: Array<[string, GrantRefusal]> = [
     // Outside the folder, by a segment or by an absolute name.
-    '../outside.txt',
-    'dir/../../outside.txt',
-    '/etc/hostname',
+    ['../outside.txt', 'not-granted'],
+    ['dir/../../outside.txt', 'not-granted'],
+    ['/etc/hostname', 'not-granted'],
     // The excludes the grant is defined by, whatever the file system holds there.
-    '.git/config',
-    '.env',
-    '.env.local',
-    // A directory is not a document.
-    'dir',
+    ['.git/config', 'not-granted'],
+    ['.env', 'not-granted'],
+    ['.env.local', 'not-granted'],
     // A name that resolves somewhere else is not one of the host's.
-    'dir\\file.txt',
-    '',
+    ['dir\\file.txt', 'not-granted'],
+    ['', 'not-granted'],
+    // A directory is not a document.
+    ['dir', 'not-a-file'],
     // Not there at all.
-    'missing.txt',
+    ['missing.txt', 'missing'],
   ];
-  for (const path of notTheGrants) {
-    assert.equal(await readGrantedFile(root, path), undefined, `${path} was served`);
+  for (const [path, why] of notTheGrants) {
+    assert.equal(cause(await readGrantedFile(root, path)), why, `${path} was served`);
   }
 });
 
@@ -200,7 +218,7 @@ test('a symbolic link to a file is not served', async () => {
   // A real file in the folder, so the link's target is a readable plain file and only the link
   // itself can be what refuses it.
   symlinkSync(join(outside, 'secret.txt'), join(root, 'secret.txt'));
-  assert.equal(await readGrantedFile(root, 'secret.txt'), undefined);
+  assert.equal(cause(await readGrantedFile(root, 'secret.txt')), 'not-a-file');
 });
 
 test('a path through a directory link is not served', async () => {
@@ -214,7 +232,11 @@ test('a path through a directory link is not served', async () => {
   // Every one of these is a readable *plain* file at the leaf: only walking the segments finds
   // the link. A guard that stopped at the leaf would serve both.
   for (const path of ['escape/secret.txt', 'escape/inner/deeper.txt']) {
-    assert.equal(await readGrantedFile(root, path), undefined, `${path} was served through a link`);
+    assert.equal(
+      cause(await readGrantedFile(root, path)),
+      'not-a-file',
+      `${path} was served through a link`,
+    );
   }
   // And nothing behind the link is listed, so it is not a path the grant ever named.
   assert.deepEqual(await enumerateGrant(root), []);
@@ -224,7 +246,7 @@ test('a segment that is a file is not walked through', async () => {
   await put('through/file.txt');
   await put('through/not-a-dir.txt');
   const root = join(ROOT, 'through');
-  assert.equal(await readGrantedFile(root, 'not-a-dir.txt/file.txt'), undefined);
+  assert.equal(cause(await readGrantedFile(root, 'not-a-dir.txt/file.txt')), 'not-a-file');
 });
 
 test('a name that is a link by the time the next segment is resolved serves nothing outside', async (t) => {
@@ -276,16 +298,17 @@ test('a name that is a link by the time the next segment is resolved serves noth
   const deadline = Date.now() + 5000;
   while (reads < 300 && leaked === undefined && Date.now() < deadline) {
     reads += 1;
-    const text = await readGrantedFile(root, asked);
-    if (text === 'the file the folder holds\n') {
+    const read = await readGrantedFile(root, asked);
+    if (read.kind === 'refused') {
+      refused += 1;
+      continue;
+    }
+    if (read.text === 'the file the folder holds\n') {
       inside += 1;
       continue;
     }
-    if (text !== undefined) {
-      leaked = text;
-      break;
-    }
-    refused += 1;
+    leaked = read.text;
+    break;
   }
 
   assert.equal(
@@ -305,16 +328,13 @@ test('a name that is a link by the time the next segment is resolved serves noth
 test('bytes a session cannot carry are refused', async () => {
   await writeFile(join(ROOT, 'bytes-nul'), Buffer.from([0x61, 0x00, 0x62]));
   await writeFile(join(ROOT, 'bytes-latin1'), Buffer.from([0x61, 0xff, 0xfe, 0x62]));
-  assert.equal(await readGrantedFile(ROOT, 'bytes-nul'), undefined);
-  assert.equal(await readGrantedFile(ROOT, 'bytes-latin1'), undefined);
+  assert.equal(cause(await readGrantedFile(ROOT, 'bytes-nul')), 'binary');
+  assert.equal(cause(await readGrantedFile(ROOT, 'bytes-latin1')), 'binary');
 });
 
 test('a file over the size a session carries is refused, and one at it is not', async () => {
   await writeFile(join(ROOT, 'big.txt'), Buffer.alloc(MAX_GRANT_FILE_BYTES + 1, 0x61));
   await writeFile(join(ROOT, 'at-the-limit.txt'), Buffer.alloc(MAX_GRANT_FILE_BYTES, 0x61));
-  assert.equal(await readGrantedFile(ROOT, 'big.txt'), undefined);
-  assert.equal(
-    (await readGrantedFile(ROOT, 'at-the-limit.txt'))?.length,
-    MAX_GRANT_FILE_BYTES,
-  );
+  assert.equal(cause(await readGrantedFile(ROOT, 'big.txt')), 'too-large');
+  assert.equal(served(await readGrantedFile(ROOT, 'at-the-limit.txt'))?.length, MAX_GRANT_FILE_BYTES);
 });
