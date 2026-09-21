@@ -32,7 +32,8 @@ local state = {
   --- behind it yet (`DESIGN.md` §4.2).
   grant = {},
   --- The room paths this session refused to share, so the refusal is said once: a buffer that
-  --- is not UTF-8 is entered and left many times over a session.
+  --- is not text a room can carry — not valid UTF-8, or a file whose bytes are not text at all —
+  --- is entered and left many times over a session.
   unshareable = {},
   --- The room paths the mirror refused to write, so the refusal is said once per path: a person
   --- saves a file more than once over a session.
@@ -817,6 +818,93 @@ end
 --- first, and it is defined before that section.
 local end_follow
 
+--- The largest file a session carries, mirroring `MAX_GRANT_FILE_BYTES` in the grant's own rules
+--- (`vendor/bridge/grant.ts`, and `MAX_GRANT_PATH_BYTES` is mirrored the same way in
+--- `mirror.lua`). A file past it is one the companion refuses for its size before it reads a byte,
+--- so the share path does not read one either.
+local MAX_FILE_BYTES = 1024 * 1024
+
+--- Whether a session may carry the file a buffer is named for: its **bytes**, as they stand on
+--- disk, are text — no NUL byte, and well-formed UTF-8. The same gate the companion applies to a
+--- peer's request for the file (`companion/grant.ts`, `decodableText`), reached from the other
+--- side of the same question.
+---
+--- The buffer's own text cannot stand in for it. Neovim reads a file whose bytes are not UTF-8 as
+--- Latin-1 (`'fileencodings'`' own fallback, which is how a `.bin` opens at all), so the buffer
+--- holds a transliteration: every byte became a character, and the text the buffer reports is
+--- well-formed UTF-8 whatever the file was. That text is what a session publishes, and a peer's
+--- later edit made the room's save policy write it back over the host's own file — the file's
+--- original bytes survive that round trip only because the same `'fileencoding'` converts them
+--- back, which stops being true the moment a peer types a character it cannot hold.
+---
+--- `true` when the bytes are text, `false` when they are not, and nil when the file could not be
+--- read in one piece at all — a file that moved under the read is not a prefix of itself to judge,
+--- and what a buffer holds for it is not what the bytes say.
+---
+--- @param name string the file the buffer is named for
+--- @return boolean|nil
+local function file_is_text(name)
+  local fd = uv.fs_open(name, 'r', tonumber('644', 8))
+  if fd == nil then
+    return nil
+  end
+  local bytes
+  local ok = pcall(function()
+    local opened = uv.fs_fstat(fd)
+    -- The descriptor is what the bytes are read from, so the size is read there as well: a name
+    -- may have been another file's by the time it is opened.
+    if opened == nil or opened.type ~= 'file' then
+      return
+    end
+    local chunks = {}
+    local read = 0
+    while read < opened.size do
+      local chunk = uv.fs_read(fd, opened.size - read, read)
+      if chunk == nil or #chunk == 0 then
+        break
+      end
+      chunks[#chunks + 1] = chunk
+      read = read + #chunk
+    end
+    -- Fewer bytes than the descriptor holds is not a prefix of the file to judge: it is a file
+    -- that moved under the read, and what it holds now is not what the buffer was read from.
+    if read == opened.size then
+      bytes = table.concat(chunks)
+    end
+  end)
+  uv.fs_close(fd)
+  if not ok or bytes == nil then
+    return nil
+  end
+  return bytes:find('\0', 1, true) == nil and utf16.valid(bytes)
+end
+
+--- Says, once per path, that a file a person opened is not one a room can carry: its bytes are not
+--- text. The companion says the same thing about the same file when a peer asks the room for it.
+local function refuse_binary(path)
+  if state.unshareable[path] ~= nil then
+    return
+  end
+  state.unshareable[path] = true
+  notify(
+    ('%s is a binary file, and a room carries text, so it is not shared.'):format(path),
+    vim.log.levels.ERROR
+  )
+end
+
+--- Says, once per path, that a file could not be read, so nothing was shared for it. A file that
+--- moved between the buffer's own read and this one is one whose bytes are not known, and what a
+--- session cannot judge is not carried: the text the buffer holds for it may be a transliteration
+--- of bytes it no longer has (`file_is_text`). Entering the buffer again looks again, so this is
+--- said once rather than once per visit.
+local function refuse_unreadable(path)
+  if state.unshareable[path] ~= nil then
+    return
+  end
+  state.unshareable[path] = true
+  notify(('%s could not be read, so it is not shared.'):format(path), vim.log.levels.WARN)
+end
+
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
     return
@@ -841,6 +929,27 @@ local function share(bufnr, path)
       notify(('%s is not valid UTF-8, so it is not shared.'):format(path), vim.log.levels.ERROR)
     end
     return
+  end
+  -- A buffer's text is not the file's bytes: Neovim decodes a file it cannot read as UTF-8 into
+  -- one, so a buffer can hold text that reads as valid UTF-8 while the file it was read from
+  -- holds a binary. The room is refused the file it cannot carry rather than the transliteration
+  -- of it — the same refusal a peer asking for the path is given, from the same question.
+  --
+  -- A file past the bound is not read at all: the companion judges the text the buffer holds and
+  -- refuses one past the session's own bound, in words that say so. What that leaves is a file
+  -- past the bound whose decoded text is not (a UTF-16 file, say), and that one is carried: its
+  -- text is the file's rather than a transliteration of it, so nothing is written back over the
+  -- file that the file did not hold.
+  if behind ~= nil and behind.size <= MAX_FILE_BYTES then
+    local bytes_are_text = file_is_text(api.nvim_buf_get_name(bufnr))
+    if bytes_are_text == false then
+      refuse_binary(path)
+      return
+    end
+    if bytes_are_text == nil then
+      refuse_unreadable(path)
+      return
+    end
   end
   local document = Document.new(bufnr, path, function(message)
     -- A local edit of a shared document ends a follow: with the caret moved by the follow,
@@ -1590,6 +1699,21 @@ local function winbar_key(win, bufnr)
   return win .. ':' .. bufnr
 end
 
+--- Whether a window is a float: a notification, a hover, a completion menu — the editor's own
+--- furniture rather than a window showing a document.
+---
+--- No indicator belongs in one. A float is not a place a person reads the session's rows and it is
+--- often shorter than the row itself: the one line a one-line float has is already spoken for, so
+--- writing a winbar into one is where Neovim raises `E36: Not enough room`. The host-away row is
+--- redrawn by a repeating timer, and Neovim stops a repeating timer after three of its runs raise
+--- an error — which is what the frozen countdown at 27s was found beside, on the configuration
+--- this came from: with `nvim-notify`'s popup on screen the errors accumulated and the timer went;
+--- with no float on screen there is no `E36` at all and the countdown ticks to the end.
+local function floating(win)
+  local ok, config = pcall(api.nvim_win_get_config, win)
+  return ok and config.relative ~= ''
+end
+
 --- The highlight the session's own row is drawn in: the framing that tells its row apart
 --- from a person's own, and the name a colorscheme or a person may style. Linked to `Title`
 --- and defined with `default`, so anything a colorscheme defines for the name wins; a
@@ -1799,7 +1923,12 @@ local function restore_indicators()
       local prev = state.saved_winbars[key]
       if prev ~= nil then
         state.saved_winbars[key] = nil
-        pcall(api.nvim_set_option_value, 'winbar', prev, { win = win })
+        -- A float keeps no row of a person's back: it is not a window showing their buffer, and
+        -- a row it never had is not one to put back. Clearing one is safe where writing one is
+        -- not — removing a winbar needs no line the float has not got.
+        if not floating(win) then
+          pcall(api.nvim_set_option_value, 'winbar', prev, { win = win })
+        end
       elseif state.following == nil then
         local ok, current = pcall(api.nvim_get_option_value, 'winbar', { win = win })
         if ok and is_indicator_row(current) then
@@ -1818,6 +1947,9 @@ end
 --- it leaves. Never the statusline, which is what statusline plugins own.
 local function show_indicator(win)
   win = win or api.nvim_get_current_win()
+  if floating(win) then
+    return
+  end
   local bufnr = api.nvim_win_get_buf(win)
   local key = winbar_key(win, bufnr)
   local ours = indicator_row(bufnr)

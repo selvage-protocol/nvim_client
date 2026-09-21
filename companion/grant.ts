@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import {
   MAX_GRANT_FILE_BYTES,
   MAX_GRANT_PATHS,
+  isBinaryNamedPath,
   isGrantedPath,
   sortGrant,
 } from '../vendor/bridge/index.ts';
@@ -89,13 +90,28 @@ async function walk(
     if (!entry.isFile()) {
       continue;
     }
+    // A file whose name declares a format a room cannot carry is left out, because the read
+    // refuses every file of that format as `binary`: naming it offered a guest a file no fetch
+    // could fill. The rule is the name alone and it is a floor — this walk reads no bytes, so a
+    // binary whose name declares no format stays listed and gets that refusal for asking
+    // (`GRANT_BINARY_SUFFIXES` in the grant's own rules).
+    if (isBinaryNamedPath(child)) {
+      continue;
+    }
     if (await isShareableFile(join(dir, entry.name))) {
       out.push(child);
     }
   }
 }
 
-/** A regular file small enough for one `Y.Text`, which is all a document can be. */
+/**
+ * A regular file small enough for one `Y.Text`, which is all a document can be.
+ *
+ * This is the half of the read's rule a walk can afford: a file's bytes are not read to decide
+ * whether to name it. What a listing names is therefore a file a session *may* carry, and a file
+ * whose name declares a format it cannot is a separate line drawn from the name alone
+ * (`isBinaryNamedPath`).
+ */
 async function isShareableFile(absolute: string): Promise<boolean> {
   const info = await lstat(absolute).catch(() => undefined);
   return info !== undefined && info.isFile() && info.size <= MAX_GRANT_FILE_BYTES;
@@ -271,7 +287,10 @@ async function walkToDirectory(
  * with, so the name it was opened under cannot be moved to something else in between.
  * `isShareableFile` is the same first half of the rule, one step earlier, and it is the half the
  * listing's own walk can afford: a walk does not read a file's bytes to decide whether to name
- * it. What that leaves is a listed file whose bytes are not text, which is refused here.
+ * it, and the host's own disk is not read for a peer until the peer asks (`DESIGN.md` §4.2). A
+ * file whose name declares a format no session carries is the listing's own line, drawn from the
+ * name alone (`isBinaryNamedPath`); what is left to this read is a binary the name did not
+ * declare, which is refused here.
  */
 async function readLeaf(name: string): Promise<GrantedRead> {
   const info = await lstat(name).catch(() => undefined);

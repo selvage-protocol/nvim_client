@@ -1367,6 +1367,57 @@ check(
   true
 )
 
+-- -- a float is not a place for the session's row -----------------------------------
+--
+-- The configuration this was found in shows its notifications through `nvim-notify`, whose popup
+-- is a one-line floating window. Writing the row into one is where Neovim raises `E36: Not enough
+-- room`, and on that configuration the countdown stopped after three ticks and kept the number it
+-- last drew: Neovim stops a repeating timer whose runs raise errors. No indicator goes into a
+-- float, and the countdown keeps ticking with one on screen.
+local float_buffer = vim.api.nvim_create_buf(false, true)
+local float_window = vim.api.nvim_open_win(float_buffer, false, {
+  relative = 'editor',
+  row = 1,
+  col = 1,
+  width = 20,
+  height = 1,
+})
+
+--- The row a window carries itself, as opposed to the one it shows from the global option.
+--- @return string
+local function own_row(win)
+  local ok, value = pcall(vim.api.nvim_get_option_value, 'winbar', { win = win, scope = 'local' })
+  return ok and value or ('<error: ' .. tostring(value) .. '>')
+end
+
+handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 4000 } })
+check('a floating window is given no row of the session\'s', own_row(float_window), '')
+check(
+  '  and the window the person is in carries it',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Host disconnected', 1, true) ~= nil,
+  true
+)
+
+-- The countdown's own clock: the float is on screen for the second reading rather than gone
+-- before it, and the row it must not have is still the row it must not have afterwards.
+local ticked_with_float = vim.wait(4000, function()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
+end, 50)
+check('  and the countdown keeps ticking with one on screen', ticked_with_float, true)
+check('  and the float still has no row of the session\'s', own_row(float_window), '')
+
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
+})
+check(
+  '  and the row leaves the window when the countdown ends',
+  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
+  true
+)
+vim.api.nvim_win_close(float_window, true)
+vim.api.nvim_buf_delete(float_buffer, { force = true })
+
 local before_gone = #notices
 handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
 check(
@@ -1576,6 +1627,90 @@ selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-latin-again' })
 check('a new session refuses it again', opens_of(latin_room), 0)
 check('  and says so again', said_since(before_again, latin_room) ~= nil, true)
+
+-- -- a binary file opened in the host's own window ----------------------------------
+--
+-- The guard above reads the buffer's text, and a binary file never reaches it: Neovim reads a
+-- file whose bytes are not UTF-8 as Latin-1, so every byte becomes a character and the buffer's
+-- text is well-formed UTF-8 whatever the file holds. Sharing that transliteration put it in the
+-- room, and a peer's later edit made the room's save policy write it back over the host's own
+-- file. The file's own bytes are what is judged, as the companion judges them when a peer asks
+-- the room for the path.
+
+local binary_path = '.tmp/lua-binary.bin'
+local binary_room = vim.fn.fnamemodify(binary_path, ':.')
+local handle = assert(io.open(binary_path, 'wb'))
+handle:write(string.char(0, 1, 2, 255, 254, 128) .. 'binary\n')
+handle:close()
+
+selvage.leave()
+vim.cmd('edit! ' .. vim.fn.fnameescape(binary_path))
+local binary_buf = vim.api.nvim_get_current_buf()
+check(
+  'a binary file opens as a buffer whose text is valid UTF-8',
+  require('selvage.utf16').valid(
+    table.concat(vim.api.nvim_buf_get_lines(binary_buf, 0, -1, true), '\n')
+  ),
+  true
+)
+
+local before_binary = #notices
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-binary' })
+check('a binary file is not shared, however its buffer reads', opens_of(binary_room), 0)
+check(
+  '  and the refusal says what it is',
+  said_since(
+    before_binary,
+    binary_room .. ' is a binary file, and a room carries text, so it is not shared.'
+  ) ~= nil,
+  true
+)
+
+-- The file's bytes are the fact, so a buffer the person has typed into is judged the same way:
+-- what is refused is the file, not what the window happens to hold. The same path twice is one
+-- refusal, like the one above.
+vim.api.nvim_buf_set_lines(binary_buf, 0, -1, true, { 'what I typed instead' })
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = binary_buf })
+local said_about_binary = 0
+for _, notice in ipairs(notices) do
+  if notice.message:find(binary_room, 1, true) ~= nil then
+    said_about_binary = said_about_binary + 1
+  end
+end
+check('  said once, whatever the buffer holds', said_about_binary, 1)
+
+-- -- a file that could not be read ------------------------------------------------
+--
+-- Judging the bytes means reading them, and a file that moved between the buffer's own read and
+-- this one cannot be judged: what the buffer holds for it is not what the file holds now. Nothing
+-- is shared for it, because text that cannot be checked is text that may be a transliteration of
+-- bytes the file no longer has (`file_is_text`). Entering the buffer again looks again, so a file
+-- that comes back is shared when it does.
+
+local unreadable_path = '.tmp/lua-unreadable.txt'
+local unreadable_room = vim.fn.fnamemodify(unreadable_path, ':.')
+vim.fn.writefile({ 'readable for now' }, unreadable_path)
+selvage.leave()
+vim.cmd('edit! ' .. vim.fn.fnameescape(unreadable_path))
+vim.uv.fs_chmod(unreadable_path, 0)
+
+local before_unreadable = #notices
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-unreadable' })
+if vim.uv.fs_open(unreadable_path, 'r', tonumber('644', 8)) == nil then
+  check('a file that could not be read is not shared', opens_of(unreadable_room), 0)
+  check(
+    '  and the refusal says what happened',
+    said_since(before_unreadable, unreadable_room .. ' could not be read, so it is not shared.') ~= nil,
+    true
+  )
+else
+  -- A process with the privilege to read anything cannot make this file unreadable, and both
+  -- checks above would pass for a reason that has nothing to do with the code.
+  print('note  a file that could not be read is not shared: not run, this process reads anything')
+end
+vim.uv.fs_chmod(unreadable_path, tonumber('644', 8))
 
 -- -- a wiped shared buffer -------------------------------------------------------
 --

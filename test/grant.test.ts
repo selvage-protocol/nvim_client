@@ -117,6 +117,33 @@ test('a listing leaves out secret names and keeps their templates', async () => 
   }
 });
 
+// A listing names the files a room may be asked for, and a file whose name declares a format no
+// session can carry is one the read refuses: naming it offered a guest a file no fetch could
+// fill, and left the guest to find that out by asking. The name is the one thing a walk can
+// judge, because it reads no bytes — so the line is a floor and not a classification. An
+// undeclared binary stays listed and is refused with the truth by the read, and a text file
+// that wears a declared name is left out with the rest.
+test('a listing leaves out a name that declares a binary format', async () => {
+  await put('binary/src/main.rs', 'fn main() {}\n');
+  await put('binary/docs/notes.txt');
+  await put('binary/bundle.zip', 'PK\u0003\u0004');
+  await put('binary/docs/logo.PNG', 'png');
+  // A binary that declares a format, and one whose name declares nothing at all.
+  await writeFile(join(ROOT, 'binary/blob.bin'), Buffer.from([0x00, 0x01, 0xff, 0xfe]));
+  await writeFile(join(ROOT, 'binary/data.undeclared'), Buffer.from([0x61, 0x00, 0x62]));
+
+  assert.deepEqual(await enumerateGrant(join(ROOT, 'binary')), [
+    'data.undeclared',
+    'docs/notes.txt',
+    'src/main.rs',
+  ]);
+  // What the read says about the names the listing was drawn against. The declared one is
+  // refused for its bytes and so is the undeclared one: what the walk leaves listed is a file
+  // the read may still refuse, and that refusal is the truth about the file.
+  assert.equal(cause(await readGrantedFile(join(ROOT, 'binary'), 'blob.bin')), 'binary');
+  assert.equal(cause(await readGrantedFile(join(ROOT, 'binary'), 'data.undeclared')), 'binary');
+});
+
 test('the grant folds case only where the filesystem does', () => {
   // The default macOS and Windows filesystems fold case, so `.GIT/` names the same files
   // as `.git/` there; on a case-sensitive checkout `Build/` is an ordinary directory.
