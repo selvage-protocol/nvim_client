@@ -22,11 +22,11 @@ Install with your plugin manager. The one built into Neovim 0.12 and newer needs
 plugin and no install hook:
 
 ```lua
--- vim.pack (Neovim 0.12+), pinned to v0.1.0
+-- vim.pack (Neovim 0.12+), pinned to v0.2.0
 vim.pack.add({
   {
     src = 'https://github.com/selvage-protocol/nvim_client',
-    version = vim.version.range('0.1'),
+    version = vim.version.range('0.2'),
   },
 })
 ```
