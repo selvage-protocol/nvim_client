@@ -23,6 +23,7 @@ import {
   isGrantedPath,
   sortGrant,
 } from '../vendor/bridge/index.ts';
+import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
 
 /**
  * How many entries a walk will look at before it stops. The path count is the listing's own
@@ -125,13 +126,7 @@ const LEAF = constants.O_RDONLY | NO_FOLLOW;
 const PINNED_STEPS = existsSync('/proc/self/fd');
 
 /**
- * A file's text, or `undefined` when the path is not one this host can serve.
- *
- * `undefined` is the answer for anything that is not a readable text file inside the shared
- * folder: a path the grant excludes (the `.git` tree, an environment file), one that escapes the
- * folder, a directory, a symbolic link, a file over the size a session will carry, bytes that are
- * not text, and anything that cannot be read at all. The caller reports the refusal rather than
- * putting an empty document into the room.
+ * A file's text, or why this host cannot serve it.
  *
  * The path is resolved one segment at a time because `join` resolves nothing: a path that travels
  * *through* a symbolic link lands on a real file somewhere else entirely, while the leaf's own
@@ -157,29 +152,59 @@ const PINNED_STEPS = existsSync('/proc/self/fd');
  * file system reports it as a directory, `realpath` answers with a path inside the folder for it,
  * and only a comparison of the file systems' identities (`st_dev`) at each step would see it. It
  * takes `CAP_SYS_ADMIN` to plant, and the VS Code client serves it too.
+ *
+ * The answer names *which* refusal it is — nothing there, not a plain file, over the size a
+ * session carries, bytes that are not text — because one sentence for all of them sent a person
+ * refused a `.zip` looking for a file that had never been deleted.
  */
-export async function readGrantedFile(root: string, path: string): Promise<string | undefined> {
+export async function readGrantedFile(root: string, path: string): Promise<GrantedRead> {
   if (!isGrantedPath(path)) {
-    return undefined;
+    return refused('not-granted');
   }
   const segments = path.split('/');
   const leaf = segments.pop();
   if (leaf === undefined) {
-    return undefined;
+    return refused('not-granted');
   }
   if (!PINNED_STEPS) {
     const directory = await walkToDirectory(root, segments);
-    return directory === undefined ? undefined : await readLeaf(join(directory, leaf));
+    return 'kind' in directory ? directory : await readLeaf(join(directory.path, leaf));
   }
   const directory = await openToDirectory(root, segments);
-  if (directory === undefined) {
-    return undefined;
+  if ('kind' in directory) {
+    return directory;
   }
   try {
-    return await readLeaf(inside(directory, leaf));
+    return await readLeaf(inside(directory.handle, leaf));
   } finally {
-    await directory.close().catch(() => undefined);
+    await directory.handle.close().catch(() => undefined);
   }
+}
+
+/** A refusal, shaped the way the bridge reads one. */
+type Refused = { readonly kind: 'refused'; readonly cause: GrantRefusal };
+
+function refused(cause: GrantRefusal): Refused {
+  return { kind: 'refused', cause };
+}
+
+/** An open directory of the shared folder, or why the path's steps do not lead to one. */
+type OpenedDirectory = { readonly handle: FileHandle } | Refused;
+
+/** A directory of the shared folder named by path, or why the steps do not lead to one. */
+type FoundDirectory = { readonly path: string } | Refused;
+
+/**
+ * Why a step could not be taken. A name that is not there is `missing`; anything else the file
+ * system refuses — a link where a directory has to be, a name that is not a directory — is
+ * `not-a-file`. Steps are opened with `O_NOFOLLOW` where the platform has it, so a link is
+ * refused as one rather than followed.
+ */
+function stepRefusal(error: unknown): GrantRefusal {
+  if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+    return 'missing';
+  }
+  return 'not-a-file';
 }
 
 /** A name inside a directory that is already open: `/proc/self/fd/<fd>` is that directory. */
@@ -188,28 +213,32 @@ function inside(directory: FileHandle, name: string): string {
 }
 
 /**
- * The directory the path's segments name, opened one step at a time — `undefined` when a step is
+ * The directory the path's segments name, opened one step at a time — a refusal when a step is
  * not a plain directory of the folder. Every step after the folder is resolved inside the
  * descriptor of the one before it, so the names walked through are not resolved a second time.
  */
 async function openToDirectory(
   root: string,
   segments: readonly string[],
-): Promise<FileHandle | undefined> {
-  const folder = await open(root, FOLDER).catch(() => undefined);
-  if (folder === undefined) {
-    return undefined;
+): Promise<OpenedDirectory> {
+  const folder = await open(root, FOLDER).catch((error: unknown) =>
+    refused(stepRefusal(error)),
+  );
+  if ('kind' in folder) {
+    return folder;
   }
   let directory = folder;
   for (const segment of segments) {
-    const next = await open(inside(directory, segment), STEP).catch(() => undefined);
+    const next = await open(inside(directory, segment), STEP).catch((error: unknown) =>
+      refused(stepRefusal(error)),
+    );
     await directory.close().catch(() => undefined);
-    if (next === undefined) {
-      return undefined;
+    if ('kind' in next) {
+      return next;
     }
     directory = next;
   }
-  return directory;
+  return { handle: directory };
 }
 
 /**
@@ -220,58 +249,78 @@ async function openToDirectory(
 async function walkToDirectory(
   root: string,
   segments: readonly string[],
-): Promise<string | undefined> {
+): Promise<FoundDirectory> {
   let head = root;
   for (const segment of segments) {
     head = join(head, segment);
     const info = await lstat(head).catch(() => undefined);
-    if (info === undefined || !info.isDirectory()) {
-      return undefined;
+    if (info === undefined) {
+      return refused('missing');
+    }
+    if (!info.isDirectory()) {
+      return refused('not-a-file');
     }
   }
-  return head;
+  return { path: head };
 }
 
 /**
- * A leaf's text, or `undefined` when it is not a plain file of the size a session carries.
+ * A leaf's text, or why it is not one this host will serve.
  *
- * The bytes come from the descriptor the type and the size were read from, so the name it was
- * opened under cannot be moved to something else in between. `isShareableFile` is the same rule
- * one step earlier, and on a platform without `O_NOFOLLOW` it is what refuses a link here.
+ * The size and the type are read before the bytes and again through the descriptor they are read
+ * with, so the name it was opened under cannot be moved to something else in between.
+ * `isShareableFile` is the same first half of the rule, one step earlier, and it is the half the
+ * listing's own walk can afford: a walk does not read a file's bytes to decide whether to name
+ * it. What that leaves is a listed file whose bytes are not text, which is refused here.
  */
-async function readLeaf(name: string): Promise<string | undefined> {
-  if (!(await isShareableFile(name))) {
-    return undefined;
+async function readLeaf(name: string): Promise<GrantedRead> {
+  const info = await lstat(name).catch(() => undefined);
+  if (info === undefined) {
+    return refused('missing');
   }
-  const handle = await open(name, LEAF).catch(() => undefined);
-  if (handle === undefined) {
-    return undefined;
+  if (!info.isFile()) {
+    return refused('not-a-file');
+  }
+  if (info.size > MAX_GRANT_FILE_BYTES) {
+    return refused('too-large');
+  }
+  const handle = await open(name, LEAF).catch((error: unknown) =>
+    refused(stepRefusal(error)),
+  );
+  if ('kind' in handle) {
+    return handle;
   }
   try {
-    const info = await handle.stat().catch(() => undefined);
-    if (info === undefined || !info.isFile() || info.size > MAX_GRANT_FILE_BYTES) {
-      return undefined;
+    const opened = await handle.stat().catch(() => undefined);
+    if (opened === undefined) {
+      return refused('missing');
+    }
+    if (!opened.isFile()) {
+      return refused('not-a-file');
+    }
+    if (opened.size > MAX_GRANT_FILE_BYTES) {
+      return refused('too-large');
     }
     const bytes = await handle.readFile().catch(() => undefined);
-    return bytes === undefined ? undefined : decodableText(bytes);
+    return bytes === undefined ? refused('missing') : decodableText(bytes);
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
 /**
- * A file's bytes as text, or `undefined` when they are not what a session can carry: a NUL byte
- * or a byte sequence that is not valid UTF-8. A binary turned into a `Y.Text` would be corrupted
+ * A file's bytes as text, or a refusal when they are not what a session can carry: a NUL byte or
+ * a byte sequence that is not valid UTF-8. A binary turned into a `Y.Text` would be corrupted
  * into replacement characters, and the room's own save policy would write it back over the
  * host's file.
  */
-function decodableText(bytes: Uint8Array): string | undefined {
+function decodableText(bytes: Uint8Array): GrantedRead {
   if (bytes.includes(0)) {
-    return undefined;
+    return refused('binary');
   }
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return { kind: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
   } catch {
-    return undefined;
+    return refused('binary');
   }
 }
