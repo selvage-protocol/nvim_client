@@ -22,11 +22,11 @@ Install with your plugin manager. The one built into Neovim 0.12 and newer needs
 plugin and no install hook:
 
 ```lua
--- vim.pack (Neovim 0.12+), pinned to v0.1.0
+-- vim.pack (Neovim 0.12+), pinned to v0.2.0
 vim.pack.add({
   {
     src = 'https://github.com/selvage-protocol/nvim_client',
-    version = vim.version.range('0.1'),
+    version = vim.version.range('0.2'),
   },
 })
 ```
@@ -301,7 +301,7 @@ Selvage server answers belongs to the engine, which adds it to whatever base it 
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach says why, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too, and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach says why, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too (a buffer whose file's bytes are not text is refused rather than transliterated, once per path), and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageChangeServer [serverUrl]` | Report the server the next host uses, and set it, without hosting first. With no argument it reports the address in force and, where there is somebody to ask, opens the same box `:SelvageHost`'s first question does, prefilled with it. While `vim.g.selvage_server_url` is set that global outranks the remembered address, so the command says so and changes nothing. Either way the write reaches the next host only, never a room already open. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the page link the host copies, whose origin is the server the room lives on; a `ws://` link joins as it stands, which is how a room whose server serves no page is handed on. A value that is not an invite link, typed or pasted, is refused at once. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
@@ -371,7 +371,8 @@ opening a file outside it earns a warning.
 That listing is the room's **grant** (`DESIGN.md` §4.2, `PROTOCOL.md` §5): files and never content,
 replaced wholesale. A host reads its own working copy when the session starts and writes the files
 it holds: no directories, ascending by UTF-16 code unit, with dependency and build trees and
-environment files left out, and nothing over the 1 MiB a listing will carry
+environment files left out, a file whose own name declares a format a room cannot carry left out
+with them, and nothing over the 1 MiB a listing will carry
 (`MAX_GRANT_FILE_BYTES`). It reads the folder again while it hosts, so a file created, deleted or
 renamed under it reaches the room as the new listing. A guest keeps the listing beside the
 documents it holds, so `:SelvageOpen` completes over a path nobody has opened yet and opens it
