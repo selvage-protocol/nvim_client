@@ -881,8 +881,8 @@ check(
   true
 )
 check(
-  '    saying which document it is not in',
-  echoed and echoed[4] and echoed[4][1]:find('no shared document open', 1, true) ~= nil,
+  '    saying it is not in a document',
+  echoed and echoed[4] and echoed[4][1]:find('not in a document', 1, true) ~= nil,
   true
 )
 
