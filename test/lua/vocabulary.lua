@@ -120,8 +120,11 @@ local TITLES = {
 local MESSAGES = {
   -- Hosting and joining.
   { 'INFO', 'the room is open. Send this link to your friend — it is on the clipboard.' },
-  { 'INFO', 'the room is open; :SelvageCopyInvite copies the invite link.' },
+  { 'WARN', 'the room is open, but this connection holds no invite link to send.' },
+  { 'WARN', 'the room is open, but the invite link could not be copied (%s).' },
   { 'INFO', 'you are already hosting this session; the invite link is on the clipboard.' },
+  { 'WARN', 'you are already hosting this session, but this connection holds no invite link to send.' },
+  { 'WARN', 'you are already hosting this session, but the invite link could not be copied (%s).' },
   { 'WARN', 'a session is already being opened.' },
   { 'INFO', 'joined the room — opening %s.' },
   { 'INFO', 'joined the room — opening %s; %d more in the room.' },
@@ -138,6 +141,8 @@ local MESSAGES = {
   { 'WARN', 'no shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
   { 'INFO', 'the invite link is on the clipboard.' },
+  { 'WARN', 'the invite link could not be copied (%s).' },
+  { 'WARN', 'this session holds no invite link to copy.' },
   { 'WARN', 'there is no invite link; host or join a room first.' },
   -- Leaving.
   { 'INFO', 'left the session.' },

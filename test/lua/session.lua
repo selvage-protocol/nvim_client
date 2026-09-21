@@ -132,7 +132,8 @@ local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check(
   'the host confirm says the room is open',
-  said_since(before_host_confirm, 'the room is open; :SelvageCopyInvite copies the invite link.') ~= nil,
+  said_since(before_host_confirm, 'the room is open, but this connection holds no invite link to send.')
+    ~= nil,
   true
 )
 

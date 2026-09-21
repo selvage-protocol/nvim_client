@@ -117,8 +117,14 @@ end
 
 local registers = {}
 local real_setreg = vim.fn.setreg
+-- A Neovim with no clipboard provider has the unnamed register and not the system one. That is
+-- the machine's business, not a session's, so it is the one thing the stub decides per run.
+local clipboard_refuses = false
 vim.fn.setreg = function(register, value)
   registers[register] = value
+  if register == '+' and clipboard_refuses then
+    error("E354: Invalid register name: '+'")
+  end
   pcall(real_setreg, register, value)
 end
 
@@ -219,6 +225,78 @@ vim.cmd('SelvageHost')
 check('a configured address is not asked about', prompted, nil)
 check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:9999')
 vim.g.selvage_server_url = nil
+
+-- -- a typed address is completed, not refused ---------------------------------------
+--
+-- A person types a host, not a URL. `selvage.dontblameme.dev` is the published shape — TLS, and
+-- the engine's own `/session` — while an address that already names the endpoint keeps it from
+-- being dialled twice (`/session/session` is nobody's server), and a path someone typed is
+-- theirs and is left alone. `:SelvageChangeServer` completes what it is given and reports the
+-- address it wrote, so the two entry points cannot disagree about what a hostname means.
+
+local remembered_file = vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_server')
+
+vim.cmd('SelvageHost selvage.dontblameme.dev')
+check(
+  'a bare host means the TLS server',
+  last_of('host') and last_of('host').serverUrl,
+  'wss://selvage.dontblameme.dev'
+)
+vim.cmd('SelvageHost selvage.dontblameme.dev/')
+check(
+  '  a trailing slash is not a second server',
+  last_of('host') and last_of('host').serverUrl,
+  'wss://selvage.dontblameme.dev'
+)
+vim.cmd('SelvageHost wss://selvage.dontblameme.dev/session')
+check(
+  '  an address that names the endpoint is dialled once',
+  last_of('host') and last_of('host').serverUrl,
+  'wss://selvage.dontblameme.dev'
+)
+vim.cmd('SelvageHost wss://selvage.dontblameme.dev/prefix')
+check(
+  '  a path someone typed is kept',
+  last_of('host') and last_of('host').serverUrl,
+  'wss://selvage.dontblameme.dev/prefix'
+)
+vim.cmd('SelvageHost ws://127.0.0.1:1234')
+check(
+  '  an address with a scheme is left as it is',
+  last_of('host') and last_of('host').serverUrl,
+  'ws://127.0.0.1:1234'
+)
+check(
+  '  and the completed address is the one remembered',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  'ws://127.0.0.1:1234'
+)
+
+before = #notices
+vim.cmd('SelvageChangeServer selvage.dontblameme.dev')
+check(
+  'changing the server completes a bare host the same way',
+  said_since(before, 'will host on wss://selvage.dontblameme.dev next.') ~= nil,
+  true
+)
+check(
+  '  and writes the completed address down',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  'wss://selvage.dontblameme.dev'
+)
+before = #notices
+prompted = nil
+vim.cmd('SelvageChangeServer')
+check(
+  '  a bare :SelvageChangeServer reports it completed too',
+  said_since(before, 'the next host uses wss://selvage.dontblameme.dev.') ~= nil,
+  true
+)
+check(
+  '  and its box starts from what would be dialled',
+  prompted and prompted.default,
+  'wss://selvage.dontblameme.dev'
+)
 
 -- -- :SelvageChangeServer reports the address in force and offers to change it ----------
 --
@@ -738,6 +816,19 @@ check(
 )
 vim.g.selvage_web_origin = nil
 
+-- A bare page origin is completed the way a bare server address is, with the scheme a page's
+-- own default: a page link carries the room's token, so the page is served over TLS or not at
+-- all, and an origin that says `http://` is still refused rather than rewritten.
+vim.g.selvage_web_origin = 'custom.example:9443'
+registers = {}
+vim.cmd('SelvageCopyInvite')
+check(
+  '  a bare page origin means https',
+  registers['+'],
+  'https://custom.example:9443/?room=r-demo&token=t'
+)
+vim.g.selvage_web_origin = nil
+
 -- A process with nobody to answer the modal question cannot be asked, so the session it holds is
 -- not given up: the consequence is said and nothing else happens.
 vim.ui.input = builtin_input
@@ -805,6 +896,86 @@ report_status('joined', 'r-wire')
 registers = {}
 vim.cmd('SelvageCopyInvite')
 check('a guest that joined by wire copies the wire link', registers['+'], wire_invite)
+
+-- -- a session that stands but holds no link to hand on -----------------------------
+--
+-- A room is open and this connection has no invite for it, because the server that seated it
+-- sent no token. `host or join a room first` is the sentence for a window in no session at all
+-- — said here it is a contradiction, and one that sends the person looking for the room they
+-- are already in. Each of the three moments says what actually happened.
+
+selvage.leave()
+before = #notices
+vim.cmd('SelvageHost ws://127.0.0.1:51')
+report_status('hosting', 'r-noinvite')
+check(
+  'a room that opens with no link in hand says what is missing',
+  said_since(before, 'the room is open, but this connection holds no invite link to send.') ~= nil,
+  true
+)
+registers = {}
+before = #notices
+vim.cmd('SelvageCopyInvite')
+check(
+  '  and copying says the same rather than that there is no room',
+  said_since(before, 'this session holds no invite link to copy.') ~= nil,
+  true
+)
+check(
+  '  and never the sentence for a window in no session',
+  said_since(before, 'host or join a room first'),
+  nil
+)
+check('  and nothing was copied', registers['+'], nil)
+before = #notices
+vim.cmd('SelvageHost ws://127.0.0.1:52')
+check(
+  '  and hosting again says what is missing too',
+  said_since(before, 'you are already hosting this session, but this connection holds no invite link to send.')
+    ~= nil,
+  true
+)
+
+-- A Neovim whose system clipboard refuses the link still has the unnamed register, and the
+-- sentence says so rather than claiming a copy the editor could not make.
+clipboard_refuses = true
+registers = {}
+before = #notices
+vim.cmd('SelvageHost ws://127.0.0.1:53')
+report_status('hosting', 'r-noclip', 'ws://127.0.0.1:53/session?room=r-noclip&token=t5')
+check(
+  'a clipboard that refuses the link is reported, not claimed',
+  said_since(before, 'the invite link could not be copied (') ~= nil,
+  true
+)
+check(
+  '  and the reason it gives is the one Neovim gave',
+  said_since(before, 'E354: Invalid register name') ~= nil,
+  true
+)
+check(
+  '  and the notice never says the link is on the clipboard',
+  said_since(before, 'it is on the clipboard'),
+  nil
+)
+check(
+  '  and the unnamed register holds it',
+  registers['"'],
+  'https://selvage.dontblameme.dev/?room=r-noclip&token=t5&server=ws%3A%2F%2F127.0.0.1%3A53'
+)
+before = #notices
+vim.cmd('SelvageCopyInvite')
+check(
+  '  and copying says the same',
+  said_since(before, 'the invite link could not be copied (') ~= nil,
+  true
+)
+check(
+  '  and does not claim it either',
+  said_since(before, 'the invite link is on the clipboard'),
+  nil
+)
+clipboard_refuses = false
 
 -- Nothing to copy is a session that is not there, and the sentence says that rather than
 -- blaming the connection that minted the room.
