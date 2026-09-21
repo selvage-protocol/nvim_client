@@ -3,22 +3,22 @@
 A Neovim client for the [Selvage session protocol](https://github.com/selvage-protocol/specification):
 share a link, come edit my code with me.
 
-Status: **v1 in progress.** Hosting a file, joining by invite and bidirectional convergence are
-the bar; see "What is not here yet" at the bottom for what is deliberately not done.
+Status: **v1 in progress.** Hosting, joining by invite and editing together work today; the gaps
+are listed under "What is not here yet".
 
 ## Get it working
 
 You need:
 
-- Neovim 0.10 or newer. The plugin uses `vim.str_utfindex`/`vim.str_byteindex` with an encoding
-  argument, with a fallback to the older two-value form.
-- Node 22.18 or newer on `PATH`. The companion is TypeScript run directly by Node's own type
-  stripping, so there is no build step. A guest needs Node too: the sync engine runs locally on both
-  ends, so joining takes the same Node and the same `npm ci` as hosting.
-- A `selvaged` to connect to. A host starts one and notes the address it prints; a guest joins with
-  the invite link the host copies, and needs nothing else from the server side.
+- Neovim 0.10 or newer.
+- Node 22.18 or newer on `PATH`, with the companion's dependencies installed by `npm ci` in the
+  plugin directory. A guest needs both too: the sync engine runs at each end, so joining takes the
+  same Node and the same install as hosting.
+- A `selvaged` to connect to. Start one and note the address it prints; a guest needs the invite
+  link the host sends and nothing else from the server side.
 
-Install with your plugin manager. With Neovim 0.12 or newer, the built-in one needs no third-party dependency (still experimental, but stable enough for daily use, and it needs `git` on `PATH`):
+Install with your plugin manager. Neovim 0.12 and newer has one built in, needing no third-party
+plugin and no install hook, but `git` on `PATH`:
 
 ```lua
 -- vim.pack (Neovim 0.12+), pinned to v0.1.0
@@ -30,7 +30,9 @@ vim.pack.add({
 })
 ```
 
-`vim.pack` runs no install hook, so run `npm ci` inside the plugin directory once, then update with `vim.pack.update()`:
+Run `npm ci` in the plugin directory once; `vim.pack.update()` keeps it current after that.
+
+Any other manager works. These run `npm ci` for you:
 
 ```lua
 -- lazy.nvim
@@ -47,8 +49,7 @@ Plug 'selvage-protocol/nvim_client', { 'do': 'npm ci' }
 use { 'selvage-protocol/nvim_client', run = 'npm ci' }
 ```
 
-Or clone the repository and run `npm ci` inside it (the companion needs `yjs`, `y-protocols`,
-`lib0` and `ws`), then point your plugin manager at the checkout:
+Or clone the repository, run `npm ci` inside it, and point your plugin manager at the checkout:
 
 ```lua
 -- lazy.nvim
@@ -59,22 +60,19 @@ Or clone the repository and run `npm ci` inside it (the companion needs `yjs`, `
 -- :packadd selvage
 ```
 
-With `nix`, `nix run .#nvim` gives a Neovim that already has the plugin on its runtime path and
-Node on `PATH`, built from the flake. It sits beside the routes above: same plugin, assembled from
-the store instead of from a checkout, and no `npm ci` needed for it.
+With `nix`, `nix run .#nvim` gives a Neovim with the plugin on its runtime path and Node on `PATH`,
+assembled from the flake, and needs no `npm ci`.
 
 There is no `setup()` call, and no build step beyond installing the dependencies.
 
 A first session:
 
-1. Start `selvaged`. It prints the address it is listening on.
-2. `:SelvageHost` mints a room on that server and shares the current buffer. Give it the address
-   when it asks; it starts from the demo server `ws://100.64.0.3:8080` and remembers the answer
-   across restarts. The room's invite link goes on the clipboard as the room opens.
-3. `:SelvageCopyInvite` copies that invite link again for anyone who needs it later.
-4. The guest runs `:SelvageJoin <invite>`. It joins the room the link names and opens the room's
+1. Start `selvaged` and note the address it prints.
+2. `:SelvageHost` shares the current buffer. Answer its one question with that address; the invite
+   link goes on the clipboard as the room opens.
+3. Send the link. The other person runs `:SelvageJoin <invite>`, which joins the room and opens its
    first document.
-5. Both people edit the same file, and each sees the other's text and caret arrive as they type.
+4. Both edit the same file, and each sees the other's text and caret as they type.
 
 ## Shape
 
@@ -155,30 +153,22 @@ A peer's caret is drawn as a block cursor on the cell before the offset the room
 character the caret is in front of, not the one it has reached. The block is filled with the
 colour the bridge derived for the peer, and the character under it stays readable through the
 block instead of being covered by a name. Nothing is inserted, so the line keeps its width and the
-block sits against the selection fill rather than one cell away from it. A row of its own above
-the line was the first shape and reads the position wrong, because a virtual line starts at the
-text column, not the caret's. The start of a line has no cell before it, so a caret there keeps
-the block on the cell it is on, where a bar at the line's start is drawn. That is the one place
-where a caret in front of the first character and a caret on it draw the same block. An empty line
-has no cell either, and the caret is then the single block in the empty cell. A peer who has
-selected something gets a second extmark over `[anchor, head)`, whichever way the range was made,
-filled with the peer's colour at the alpha the bridge computed; a collapsed selection draws
-nothing, because the caret is already drawn. Both ends of both marks are the room's UTF-16 offsets
-converted to byte columns, and the block covers a whole character, a wide or an astral one
+block sits against the selection fill. The start of a line has no cell before it, so a caret there
+keeps the block on the cell it is on, where a bar at the line's start is drawn. That is the one
+place where a caret in front of the first character and a caret on it draw the same block. An
+empty line has no cell either, and the caret is then the single block in the empty cell. A peer
+who has selected something gets a second extmark over `[anchor, head)`, whichever way the range
+was made, filled with the peer's colour at the alpha the bridge computed; a collapsed selection
+draws nothing, because the caret is already drawn. Both ends of both marks are the room's UTF-16
+offsets converted to byte columns, and the block covers a whole character, a wide or an astral one
 included, rather than one byte of it.
 
-A client's own caret and the block the others see are two different shapes, and this is where that
-shows. Neovim's cursor rests on a character, and its column is that character's byte index, so this
-client publishes the offset of the character the cursor is on, the same offset a VS Code caret
-sitting in front of that character publishes. A block over a character and a bar between two
-characters are not the same shape, so one of the two readings has to move, and this renderer is the
-one that moves: a peer running Neovim is shown to everyone else with the block one cell to the left
-of where that peer sees their own cursor. Shifting the publisher instead, publishing the offset
-after the character the cursor is on, would put a Neovim peer's block under their own cursor, but a
-caret and a selection's `head` are the same published number, so it would move the end of the
-selection fill with it. What a Vim visual selection should publish as its `head`, the last cell it
-covers or the position after it, is a decision about the selection, taken on its own, and not one a
-renderer gets to make. The feed is what the room counts, so it is left alone.
+A client's own caret and the block the others see are two different shapes. Neovim's cursor rests
+on a character and its column is that character's byte index, so this client publishes the offset
+of the character the cursor is on, the same offset a VS Code caret sitting in front of that
+character publishes. A block over a character and a bar between two characters are not the same
+shape, so a peer running Neovim is shown to everyone else with the block one cell to the left of
+where that peer sees their own cursor.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. The
@@ -186,10 +176,8 @@ name is never drawn over the text: the gutter is where it lives, and two cells i
 takes, so a peer called `thisismylongusername` is `th` there and nothing more. `:SelvagePeers`
 lists every peer the room names: the sign the gutter drew beside the whole display name and room
 path for the peers this client holds a document for, and the name and role alone for the ones it
-does not. It prints each sign in the very highlight that peer's caret and sign are drawn with,
-because a list that explains the gutter has to agree with it cell for cell. Nothing is put over the
-document when a peer moves, since a name over their caret would cover a line and a half of the
-buffer, which is worse than the two cells it explains. Every mark is cleared and recreated when
+does not. It prints each sign in the very highlight that peer's caret and sign are drawn with.
+Nothing is put over the document when a peer moves. Every mark is cleared and recreated when
 presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
@@ -253,9 +241,9 @@ diffs the result, so a run either brings `vendor/` into agreement or says what i
 
 Hosting starts outside the editor: start `selvaged`, note the address it prints, and give that
 address to `:SelvageHost`, or set `vim.g.selvage_server_url` to always use it. The address is asked
-for once and remembered across restarts; later bare `:SelvageHost` calls reuse it without asking.
-With neither, the one question starts from the demo server `ws://100.64.0.3:8080`.
-`:SelvageChangeServer` answers "which server am I on" without hosting first, and lets it change.
+for once and remembered across restarts, so later bare `:SelvageHost` calls reuse it without asking.
+With none of the three, the one question starts from the demo server `ws://100.64.0.3:8080`.
+`:SelvageChangeServer` reports or changes the address without hosting first.
 
 | | |
 |---|---|
@@ -279,23 +267,14 @@ when the answer is no. A process with nobody to answer the question cannot be as
 what the command would have done and leaves the session alone.
 
 The name other participants see is resolved when a session starts, in this order:
-`vim.g.selvage_display_name`, then the `SELVAGE_DISPLAY_NAME` environment variable, then the
-remembered answer, then a `vim.ui.input` prompt pre-filled with the login name. The pre-fill is a
-suggestion and nothing more: a cancelled or emptied prompt refuses the session rather than seating
-a room under a name nobody chose, and a process with nobody to ask refuses it too, saying how to
-configure one. The login name is never a name of its own, and
-`require('selvage').display_name()` is `nil` until one is set or remembered: a script reading it
-can tell that the next host or join has no name to go with, and will ask for one, or, where there
-is nobody to ask, refuse. `:SelvageDisplayName` sets the global and writes it down, and a prompted
-answer is written down too, so neither the same Neovim nor the next one asks again; setting
-another name is how the remembered one changes. The name rides in the `host`/`join` handshake, and
-a change made while a session is live is sent as `session.rename`: the room answers with
-`peer.renamed`, and the sign and `:SelvagePeers` re-label from that event, so the session goes on
-under the new name. Setting `vim.g.selvage_display_name` directly mid-session does not send
-anything, because Neovim has no configuration-change event to watch, so only
-`:SelvageDisplayName` renames a live session; a direct write is picked up by the next host or
-join. An invite that is not a link is refused before any of this, so a mistyped argument is never
-answered with a question about a name. A name is at most **32 UTF-16 code units**, the unit the
+`vim.g.selvage_display_name`, the `SELVAGE_DISPLAY_NAME` environment variable, the remembered
+answer, then a prompt pre-filled with the login name. The pre-fill is a suggestion: a cancelled or
+emptied prompt refuses the session rather than seating a room under a name nobody chose, and a
+process with nobody to ask refuses it too, saying how to configure one.
+`require('selvage').display_name()` is `nil` until one is set or remembered. `:SelvageDisplayName`
+sets the global and writes it down, and a prompted answer is written down too, so neither this
+Neovim nor the next one asks again. It renames a live session; a direct write to the global is
+picked up by the next host or join. A name is at most **32 UTF-16 code units**, the unit the
 protocol counts, so an astral character costs two, and one over that is refused rather than
 shortened, because a room must see the name its owner chose or none at all. A name typed at the
 prompt that is too long says how long it is and asks again; one that arrived from the global or
@@ -306,10 +285,10 @@ setting to change.
 the room's documents as buffers `:SelvageOpen` reaches.
 
 `vim.g.selvage_auto_save = false` keeps the room's changes out of the files on disk: a host writes
-a document the room changed by default, as the other client's `selvage.autoSave` does, and a
-guest's mirror is not refreshed either way, so a save in it is refused and the file keeps what it
-last held. Both are read when a session starts, so a change to either applies to the next host or
-join. `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, and
+a document the room changed by default, while a guest's mirror is not refreshed either way, so a
+save in it is refused and the file keeps what it last held. `vim.g.selvage_open_on_join` and this
+are read when a session starts, so a change to either applies to the next host or join.
+`vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, and
 `vim.g.selvage_web_origin` is the page a host's `:SelvageCopyInvite` links to, defaulting to the Pi
 page `https://lumi-raspberrypi.muskellunge-yo.ts.net:8444`. It must name an https origin; anything
 else falls back to the default, so a host's copied link never carries the room's token over
@@ -324,42 +303,25 @@ whatever order that override resolves); with none installed, Neovim's builtin nu
 instead. `test/lua/pickers.lua` pins both halves: no fzf or picker reference in the shipped code,
 and every chooser completing on plain `vim.ui.select`.
 
-A join says one summary sentence plus errors, whatever order the room speaks in: the room may name
-its documents before it publishes its listing, and a listing that arrives after the summary stays
-silent rather than earning its own mirror sentence. The sentence says `joined the room`, then
-`opening <path>; <n> more in the room.`: the landing and how many other documents the room holds,
-because a path, a file count and a fetched count in one greeting is a row nobody reads. The one
-exception is a room that had nothing open at the join and grants files afterwards: that guest
-landed no document and has no tree to read, so the listing is said once, and is the only thing
-that tells them the room has files at all. The mirror's location is
-`require('selvage').session().mirror`, and the session's one unfetched hint still points at
-`:SelvageFetch`; neither needs a notice of its own. Pinned by
-`test/lua/join.lua` (listing first), `test/lua/joinorder.lua` (documents first) and
-`test/lua/granted.lua` (a listing after an empty join).
+A join says one summary sentence plus errors: `joined the room`, then `opening <path>; <n> more in
+the room.` The exception is a room that had nothing open at the join and grants files afterwards:
+that guest landed no document and has no tree to read, so the listing is said once. The mirror's
+location is `require('selvage').session().mirror`. Pinned by `test/lua/join.lua` (listing first),
+`test/lua/joinorder.lua` (documents first) and `test/lua/granted.lua` (a listing after an empty
+join).
 
 The folder a session was started in is its root: a host publishes the listing of the files under
 it to the room, and nothing outside it is ever served. The root is fixed for the session, so a
-`:cd`, `:lcd` or `:tcd` afterwards moves where Neovim looks, not what the room can see, and a file
-outside it is named in a warning when it is opened, since Neovim has no workspace in the window to
-show the root the way the other client does.
+`:cd`, `:lcd` or `:tcd` afterwards moves where Neovim looks, not what the room can see, and
+opening a file outside it earns a warning.
 
-That listing is the room's **grant** (`DESIGN.md` §4.2, `PROTOCOL.md` §5). It is a list of files
-and never content, a candidate rather than a promise, and the room replaces it wholesale. A host
-reads its own working copy when the session starts and writes the files it holds: no directories,
-ascending by UTF-16 code unit, with the dependency and build trees and the environment files left
-out. It reads the folder again while it hosts: the companion watches the folder the session
-shares, and a file created, deleted or renamed under it reaches the room as the new listing. A
-burst of changes (a `git checkout`, a build) is gathered into a quarter of a second: one reading
-per window, not one per event, and a folder that still names what the last accepted listing named
-is not sent again. A listing the server refused is not remembered, so the folder's next change
-offers the listing again. Every event is worth that reading, and not only the ones that look like
-a listing change: the enumerator leaves out a file larger than the 1 MiB a listing will carry
-(`MAX_GRANT_FILE_BYTES`), so a write that crosses that bound adds or removes a path, and an event
-says nothing about which it was. The comparison saves the frame and not the reading, which is 11
-ms over 640 files, 77 ms over 5 000 and 388 ms at the 20 000 entries the enumerator stops at:
-cheap, but not free, and the price of a listing that cannot be wrong about a file's size. The
-watcher belongs to the session and is closed with it. A guest keeps the listing beside the
-documents it holds, so `:SelvageOpen` completes over a path nobody has opened yet and opens it
+That listing is the room's **grant** (`DESIGN.md` §4.2, `PROTOCOL.md` §5): files and never content,
+a candidate rather than a promise, replaced wholesale. A host reads its own working copy when the
+session starts and writes the files it holds: no directories, ascending by UTF-16 code unit, with
+dependency and build trees and environment files left out, and nothing over the 1 MiB a listing
+will carry (`MAX_GRANT_FILE_BYTES`). It reads the folder again while it hosts, so a file created,
+deleted or renamed under it reaches the room as the new listing. A guest keeps the listing beside
+the documents it holds, so `:SelvageOpen` completes over a path nobody has opened yet and opens it
 through the same hold as any other document. Opening it is what makes the **host** read that one
 file out of its working copy, and the host refuses anything that is not a readable text file
 inside its root rather than sharing an empty document; a refusal is reported.
@@ -376,25 +338,20 @@ The **shape** is materialised, the **content** is not. Every path the room's lis
 in the mirror, with the directories on the way to it, so a tree plugin walks the whole room; a
 path whose content has not been fetched is present and empty. A listing replaces the one before
 it, so a path it no longer names loses its file, and the directories that become empty with it go
-too: a shape that only ever grew would keep files the room does not have. Only a path the previous
-listing named is removed; a file a tool put in the mirror was never the room's, and nothing
-outside the mirror is touched. The listing's own bounds are applied where those files are made
-(the most paths a listing may carry, and the longest name in it, which are the host enumerator's
-bound and the server's), because a guest makes one file per path as the listing arrives. A room
-past either bound is one no host enumerated, and what is past them is refused and reported with
-the paths that cannot be written. Content arrives when something needs it: a file opened in the
-editor, or `:SelvageFetch`, which takes one path, a directory of them or the whole listing. A
-project-wide search is therefore partial until the paths it covers have been fetched, and
-`:SelvageFetch` is the one command that answers that. The window says so too: a buffer holding no
-fetched content has `[not fetched]` on its row, so the partiality is visible while a person is
-looking at the file and not only in the sentence the first such file earns once per session.
-`require('selvage').session().mirror` is where the directory is, for a plugin that has to be
+too. Only a path the previous listing named is removed, and nothing outside the mirror is touched.
+The listing's bounds (the most paths it may carry, and the longest name in it) are applied where
+those files are made, and a listing past either is refused and reported with the paths that could
+not be written. Content arrives when something needs it: a file opened in the editor, or
+`:SelvageFetch`, which takes one path, a directory of them or the whole listing. A project-wide
+search is therefore partial until the paths it covers have been fetched, and `:SelvageFetch` is
+the one command that answers that. A buffer holding no fetched content has `[not fetched]` on its
+row. `require('selvage').session().mirror` is where the directory is, for a plugin that has to be
 pointed at it.
 
 A fetch **holds** what it names: those paths join the room's open-document set, so every peer
 receives them and a peer with a mirror materialises them. A file, two of them or a directory is
 one thing; `:SelvageFetch` alone is a whole project published to the room, and the notification
-before it happens says so, because the one after it would be too late to be a choice.
+before it happens says so.
 
 A **listed path's buffer is the mirror's file**, a real path on disk, rather than a `selvage://`
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being
@@ -402,14 +359,12 @@ edited. A document the room holds and its listing does not name (a listing can b
 host's own bounds) keeps the `selvage://` buffer it had before the mirror existed, which is the
 fallback for everything the mirror cannot name. The buffer is a real file with a real name, so the
 editor's own filetype detection answers for it: a listed path with a known extension carries that
-filetype (`lua`, `markdown`, `rust`), and `'syntax'` and an ftplugin hook onto it the way they do
-for any other file the person opened. Detection is asked for by name rather than left to the
-`BufRead` autocmds, which this client suppresses while it fills the buffer so that the session's
-own hooks and the person's do not run over a buffer the room is about to write. Icons are not this
-client's: a tree plugin reads the mirror's files and draws them with whatever devicons or
-mini.icons the person has, exactly as it does for their own project. A listing that arrives after
-the room has already named a document moves that document's buffer to the file the listing names
-for it; its text comes with it.
+filetype (`lua`, `markdown`, `rust`), and `'syntax'` and an ftplugin hook onto it as they do for
+any other file the person opened. Detection is asked for by name rather than left to the `BufRead`
+autocmds, which this client suppresses while it fills the buffer. Icons come from the person's own
+devicons or mini.icons, as they do in their own project. A listing that arrives after the room has
+already named a document moves that document's buffer to the file the listing names for it; its
+text comes with it.
 
 A path that **leaves** the listing loses its mirror file too, and a buffer already open on it is
 not taken away: the listing and the room's open-document set are two facts (`PROTOCOL.md` §5, §6),
@@ -417,8 +372,7 @@ so the document stays open in the same buffer, with the same text and the same n
 writes the file back, and makes the file's directory again when the removal took it with the file:
 the room already has the text, because a guest's edits travel as they are typed, and the file is
 only this session's cache of it, so a `:w` is a save and not `E212` over a buffer left modified.
-The file that comes back is not in the room's listing, because the room does not name the path any
-more. Entering the name again is not the mirror saying the file is not the room's: while the
+The file that comes back is not in the room's listing. Entering the name again is not the mirror saying the file is not the room's: while the
 session still holds the document, a name for it routes to the buffer that already holds it and
 nothing is said. Once it does not (the buffer was wiped, or the session is over) a fresh buffer
 for the path is refused like any other file in the mirror the room does not list, once per path.
@@ -429,50 +383,38 @@ hosts) and never inside the person's project, one directory per session inside t
 for the process that owns it. The session that made it removes it on the way out, and a directory
 a crashed session left behind is pruned by the next one: only a directory whose process is gone is
 removed, so a second Neovim mirroring the same room keeps its own. The one ending that keeps the
-directory is a room closing under a guest: whatever the person did in the mirror during the grace
-is not in the room and reaches no one, so nothing there is a cache of anything the room still has
-and the directory stays, with a sentence saying where.
+directory is a room closing under a guest, with a sentence saying where it is.
 
 A room that dies under a guest does not leave its buffers in the window: `roomGone`, and the
 connection the engine gave up on, land every window showing one on a fresh empty buffer, wipe the
 room's buffers that hold nothing the person changed, and keep the ones that do, saying how many,
-because the session that could save them is over, and keep the mirror itself with the sentence
-`The room closed. Your copy is kept at <path>.` A host is left alone: its buffers, and its files,
-are its own. Pinned by `test/lua/session.lua`.
+and keep the mirror itself with the sentence `The room closed. Your copy is kept at <path>.` A
+host is left alone: its buffers, and its files, are its own. Pinned by `test/lua/session.lua`.
 
 A save in the mirror is **routed, not written by the editor**: `:w` in a mirror buffer does not
 run Neovim's write path, and the file is written by this client from the buffer, as the save the
 room is told about. `:[range]w {file}` and `:w >> {file}` naming a file inside the mirror are
-refused for the same reason: Neovim runs `FileWriteCmd` and `FileAppendCmd` for those, and both
-name the file being written. A file outside the mirror is the person's own and stays the editor's
-to write. The room's own change to a document is written into the mirror the same way, once the
+refused the same way. A file outside the mirror is the person's own and stays the editor's to
+write. The room's own change to a document is written into the mirror the same way, once the
 room settles.
 
 Four things the mirror does not do, all deliberately:
 
-- A write that runs no autocommands. Neovim does not run autocommands nested, so a `:w` issued
-  from inside another autocommand, the shape an autosave plugin has, reaches no write hook at all:
-  the editor writes the file itself and the session is not told. `:noautocmd write` by hand is the
-  same. The text is in the room all the same, because a guest's changes travel as they are typed;
-  what is skipped is the save this client would have sent, and the write is the editor's rather
-  than this client's. Nothing closes it without costing more than it is worth: `'buftype'` set to
-  `acwrite`, which is what makes the editor refuse the write, also means the buffer is "not related
-  to a file", so Neovim's own configuration does not attach a language server to it and Neovim
-  stops noticing that a tool changed the file underneath it; and `'readonly'` refuses the plain
-  `:w` this client routes, before any autocommand is chosen, so a person would have to type
-  `:w!`.
+- A write that runs no autocommands, which is what a `:w` from inside another autocommand is
+  (`:noautocmd write` by hand is the same). The editor writes the file and the session is not
+  told; the text is still in the room, because a guest's changes travel as they are typed. What is
+  skipped is the save this client would have sent.
 - A buffer that has drifted from the room. A routed save writes the buffer, which is what a person
   pressing `:w` expects, so a buffer holding text the room has not accepted (an edit the editor
-  refused to apply, a session that ended) can put that text into the file. The room's copy is what
-  the companion puts back into a buffer it has drifted from, and the next save writes that.
+  refused to apply, a session that ended) can put that text into the file. The companion puts the
+  room's copy back into such a buffer, and the next save writes that.
 - A tool that writes to a mirror file behind the client's back. The room's copy replaces it the
   next time the path is fetched or opened, and a fetch of a path this session already holds writes
-  the file from what the client holds. There is no second source of truth to reconcile: the mirror
-  is a cache, and a cache that disagrees with the room is corrected, not merged.
+  the file from what the client holds. A cache that disagrees with the room is corrected, not
+  merged.
 - A file in the mirror the room does not list. A tool that creates one has made a file on this
   disk and nothing else. Opening it says so, once per path, and it is not shared; saving it is
-  refused, with the buffer left holding the edit, because the mirror is removed when the session
-  ends and a file written into it would go with it.
+  refused, with the buffer left holding the edit.
 
 **Create, rename and delete are not implemented as document operations**: the protocol has no
 frame for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
@@ -529,18 +471,18 @@ the replica, which change an editor is asked to apply, when a document is writte
 companion, and is tested there against a fake editor. `test/bridge.test.ts` takes the vendored
 bridge directly (this adapter's `NvimEditorHost` in front of it, a fake replica behind) because a
 guest document the room has not sent the text for is a case the companion's own deferral never
-lets the bridge see, and the copy's rule for it is still worth pinning. `test/grant.test.ts` is
+lets the bridge see. `test/grant.test.ts` is
 the host's side of the room's listing on a real directory tree: which files a listing carries and
 in what order, and how far a path a peer named may reach, including the symbolic links that make a
 guess about a path interesting. What is left on the Lua side is translation, the wiring around one
 session, and one rule of the editor's own: the conversion between Neovim's byte positions and the
 protocol's UTF-16 code units. The first two get `test/lua/document.lua` and
 `test/lua/session.lua`, which run in a real headless Neovim. The first is against a real buffer
-and a real `on_bytes`, because a framework mocking those would be testing the mock; the second is
-against a stubbed companion, because what it checks is the wiring around a session: which buffers
-it shares, that it lets them go when the session ends, and that a caret is published and a peer's
-caret and selection are drawn at the peer's position. `test/lua/commands.lua` is the commands' own
-policy, through the real command definitions rather than the Lua functions behind them: what
+and a real `on_bytes` rather than a mock; the second is against a stubbed companion, and checks
+the wiring around a session: which buffers it shares, that it lets them go when the session ends,
+and that a caret is published and a peer's caret and selection are drawn at the peer's position.
+`test/lua/commands.lua` is the commands' own
+policy, through the real command definitions: what
 `:SelvageHost`, `:SelvageJoin` and `:SelvageOpen` ask for, refuse and never do.
 `test/lua/granted.lua` is the room's grant on the front-end's side: what the room offers, the
 completion and the chooser over it, and opening a path nobody has opened without counting it as
@@ -557,29 +499,22 @@ suite here rather than drifting away from the other editor's. `test/lua/leave.lu
 job, one that ignores its stdin, to check what `:SelvageLeave` does to a companion that does not
 go on its own.
 
-`scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes,
-each loading the real plugin and starting its own real companion, one hosting and one joining
-over a real `selvaged`, converging on the same document and again after a real TCP-level blip
-cuts the guest's connection. Between the two it proves the grant as well: the host writes down a
-file it never opens, the guest opens that granted path and waits for the host's own text to
-arrive, which only the host's working copy can have supplied, and the host then opens the file and
-finds the guest's marker in it, having asserted it was not holding it before. It is not part of
-`npm test` or CI (it needs a `nvim` and a built `selvaged`), and `SELVAGE_E2E_RECONNECT=0` runs
-the convergence half alone. The guest reaches the server through a relay the orchestrator can cut,
-and that holds the guest's own bytes back by `SELVAGE_E2E_LAG_MS` (300 by default). On loopback
-the window between the handshake naming the room's documents and their text arriving is about a
-millisecond, and the guest's driver makes a keystroke in that window every run, which it can only
-do if the relay is what widens it.
+`scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes, each
+loading the real plugin and starting its own real companion, one hosting and one joining over a
+real `selvaged`. It converges on the same document, and again after a real TCP-level blip cuts the
+guest's connection. It proves the grant as well: the host writes down a file it never opens, the
+guest opens that granted path and waits for the host's own text to arrive, and the host's file
+ends up holding the guest's marker. It is not part of `npm test` or CI, because it needs a `nvim`
+and a built `selvaged`; `SELVAGE_E2E_RECONNECT=0` runs the convergence half alone, and
+`SELVAGE_E2E_LAG_MS` (300 by default) is how long the relay holds the guest's bytes back.
 
-It also proves the mirror, which is what a tool outside this editor reads. Before anything is
-fetched, the guest's mirror holds the shape of the room's listing (the granted path exists there
-and is empty), and after the guest opens it the file holds the room's text, with `rg` run over the
-directory finding it from outside Neovim. The document the guest was already editing when the
-listing arrived is a file in the mirror too, holding what the two windows converged on. The guest
-then saves an edit in that file and the host's own working copy ends up holding it. The host then
-creates a file under the folder it shares and deletes another while the session is hosted, and the
-guest follows both: the created path reaches its listing and its mirror and opens with the host's
-text in it, and the deleted path, materialised since the join, leaves both.
+It also proves the mirror, which is what a tool outside this editor reads. The granted path exists
+in the guest's mirror and is empty before anything is fetched, and holds the room's text once the
+guest opens it, with `rg` finding it from outside Neovim. The document the guest was already
+editing when the listing arrived is a file in the mirror too, holding what the two windows
+converged on, and the guest's save in it reaches the host's own working copy. A file the host
+creates under the folder it shares reaches the guest's listing and mirror, and one it deletes,
+materialised since the join, leaves both.
 
 ## Licence
 
