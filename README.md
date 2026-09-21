@@ -60,8 +60,50 @@ Or clone the repository, run `npm ci` inside it, and point your plugin manager a
 -- :packadd selvage
 ```
 
-With `nix`, `nix run .#nvim` gives a Neovim with the plugin on its runtime path and Node on `PATH`,
-assembled from the flake, and needs no `npm ci`.
+### With Nix
+
+`nix run .#nvim` from a checkout, or `nix run github:selvage-protocol/nvim_client#nvim`, gives a
+Neovim with the plugin on its runtime path and Node on `PATH`, assembled from the flake; no `npm ci`
+is involved, because the companion's dependencies are built from `package-lock.json`.
+
+To install the plugin in your own configuration, add the flake as an input and take its overlay,
+which puts the plugin where a Neovim package set expects to find one, so `pkgs.vimPlugins.selvage`
+names it:
+
+```nix
+# flake.nix
+inputs.nvim_client.url = "github:selvage-protocol/nvim_client";
+
+# NixOS: nixpkgs.overlays. A flake-based home-manager setup: wherever its `pkgs` is built.
+nixpkgs.overlays = [ inputs.nvim_client.overlays.default ];
+
+programs.neovim.plugins = [ pkgs.vimPlugins.selvage ];
+```
+
+A Neovim you put in `environment.systemPackages` yourself takes the same plugin, and is the same
+quantity — an overlay, then the plugin named where plugins go:
+
+```nix
+environment.systemPackages = [
+  (pkgs.neovim.override {
+    configure.packages.selvage.start = [ pkgs.vimPlugins.selvage ];
+  })
+];
+```
+
+Without the overlay, the plugin is the flake's default package:
+
+```nix
+programs.neovim.plugins = [
+  inputs.nvim_client.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
+Node is not something you have to arrange: the plugin declares `nodejs_22` as a runtime dependency,
+and a nixpkgs Neovim wrapper built with it — home-manager's `programs.neovim.plugins`, or
+`pkgs.neovim.override { configure.packages.selvage.start = [ … ]; }` — puts it on the wrapped
+Neovim's `PATH`. A Neovim that is not wrapped that way needs Node 22.18 or newer on `PATH`, as
+every other install route here does.
 
 There is no `setup()` call.
 
@@ -437,16 +479,19 @@ scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plu
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
 
-nix flake check             # the same three suites, in a sandbox
+nix flake check             # the same three suites, plus the built package, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
-`nix flake check` runs `typecheck`, the companion suite and the eight files under `test/lua/`,
-each in its own Neovim, with no network and no editor session. The two-instance proof is not one
-of them: it needs a `selvaged` from the sibling `reference_server` checkout, which a sandboxed
-build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof with the
-flake's Node and Neovim and whatever `SELVAGE_SELVAGED` names, from the checkout in the working
-directory:
+`nix flake check` runs `typecheck`, the companion suite and the thirteen files under `test/lua/`,
+each in its own Neovim, with no network and no editor session, and then the `plugin` check, which is
+the only one that starts Neovim against the built package rather than a checkout: the plugin that
+`packages.<system>.default` is, on the runtime path of the wrapped Neovim that
+`packages.<system>.neovim-selvage` is, with the real companion started from it. The two-instance
+proof is not one of them: it needs a `selvaged` from the sibling `reference_server` checkout, which
+a sandboxed build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof
+with the flake's Node and Neovim and whatever `SELVAGE_SELVAGED` names, from the checkout in the
+working directory:
 
 ```
 SELVAGE_SELVAGED=/path/to/reference_server/target/debug/selvaged nix run .#e2e
@@ -517,7 +562,8 @@ materialised since the join, leaves both.
 
 ## What is not here yet
 
-- Packaging and distribution beyond "clone it and `npm ci`".
+- Packaging and distribution beyond Nix and "clone it and `npm ci`": no nixpkgs entry, no release
+  bundle.
 - An edit that lands on the same characters a peer's edit is landing on is superseded by the
   room rather than merged with it. A keystroke elsewhere in the document is moved rather than
   lost ("The local IPC" above); when the two are about the same text there is no position to
