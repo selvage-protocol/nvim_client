@@ -403,8 +403,8 @@ local function cell_before(line, col)
 end
 
 --- The session row redraw lives with the indicators far below, and a presence report is the other
---- thing that changes what a row says — the peers in a buffer. Declared here so the draw can call
---- it; assigned where the row is drawn.
+--- draw that reaches every window — a row names no peer, and that is the frame it has to survive.
+--- Declared here so the draw can call it; assigned where the row is drawn.
 local refresh_indicators
 
 --- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
@@ -536,7 +536,8 @@ local function draw_presence(cursors)
     end
   end
   -- After the draw, because which peers stand in a buffer is only known once every cursor is
-  -- drawn: that set is what a session row says that a presence frame changes.
+  -- drawn: that set is what the seam below publishes. Every window's row is redrawn from it too,
+  -- and a row that names no peer is what that redraw has to leave.
   publish_file_peers()
   refresh_indicators()
 end
@@ -1728,14 +1729,31 @@ local SESSION_FRAME = '%#' .. SESSION_HIGHLIGHT .. '#'
 --- deadline is the server's (`host.detached`); nothing here can move it.
 local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and your local copy is kept.'
 
+--- How the session row is shown: `always` for `true`, `'always'` and the default — the row stands
+--- for as long as the session does, the way the VS Code client's status bar does, so whoever has
+--- just hosted reads that they have before anyone joins; `changes` for the quiet row, which
+--- appears only while there is something to act on; `never` for `false` and `'never'`.
+local function indicator_mode()
+  local setting = vim.g.selvage_indicator
+  if setting == false or setting == 'never' then
+    return 'never'
+  end
+  if setting == 'changes' then
+    return 'changes'
+  end
+  return 'always'
+end
+
 --- The session's own words: which side of the session the person is on, how many are in the
---- room, and whether the connection is being re-established. Nil when there is no session to
---- speak of, and nil while the row is turned off (`vim.g.selvage_indicator = false`).
+--- room, and whether the connection is being re-established — the words the VS Code client's own
+--- status bar carries, so a person reading either client reads the session the same way. Nil when
+--- there is no session to speak of, and nil while the row is turned off, which is also what
+--- silences a statusline built on the same words.
 ---
 --- These are the three facts a window otherwise says nothing about: hosting is one notice,
 --- and after it the session, its people and its liveness are only in `:messages`.
 local function session_words()
-  if vim.g.selvage_indicator == false then
+  if indicator_mode() == 'never' then
     return nil
   end
   if state.reconnecting then
@@ -1776,87 +1794,9 @@ local function unfetched_buffer(bufnr)
   return not mirror.written(path)
 end
 
---- The room path a buffer stands for: a guest's file in the mirror, a host's file under the
---- session's root, or a `selvage://` buffer for a document the listing does not name. Nil for
---- anything else, so a buffer that is not the room's gets no marks.
-local function buffer_room_path(bufnr)
-  local name = api.nvim_buf_get_name(bufnr)
-  if name == '' then
-    return nil
-  end
-  local mirrored = mirror.room_path(name)
-  if mirrored ~= nil then
-    return mirrored
-  end
-  local hosted = room_path(bufnr)
-  if hosted ~= nil then
-    return hosted
-  end
-  if name:sub(1, 10) == 'selvage://' then
-    return name:sub(11)
-  end
-  return nil
-end
-
---- The peers the last presence report drew in this buffer, with the name and the colour the
---- gutter draws them by — the same `label` and `highlight` `state.peers` carries, so the row and
---- the gutter cannot disagree about who is where. Ordered by peer id, so a report that reorders
---- them does not reorder the row.
-local function file_peer_marks(bufnr)
-  local path = buffer_room_path(bufnr)
-  if path == nil then
-    return {}
-  end
-  local marks = {}
-  for _, peer in ipairs(state.peers) do
-    if peer.path == path and peer.label ~= nil and peer.highlight ~= nil then
-      marks[#marks + 1] = {
-        label = peer.label,
-        highlight = peer.highlight,
-        peerId = peer.peerId,
-      }
-    end
-  end
-  table.sort(marks, function(left, right)
-    return tostring(left.peerId) < tostring(right.peerId)
-  end)
-  return marks
-end
-
---- The peers in `bufnr`, as the row names them: each name in the colour their caret and their
---- sign are drawn in, and the verb the VS Code client's own hover uses for the same fact —
---- `<name> is here`, `<a>, <b> are here`. A sign is two cells and cannot spell anyone, so the row
---- is the one place a person looking at `ma` in the gutter can read whose it is.
----
---- Nil when no peer's caret is in this buffer, which is the row having nothing to say about it.
-local function file_peer_words(bufnr)
-  local marks = file_peer_marks(bufnr)
-  if #marks == 0 then
-    return nil
-  end
-  local names = {}
-  for _, mark in ipairs(marks) do
-    names[#names + 1] = ('%%#%s#%s%%*'):format(mark.highlight, row_text(mark.label))
-  end
-  return ('%s %s'):format(table.concat(names, ', '), #marks == 1 and 'is here' or 'are here')
-end
-
---- How the session row is shown: `never` for `vim.g.selvage_indicator = false`, `always` for
---- `true` or `'always'`, and `changes` — the default — for the row that appears only when it has
---- something a person must react to rather than a standing line of role and headcount.
-local function indicator_mode()
-  local setting = vim.g.selvage_indicator
-  if setting == false then
-    return 'never'
-  end
-  if setting == true or setting == 'always' then
-    return 'always'
-  end
-  return 'changes'
-end
-
---- Whether this buffer's row is wanted: an actionable session state, a peer present in this file,
---- or content the room has not sent yet. Under `always` a live session's row is always wanted.
+--- Whether this buffer's row is wanted: under `always`, wherever a session stands; under
+--- `changes`, only while there is something to act on — a connection being made or retried, the
+--- host away, or content the room has not sent yet; never under `never`.
 local function row_wanted(bufnr)
   local mode = indicator_mode()
   if mode == 'never' then
@@ -1865,15 +1805,20 @@ local function row_wanted(bufnr)
   if state.reconnecting or state.status == 'connecting' or state.host_away ~= nil then
     return true
   end
-  if mode == 'always' then
-    return session_words() ~= nil
+  if unfetched_buffer(bufnr) then
+    return true
   end
-  return unfetched_buffer(bufnr) or #file_peer_marks(bufnr) > 0
+  return mode == 'always' and session_words() ~= nil
 end
 
---- The session's own row for a buffer: its words, the mark a file holding no fetched content
---- carries, and the peers whose caret is in it, named. Nil when the buffer has no row to wear —
+--- The session's own row for a buffer: the words the VS Code client's status bar carries, and the
+--- mark a file holding no fetched content wears. Nil when the buffer has no row to wear —
 --- `row_wanted` is that question.
+---
+--- The peers in the file are not named here, which is the one thing this row does not carry: a
+--- sign is two cells and cannot spell anyone, so whose caret that is reads from the gutter's own
+--- colour, from `vim.g.selvage_file_peers`, and from `:SelvagePeers`, which lists each of them
+--- with the document they are in.
 local function session_text(bufnr)
   if not row_wanted(bufnr) then
     return nil
@@ -1882,16 +1827,11 @@ local function session_text(bufnr)
     pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
     state.session_painted = true
   end
-  local row = ('%s%s%s'):format(
+  return ('%s%s%s%%*'):format(
     SESSION_FRAME,
     row_text(session_words()),
     unfetched_buffer(bufnr) and ' [not fetched]' or ''
   )
-  local here = file_peer_words(bufnr)
-  if here ~= nil then
-    row = row .. ' — ' .. here
-  end
-  return row .. '%*'
 end
 
 --- The row a window's buffer should wear: the follow's while one stands, the session's

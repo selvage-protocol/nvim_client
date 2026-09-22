@@ -216,12 +216,12 @@ where that peer sees their own cursor.
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. Two
 cells is all `sign_text` takes, so a peer called `thisismylongusername` is `th` there and the
-gutter cannot say who that is: the window's row names them (below). `:SelvagePeers` lists every
-peer the room names: the sign the gutter drew beside the whole display name and room path for the
-peers this client holds a document for, and the name and role alone for the ones it does not. It
-prints each sign in the very highlight that peer's caret and sign are drawn with. Nothing is put
-over the document when a peer moves. Every mark is cleared and recreated when presence changes, and
-every one goes when the session ends.
+gutter cannot say who that is: the name reads from `vim.g.selvage_file_peers` and from
+`:SelvagePeers` (below), which lists every peer the room names: the sign the gutter drew beside the
+whole display name and room path for the peers this client holds a document for, and the name and
+role alone for the ones it does not. It prints each sign in the very highlight that peer's caret
+and sign are drawn with. Nothing is put over the document when a peer moves. Every mark is cleared
+and recreated when presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
 entering a buffer), coalesced into one `selection` per 100 ms, and once more when the room's own
@@ -245,13 +245,15 @@ picker refuses its own rows where the row says they are in no document. A host o
 document only when it resolves to a readable file inside the shared folder, never creating it;
 anything else says `could not open <path> from the room: <reason>`.
 
-The session is on screen without any statusline configuration: the window's `winbar`, when it has
-something to say. A healthy session leaves the row empty, and the row appears only while it must: a
-connection being made (`Selvage: connecting…`), a dropped one being retried
-(`Selvage: reconnecting…`), the host away, a peer present in the file in front of the person, or a
-file whose content has not been fetched (`[not fetched]`). `vim.g.selvage_indicator = true` (or
-`'always'`) keeps the standing row of role and headcount; `vim.g.selvage_indicator = false` leaves
-the row off.
+The session is on screen without any statusline configuration: the window's `winbar`, standing for
+as long as a session does and saying what the VS Code client's status bar says. A host alone reads
+`Selvage: hosting — 1 person in the room` before anyone joins, a guest reads
+`Selvage: guest — 2 people in the room`, and the states that are not a healthy session say so on
+the same row: a connection being made (`Selvage: connecting…`), one being retried
+(`Selvage: reconnecting…`), the host away, and a file whose content has not been fetched
+(`[not fetched]`). `vim.g.selvage_indicator = 'changes'` keeps the row for those alone and never
+for the standing line; `vim.g.selvage_indicator = false` (or `'never'`) leaves the row off, and
+the statusline snippet with it.
 
 While the host is absent the row says who left and what is at stake, with the seconds the server
 has left counted down from its deadline: `Selvage: Host disconnected.
@@ -266,10 +268,10 @@ wins while one stands.
 somewhere else, and with the file itself in front of it: one holding no fetched content has the
 row say `[not fetched]`, so a search over the mirror reads as the partial thing it is.
 
-Which peers are in the file in front of the person is named in the row — `Ada Lovelace is here`,
-or `Ada Lovelace, Bob are here` — each name in the very colour that peer's caret and sign are drawn
-in, so a reader holding `Ad` in the gutter has the name it stands for one row above it. The same
-peers are published for everyone else as `vim.g.selvage_file_peers`, a map of room path to
+Whose caret is in the file in front of the person is the gutter's fact and not the row's: the
+caret wears a block in the peer's own colour, the sign column their initials, and `:SelvagePeers`
+names them in full with the document they are in. The same peers are published for everyone else as
+`vim.g.selvage_file_peers`, a map of room path to
 `{ initials, colour, label, peerId }`, with a `User SelvagePresence` autocmd fired whenever it
 changes. netrw, oil.nvim, nvim-tree, telescope, lualine and heirline each decorate from that one
 table, and this client depends on none of them.

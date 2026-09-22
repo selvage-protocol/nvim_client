@@ -31,17 +31,16 @@ harness.write_file(harness.invite_file, invite)
 -- the seed rather than as a live edit and prove nothing about the host -> guest direction.
 harness.wait_for_file('the guest to report it has joined', harness.deadline_ms, harness.joined_file)
 
--- The window says what the session is without any statusline configuration: which end this is,
--- how many people the room holds, and who is in the file in front of the person. The count is the
--- room's own membership report, so the guest that has just reported joining is the second person
--- in it — and this is a real companion against a real server, which is what makes the count a fact
--- about the room.
+-- The window says what the session is without any statusline configuration: which end this is and
+-- how many people the room holds, on one row, from the first moment of the session. The count is
+-- the room's own membership report, so the guest that has just reported joining is the second
+-- person in it — and this is a real companion against a real server, which is what makes the count
+-- a fact about the room.
 --
--- The row is drawn only when it has something to say, and a peer whose caret is in this file is
--- one of those things: the guest joined with this document in its window, so its caret is in it
--- and the row names it. The name is the whole point — the gutter has two cells for a peer and
--- this is where the person reading them finds out whose they are — and it arrived over the real
--- path: the room's presence frame, the bridge, the companion, the row.
+-- Who is in the file in front of the person is not on that row: the peer's caret in this file is
+-- the gutter's sign and colour, and the name is the roster's. Both are read here from the room's
+-- own frame — the bridge, the companion, the presence report — and not from a name written into a
+-- row.
 harness.wait('the window to name the session and count the room', harness.deadline_ms, function()
   return harness.row():find('Selvage: hosting — 2 people in the room', 1, true) ~= nil
 end, function()
@@ -51,8 +50,13 @@ end, function()
     .. ' statusline '
     .. vim.inspect(selvage.statusline())
 end)
-harness.wait('the row to name the guest whose caret is in this file', harness.deadline_ms, function()
-  return harness.row():find(harness.guest_display_name .. ' is here', 1, true) ~= nil
+harness.wait('the peers to place the guest in this file, named and signed', harness.deadline_ms, function()
+  for _, peer in ipairs(selvage.peers()) do
+    if peer.label == harness.guest_display_name and peer.sign ~= nil and peer.path ~= nil then
+      return true
+    end
+  end
+  return false
 end, function()
   return vim.inspect(harness.row()) .. ' peers ' .. vim.inspect(selvage.peers())
 end)
