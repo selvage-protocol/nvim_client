@@ -252,7 +252,8 @@ as long as a session does and saying what the VS Code client's status bar says. 
 the same row: a connection being made (`Selvage: connecting…`), one being retried
 (`Selvage: reconnecting…`), the host away, and a file whose content has not been fetched
 (`[not fetched]`). `vim.g.selvage_indicator = 'changes'` keeps the row for those alone and never
-for the standing line; `vim.g.selvage_indicator = false` leaves the row off.
+for the standing line; `vim.g.selvage_indicator = false` (or `'never'`) leaves the row off, and
+the statusline snippet with it.
 
 While the host is absent the row says who left and what is at stake, with the seconds the server
 has left counted down from its deadline: `Selvage: Host disconnected.

@@ -2044,6 +2044,14 @@ vim.g.selvage_indicator = nil
 vim.g.selvage_indicator = 'changes'
 handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
 check('a healthy session leaves the quiet row to the person', row(), own_winbar)
+
+-- `'never'` is the same request as `false`, and neither spelling may be the one that turns the
+-- row on: the mode names are the setting's own words.
+vim.g.selvage_indicator = 'never'
+handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+check("`'never'` leaves the row off, where `false` does", row(), own_winbar)
+check('  and the statusline with it', selvage.statusline(), '')
+vim.g.selvage_indicator = 'changes'
 handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
 check('a retried connection earns it', row(), '%#SelvageSession#Selvage: reconnecting…%*')
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { peers_path } } })

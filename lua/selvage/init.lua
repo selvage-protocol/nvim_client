@@ -1729,16 +1729,31 @@ local SESSION_FRAME = '%#' .. SESSION_HIGHLIGHT .. '#'
 --- deadline is the server's (`host.detached`); nothing here can move it.
 local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and your local copy is kept.'
 
+--- How the session row is shown: `always` for `true`, `'always'` and the default — the row stands
+--- for as long as the session does, the way the VS Code client's status bar does, so whoever has
+--- just hosted reads that they have before anyone joins; `changes` for the quiet row, which
+--- appears only while there is something to act on; `never` for `false` and `'never'`.
+local function indicator_mode()
+  local setting = vim.g.selvage_indicator
+  if setting == false or setting == 'never' then
+    return 'never'
+  end
+  if setting == 'changes' then
+    return 'changes'
+  end
+  return 'always'
+end
+
 --- The session's own words: which side of the session the person is on, how many are in the
 --- room, and whether the connection is being re-established — the words the VS Code client's own
 --- status bar carries, so a person reading either client reads the session the same way. Nil when
---- there is no session to speak of, and nil while the row is turned off
---- (`vim.g.selvage_indicator = false`).
+--- there is no session to speak of, and nil while the row is turned off, which is also what
+--- silences a statusline built on the same words.
 ---
 --- These are the three facts a window otherwise says nothing about: hosting is one notice,
 --- and after it the session, its people and its liveness are only in `:messages`.
 local function session_words()
-  if vim.g.selvage_indicator == false then
+  if indicator_mode() == 'never' then
     return nil
   end
   if state.reconnecting then
@@ -1777,22 +1792,6 @@ local function unfetched_buffer(bufnr)
     return false
   end
   return not mirror.written(path)
-end
-
---- How the session row is shown: `always` for `true`, `'always'` and the default — the row stands
---- for as long as the session does, the way the VS Code client's status bar does, so whoever has
---- just hosted reads that they have before anyone joins; `changes` for the quiet row, which
---- appears only while there is something to act on; `never` for
---- `vim.g.selvage_indicator = false`.
-local function indicator_mode()
-  local setting = vim.g.selvage_indicator
-  if setting == false then
-    return 'never'
-  end
-  if setting == 'changes' then
-    return 'changes'
-  end
-  return 'always'
 end
 
 --- Whether this buffer's row is wanted: under `always`, wherever a session stands; under
