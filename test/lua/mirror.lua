@@ -925,6 +925,18 @@ check(
   true
 )
 
+-- The quiet row, `vim.g.selvage_indicator = 'changes'`, keeps the row for what there is to act
+-- on: a file whose content has not arrived is one of those, and the mark is the only sign of a
+-- partial mirror while the file is in front of the person.
+vim.g.selvage_indicator = 'changes'
+vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/README.md'))
+check(
+  'the quiet row still marks a file nobody has fetched',
+  winbar():find(' [not fetched]', 1, true) ~= nil,
+  true
+)
+vim.g.selvage_indicator = nil
+
 -- Removing the path from the listing takes the mark with it: `unfetched_buffer` reads the
 -- grant, so a window already showing the buffer is redrawn when the listing changes rather
 -- than keeping a mark for a file the room no longer lists.

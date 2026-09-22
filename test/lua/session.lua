@@ -1777,11 +1777,16 @@ selvage.leave()
 -- -- the window says what the session is ------------------------------------------
 --
 -- A live session is otherwise invisible: hosting is one notice, and after it neither the side the
--- person is on, nor who else is here, nor whether the connection is still standing is anywhere on
--- screen. The window's own `winbar` row carries it, the row the follow's indicator already uses
--- (window-local, so never the statusline a statusline plugin owns), and every buffer's own row is
--- saved and put back the way the follow's is. What is pinned here is the words and the
--- save/restore; the precedence between the two indicators is `test/lua/follow.lua`'s.
+-- person is on, nor how many are in the room, nor whether the connection is still standing is
+-- anywhere on screen. The window's own `winbar` row carries it, the row the follow's indicator
+-- already uses (window-local, so never the statusline a statusline plugin owns), and every
+-- buffer's own row is saved and put back the way the follow's is. What is pinned here is the
+-- words, when the row stands, and the save/restore; the precedence between the two indicators is
+-- `test/lua/follow.lua`'s.
+--
+-- This section runs with `vim.g.selvage_indicator` unset: the row is on by default and reads the
+-- words the VS Code client's status bar reads, so whoever has just hosted sees that they have
+-- before anyone joins. The two other settings have sections of their own below.
 
 vim.cmd('edit! ' .. path)
 local own_winbar = 'my own row %f'
@@ -1798,7 +1803,7 @@ end
 --- an item takes the whole row down with it.
 local function screen_row(number)
   -- The row is evaluated as a statusline when the screen is drawn, and an item that does not
-  -- parse — a peer's name written into it without escaping — raises here instead of drawing.
+  -- parse — a name written into it without escaping — raises here instead of drawing.
   -- Reported as what the row did rather than as a traceback, so a broken row reads as the
   -- failure it is.
   local ok, err = pcall(vim.cmd, 'redraw')
@@ -1812,9 +1817,7 @@ local function screen_row(number)
   return (table.concat(cells):gsub('%s+$', ''))
 end
 
--- This section pins the always-on row; the conditional default is pinned in its own section below.
-vim.g.selvage_indicator = true
-
+-- The row is drawn by an event, so a session that has not spoken yet has not painted one.
 selvage.host('ws://127.0.0.1:1')
 check('a session with nothing on the row yet', row(), own_winbar)
 handlers().on_message({ type = 'status', state = 'connecting' })
@@ -1831,7 +1834,7 @@ check('  and a second one says nothing new', #notices, before_repeat)
 check('    with the row where it was', row(), '%#SelvageSession#Selvage: connecting…%*')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-row' })
 check(
-  'a host is named as the host, alone until the room says otherwise',
+  'a host alone reads that they are hosting, before anyone joins',
   row(),
   '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
 )
@@ -1904,27 +1907,29 @@ check(
 )
 selvage.leave()
 
--- -- the row only when it has something to say ----------------------------------------
+-- -- a peer in this file is the gutter's and the roster's, not the row's ------------------
 --
--- The default is not the standing role-and-headcount line: that costs a screen row per window
--- to repeat two things a person already knows. A row appears when it must — a connection being
--- made or retried, the host away, content not fetched, or a peer in this file — and goes again.
--- `vim.g.selvage_indicator = true` above is the old always-on row.
+-- What the row carries is the session's own: which side the person is on, how many are in the
+-- room, whether the connection is standing. Who is in *this* file is a different kind of fact, and
+-- the row was the wrong home for it — a standing line that grew a name every time a caret moved
+-- in or out of a file would churn, and the name is written where the caret is: the gutter signs it
+-- in the peer's own colour, `:SelvagePeers` names them with the document they are in, and
+-- `vim.g.selvage_file_peers` hands the same names to whatever decorates a file list. A presence
+-- frame redraws every window's row, so a row that still names nobody is a pin rather than a
+-- coincidence of nothing having repainted.
 
 vim.g.selvage_indicator = nil
 vim.cmd('edit! ' .. path)
 selvage.host('ws://127.0.0.1:1')
-handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-changes' })
-local changes_path = last_of('open') and last_of('open').path
-check('a healthy session leaves the row to the person', row(), own_winbar)
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers' })
+local peers_path = last_of('open') and last_of('open').path
 check(
-  '  while the statusline still reports the session',
-  selvage.statusline(),
-  'Selvage: hosting — 1 person in the room'
+  'a healthy session stands on the row, alone in the room',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
 )
 
--- A peer in this file earns the row: the cells and the colour are the gutter's own, so the two
--- cannot disagree about who is here.
+-- The frame that puts a peer's caret in this file: the one moment the row could have grown a tail.
 local presence_events = 0
 local seam_autocmd = vim.api.nvim_create_autocmd('User', {
   pattern = 'SelvagePresence',
@@ -1943,7 +1948,7 @@ handlers().on_message({
       peerId = 'p-ada',
       label = 'Ada Lovelace',
       role = 'guest',
-      path = changes_path,
+      path = peers_path,
       anchor = 0,
       head = 0,
       colour = '#61afef',
@@ -1952,19 +1957,19 @@ handlers().on_message({
   },
 })
 check(
-  'a peer in this file is named on the row, not drawn as the gutter\'s two cells',
+  'a peer whose caret is in this file is not named on the row',
   row(),
-  '%#SelvageSession#Selvage: hosting — 2 people in the room — %#SelvagePeer1#Ada Lovelace%* is here%*'
+  '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
 )
--- And named where a person reads it: the row is a statusline string, so what it says is what the
--- screen draws once the items are resolved.
+-- The row is a statusline string, so what it says is what the screen draws once the items are
+-- resolved: the name is nowhere in it.
 check(
-  '  which the screen draws as the name',
+  '  which the screen draws as the standing words alone',
   screen_row(1),
-  'Selvage: hosting — 2 people in the room — Ada Lovelace is here'
+  'Selvage: hosting — 2 people in the room'
 )
--- The gutter keeps the two cells and the colour: a window column shows a name and the other
--- still signs the caret, and the row is what says whose it is.
+-- The gutter keeps the two cells and the colour: a window column shows the peer's initials and the
+-- caret wears their colour, and that is what ties the two cells to a caret on screen.
 local presence = vim.api.nvim_buf_get_extmarks(0, -1, 0, -1, { details = true })
 local signed = 0
 for _, mark in ipairs(presence) do
@@ -1974,138 +1979,49 @@ for _, mark in ipairs(presence) do
 end
 check('the gutter still signs the caret with the two cells', signed, 1)
 local file_peers = vim.g.selvage_file_peers
-local here = type(file_peers) == 'table' and file_peers[changes_path] or nil
+local here = type(file_peers) == 'table' and file_peers[peers_path] or nil
 check('the file-peers seam names them too', here ~= nil and #here, 1)
 check('  with the gutter cells', here ~= nil and here[1].initials, 'Ad')
 check('  and a User event fires with it', presence_events > 0, true)
 vim.api.nvim_del_autocmd(seam_autocmd)
 
--- Two peers in the file are two names, in one sentence, each in the colour their caret is.
-handlers().on_message({
-  type = 'report',
-  report = {
-    kind = 'peers',
-    peers = {
-      { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' },
-      { peer_id = 'p-bob', display_name = 'Bob', role = 'guest' },
-    },
-  },
-})
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-bob',
-      label = 'Bob',
-      role = 'guest',
-      path = changes_path,
-      anchor = 0,
-      head = 0,
-      colour = '#c678dd',
-    },
-    {
-      peerId = 'p-ada',
-      label = 'Ada Lovelace',
-      role = 'guest',
-      path = changes_path,
-      anchor = 0,
-      head = 0,
-      colour = '#61afef',
-    },
-  },
-})
-local groups = {}
-for _, peer in ipairs(selvage.peers()) do
-  groups[peer.peerId] = peer.highlight
+-- The name in full is one command away: `:SelvagePeers` lists the sign the gutter drew beside the
+-- whole display name and the document that peer is in.
+local echoed = nil
+local echo = vim.api.nvim_echo
+vim.api.nvim_echo = function(chunks)
+  echoed = chunks
 end
+vim.cmd('SelvagePeers')
+vim.api.nvim_echo = echo
 check(
-  'two peers in this file are both named, in peer-id order, each in their own colour',
-  row(),
-  (
-    '%%#SelvageSession#Selvage: hosting — 3 people in the room — %%#%s#Ada Lovelace%%*, %%#%s#Bob%%* are here%%*'
-  ):format(groups['p-ada'], groups['p-bob'])
-)
-check(
-  '  which the screen draws as the two names',
-  screen_row(1),
-  'Selvage: hosting — 3 people in the room — Ada Lovelace, Bob are here'
+  'and the roster names them with the document they are in',
+  echoed ~= nil
+    and echoed[2] ~= nil
+    and echoed[2][1] ~= nil
+    and echoed[2][1]:find(peers_path, 1, true) ~= nil,
+  true
 )
 
--- A name is the peer's own text and a row is read like a statusline, where `%` starts an item:
--- `%f` is the file's name and `%{…%}` is a Vimscript expression the reader's editor evaluates.
--- What a person reads is the name they were given, and nothing else.
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'peers', peers = { { peer_id = 'p-eve', display_name = '%f', role = 'guest' } } },
-})
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-eve',
-      label = '%f',
-      role = 'guest',
-      path = changes_path,
-      anchor = 0,
-      head = 0,
-      colour = '#e06c75',
-    },
-  },
-})
-check(
-  'a name that spells a statusline item is drawn as itself',
-  screen_row(1),
-  'Selvage: hosting — 2 people in the room — %f is here'
-)
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-eve',
-      label = '%{1+1%}',
-      role = 'guest',
-      path = changes_path,
-      anchor = 0,
-      head = 0,
-      colour = '#e06c75',
-    },
-  },
-})
-check(
-  '  and a name that spells an expression is drawn as itself, never evaluated',
-  screen_row(1),
-  'Selvage: hosting — 2 people in the room — %{1+1%} is here'
-)
-handlers().on_message({
-  type = 'presence',
-  cursors = {
-    {
-      peerId = 'p-eve',
-      label = '50%',
-      role = 'guest',
-      path = changes_path,
-      anchor = 0,
-      head = 0,
-      colour = '#e06c75',
-    },
-  },
-})
-check(
-  '  and a name ending in a lone `%` is drawn, rather than taking the row down with it',
-  screen_row(1),
-  'Selvage: hosting — 2 people in the room — 50% is here'
-)
-
--- The row goes again when the peer does: nothing about this file is left standing.
+-- The peer leaving moves the count and not the shape: the row is the same line of standing words,
+-- drawn again by the frame that took them out of the file.
 handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
 handlers().on_message({ type = 'presence', cursors = {} })
-check('the row goes when the peer does', row(), own_winbar)
+check(
+  'the row is the standing words with the peer gone, and nothing else',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+)
 
 -- The connection states still earn it.
 handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
 check('a retried connection shows on the row', row(), '%#SelvageSession#Selvage: reconnecting…%*')
-handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { changes_path } } })
-check('  and goes again when it speaks', row(), own_winbar)
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { peers_path } } })
+check(
+  '  and the words come back when the room speaks',
+  row(),
+  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+)
 
 -- The string spelling is the same request as `true`.
 vim.g.selvage_indicator = 'always'
@@ -2114,6 +2030,28 @@ check(
   "`'always'` is the always-on row too",
   row(),
   '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+)
+vim.g.selvage_indicator = nil
+
+-- -- the quiet row ------------------------------------------------------------------------
+--
+-- `vim.g.selvage_indicator = 'changes'` asks for the row only while there is something to act
+-- on, never for the standing line: a window row costs a screen row in every window, and this is
+-- the setting for a person who wants the session on screen only when it needs them. A file nobody
+-- has fetched is the other thing the quiet row carries, and that half is pinned where a mirror
+-- stands (`test/lua/mirror.lua`).
+
+vim.g.selvage_indicator = 'changes'
+handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+check('a healthy session leaves the quiet row to the person', row(), own_winbar)
+handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
+check('a retried connection earns it', row(), '%#SelvageSession#Selvage: reconnecting…%*')
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { peers_path } } })
+check('  and gives it back when the room speaks', row(), own_winbar)
+check(
+  '    while the statusline still reports the session',
+  selvage.statusline(),
+  'Selvage: hosting — 1 person in the room'
 )
 vim.g.selvage_indicator = nil
 

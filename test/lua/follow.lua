@@ -138,52 +138,26 @@ check('  and the second file with it', path1 ~= path2, true)
 --- room lists, plus this client.
 local named_peers = {}
 
---- The room path the current buffer stands for: a guest's file in the mirror, or a `selvage://`
---- buffer for a document the listing does not name.
-local function open_room_path()
-  local name = vim.fn.bufname('%')
-  if name:sub(1, 10) == 'selvage://' then
-    return name:sub(11)
-  end
-  local root = selvage.session().mirror
-  if root ~= nil and name:sub(1, #root + 1) == root .. '/' then
-    return name:sub(#root + 2)
-  end
-  return nil
-end
-
 --- The row the session itself wears in a window with no follow standing, as the indicator
---- writes it. This file runs a live session, so a row that is not the follow's is the
---- session's — the words themselves are pinned in `test/lua/session.lua`, and what is pinned
---- here is that the follow's row came down and the session's took its place. The peers in the
---- file are named, in the order the row writes them and in the colour the gutter draws them.
+--- writes it. This file runs a live session, so a row that is not the follow's is the session's —
+--- the words themselves are pinned in `test/lua/session.lua`, and what is pinned here is that the
+--- follow's row came down and the session's took its place. The peers in the file are not named on
+--- it: that is the gutter's, the roster's and the seam's, which `test/lua/session.lua` pins.
 local function session_row()
   local who = selvage.session().status == 'hosting' and 'hosting' or 'guest'
   local here = #named_peers + 1
   local count = here == 1 and '1 person in the room' or ('%d people in the room'):format(here)
-  local row = ('%%#SelvageSession#Selvage: %s — %s'):format(who, count)
-  local path = open_room_path()
-  local in_file = {}
-  for _, peer in ipairs(selvage.peers()) do
-    if peer.path == path and peer.label ~= nil and peer.highlight ~= nil then
-      in_file[#in_file + 1] = peer
-    end
-  end
-  table.sort(in_file, function(left, right)
-    return tostring(left.peerId) < tostring(right.peerId)
-  end)
-  if #in_file == 0 then
-    return row .. '%*'
-  end
-  local names = {}
-  for _, peer in ipairs(in_file) do
-    names[#names + 1] = ('%%#%s#%s%%*'):format(peer.highlight, peer.label)
-  end
-  return ('%s — %s %s%%*'):format(
-    row,
-    table.concat(names, ', '),
-    #in_file == 1 and 'is here' or 'are here'
-  )
+  return ('%%#SelvageSession#Selvage: %s — %s%%*'):format(who, count)
+end
+
+--- The follow's row as a person reads it: the row is a statusline string, so its items —
+--- highlights, the `%0@…@` click label and `%X` — are resolved here and nowhere else. A name
+--- written into it unescaped is an item that either draws something else or raises where the row
+--- is drawn, which is why a failure here reads as what the row did rather than as a traceback.
+local function drawn_follow_row()
+  local raw = vim.api.nvim_get_option_value('winbar', { win = 0 })
+  local ok, drawn = pcall(vim.api.nvim_eval_statusline, raw, { winid = 0 })
+  return ok and drawn.str or ('<the editor refused to draw the row: %s>'):format(tostring(drawn))
 end
 
 local function peers_report(peers)
@@ -1013,6 +987,50 @@ check(
 )
 peers_report({ { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } })
 check('  and back again while the peer stays silent', selvage.following(), 'Ada Lovelace')
+
+-- A peer's name is their own text and a row is read like a statusline, where `%` opens an item:
+-- `%f` is the file's name, `%{…}` is an expression this editor would evaluate, and an item that
+-- does not parse raises where the row is drawn. What a person reads is the name they were given,
+-- and nothing else. The follow's row is where a peer's own name reaches a row, so this is where
+-- that is pinned.
+peers_report({ { peer_id = 'p-ada', display_name = '50% of the work', role = 'guest' } })
+presence({
+  {
+    peerId = 'p-ada',
+    label = '50% of the work',
+    role = 'guest',
+    path = 'g/one.txt',
+    anchor = 13,
+    head = 13,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check(
+  'a name that spells a statusline item is drawn as itself',
+  drawn_follow_row(),
+  ' Following 50% of the work — click or :SelvageStopFollowing to stop '
+)
+peers_report({ { peer_id = 'p-ada', display_name = '%f', role = 'guest' } })
+presence({
+  {
+    peerId = 'p-ada',
+    label = '%f',
+    role = 'guest',
+    path = 'g/one.txt',
+    anchor = 13,
+    head = 13,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check(
+  '  and a name that is nothing but an item is drawn as itself too',
+  drawn_follow_row(),
+  ' Following %f — click or :SelvageStopFollowing to stop '
+)
+peers_report({ { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } })
+check('  and the name they were given is back with the report', selvage.following(), 'Ada Lovelace')
 
 -- A deliberate navigation ends a follow: going somewhere stops following first.
 peers_report({
