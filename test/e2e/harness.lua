@@ -47,8 +47,9 @@ function M.setup(role)
   }
   M.joined_file = required('SELVAGE_E2E_JOINED_FILE')
   M.ack_file = required('SELVAGE_E2E_ACK_FILE')
-  -- The two names the instances are in the room under, so a driver can wait for the other's name
-  -- in its own row: the row names the peers whose caret is in the file in front of the person.
+  -- The two names the instances are in the room under, so a driver can find the other one in its
+  -- own peer list: `selvage.peers()` is the room's membership, and `:SelvagePeers` and the gutter
+  -- are what name and sign a peer in the file in front of the person.
   M.host_display_name = required('SELVAGE_E2E_HOST_DISPLAY_NAME')
   M.guest_display_name = required('SELVAGE_E2E_GUEST_DISPLAY_NAME')
   -- The guest writes this once the mirror's own phases are done, and the host waits for it before

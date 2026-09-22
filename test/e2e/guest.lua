@@ -80,10 +80,16 @@ harness.wait('the window to name the session and count the room', harness.deadli
 end, function()
   return vim.inspect(harness.row()) .. ' peers ' .. vim.inspect(selvage.peers())
 end)
--- And who is in the file in front of the person: the host is in this document, so the row names
--- it, beside the gutter sign the host's own caret carries.
-harness.wait('the row to name the host whose caret is in this file', harness.deadline_ms, function()
-  return harness.row():find(harness.host_display_name .. ' is here', 1, true) ~= nil
+-- And who is in the file in front of the person: the host is in this document, so the gutter
+-- signs its caret and the roster names it. The row says nothing about a peer, which is the other
+-- half of this wait: it carries the session's own words and no tail.
+harness.wait('the peers to place the host in this file, named and signed', harness.deadline_ms, function()
+  for _, peer in ipairs(selvage.peers()) do
+    if peer.label == harness.host_display_name and peer.sign ~= nil and peer.path ~= nil then
+      return true
+    end
+  end
+  return false
 end, function()
   return vim.inspect(harness.row()) .. ' peers ' .. vim.inspect(selvage.peers())
 end)
