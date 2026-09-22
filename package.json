@@ -1,6 +1,6 @@
 {
   "name": "selvage-nvim-companion",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "The Neovim client's companion process for the Selvage session protocol",
   "license": "MIT OR Apache-2.0",
