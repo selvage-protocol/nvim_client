@@ -676,6 +676,10 @@ vim.g.selvage_wire_version = 1
 vim.cmd('SelvageHost ws://127.0.0.1:1')
 check('the number one pins the readable wire', last_of('host') and last_of('host').wire, 'selvage/1')
 
+vim.g.selvage_wire_version = '1'
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  and so does its string form', last_of('host') and last_of('host').wire, 'selvage/1')
+
 vim.g.selvage_wire_version = 'selvage/1'
 vim.cmd('SelvageHost ws://127.0.0.1:1')
 check('  and its spelled form too', last_of('host') and last_of('host').wire, 'selvage/1')

@@ -6,8 +6,8 @@
  * where it is written, with the text that was refused.
  */
 
-import { sessionBase } from '../../vendor/engine/urls.ts';
-import type { SessionBase } from '../../vendor/engine/urls.ts';
+import { sessionBase } from '../../vendor/engine/index.ts';
+import type { SessionBase } from '../../vendor/engine/index.ts';
 
 export function baseOf(text: string): SessionBase {
   const base = sessionBase(text);
