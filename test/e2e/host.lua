@@ -11,6 +11,13 @@ harness.setup('host')
 
 local selvage = harness.load_plugin()
 
+-- This window is the version-1 half of the proof and stays what it was written as. A hosting
+-- client takes its version from what the server's `/meta` says it seats unless
+-- `vim.g.selvage_wire_version` pins it, and a current `selvaged` seats both — so an unpinned host
+-- here would mint the encrypted room and quietly prove the other version instead. Nothing but a
+-- host is affected: the guest speaks the version the invite names.
+vim.g.selvage_wire_version = 'selvage/1'
+
 vim.cmd('edit ' .. vim.fn.fnameescape(harness.seed_path))
 local bufnr = vim.api.nvim_get_current_buf()
 harness.log('opened', harness.seed_path, 'as buffer', bufnr)

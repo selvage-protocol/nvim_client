@@ -1,8 +1,11 @@
 /**
  * The two-real-instance `selvage/2` proof: a host Neovim and a guest Neovim, each loading the real
- * plugin and starting its own real companion, one minting a version-2 room on a real `selvaged
- * --serve-version-2` and the other joining it by the link the host handed on, editing the same
- * document in both directions.
+ * plugin and starting its own real companion, one minting a version-2 room on a real `selvaged` and
+ * the other joining it by the link the host handed on, editing the same document in both
+ * directions.
+ *
+ * The server is on its defaults, which seat both versions — the host's pin to `selvage/2` is what
+ * makes this room the encrypted one, and the flag that used to do it is gone.
  *
  * It sits beside `test/e2e/run.ts`, which is the version-1 proof and stays what it was: the
  * version this client's published users speak is not the version this file is about, and a proof
@@ -112,8 +115,8 @@ async function main(): Promise<void> {
   rmSync(RUN_DIR, { recursive: true, force: true });
   mkdirSync(RUN_DIR, { recursive: true });
 
-  log('starting the real selvaged with --serve-version-2');
-  server = await RealServer.start({ serveVersion2: true });
+  log('starting the real selvaged, which seats both versions');
+  server = await RealServer.start();
   log('selvaged listening at', server.wsBase);
 
   const hostWorkspace = mkdtempSync(join(RUN_DIR, 'host-'));

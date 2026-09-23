@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # Runs `test/e2e/run-version-2.ts`: the `selvage/2` proof, two real headless Neovims against one
-# real `selvaged --serve-version-2`, each with its own real companion. The host mints a version-2
-# room (`vim.g.selvage_wire_version = '2'`), hands the guest its page link with `§5.1`'s fragment
-# on it, and the two exchange an edit in both directions — which is the whole of what a version-2
-# session is: the room's state is the host's, the content is sealed, and the server relays bytes.
+# real `selvaged` on its defaults, which seat both versions, each with its own real companion. The
+# host pins `vim.g.selvage_wire_version = '2'` and mints a version-2 room, hands the guest its page
+# link with `§5.1`'s fragment on it, and the two exchange an edit in both directions — which is the
+# whole of what a version-2 session is: the room's state is the host's, the content is sealed, and
+# the server relays bytes.
 #
 # This is not part of `npm test` or CI: it needs a `nvim` on PATH and a real `selvaged`, which it
 # builds from the sibling `reference_server` checkout if there is not one already.

@@ -2,9 +2,10 @@
 --
 --   nvim --headless -l test/e2e/guest2.lua
 --
--- A real Neovim, the real plugin, a real companion process and a real `selvaged
--- --serve-version-2`. It joins the link the host wrote — the page link with `§5.1`'s fragment on
--- it — waits for the room's text, edits, and waits for the host's own edit in return.
+-- A real Neovim, the real plugin, a real companion process and a real `selvaged` on its
+-- defaults, which seat both versions. It joins the link the host wrote — the page link with
+-- `§5.1`'s fragment on it — waits for the room's text, edits, and waits for the host's own edit in
+-- return.
 
 local harness = dofile(vim.env.SELVAGE_E2E_PLUGIN_ROOT .. '/test/e2e/harness.lua')
 harness.role = 'guest'
