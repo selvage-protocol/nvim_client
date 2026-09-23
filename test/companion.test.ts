@@ -65,6 +65,10 @@ interface Harness {
   hosts2: string[];
   /** Every invite a `join` was asked for, in the same order. */
   joins: string[];
+  /** The same, on the encrypted wire. A join's version is the link's to say, so which factory
+   * an invite reached is the routing decision itself, and one shared array could not tell them
+   * apart. */
+  joins2: string[];
   /** The `applyEdit`s asked for so far. */
   applies: Array<Extract<Notification, { type: 'applyEdit' }>>;
 }
@@ -93,6 +97,7 @@ function harness(
   const hosts: string[] = [];
   const hosts2: string[] = [];
   const joins: string[] = [];
+  const joins2: string[] = [];
   const engines: FakeEngine[] = [];
   const open = (): FakeEngine => {
     const engine = new FakeEngine(role, documents, peers);
@@ -126,7 +131,7 @@ function harness(
         return Promise.resolve(open());
       },
       join: (invite) => {
-        joins.push(invite);
+        joins2.push(invite);
         return Promise.resolve(open());
       },
     },
@@ -138,6 +143,7 @@ function harness(
     hosts,
     hosts2,
     joins,
+    joins2,
     get engine(): FakeEngine {
       const engine = engines.at(-1);
       assert.ok(engine !== undefined, 'no session was opened');
@@ -396,12 +402,14 @@ test('a join consults neither the setting nor the server: the link is the versio
 
   const bySealedLink = harness('guest', [], [], { meta: unread });
   await bySealedLink.companion.handle({ type: 'join', invite: sealed });
-  assert.deepEqual(bySealedLink.joins, [sealed], 'a sealed link joins on the encrypted wire');
+  assert.deepEqual(bySealedLink.joins, [], 'a sealed link never reaches the readable factory');
+  assert.deepEqual(bySealedLink.joins2, [sealed], 'it joins on the encrypted wire');
 
   const plain = 'ws://127.0.0.1:0/session?room=r&token=t';
   const byPlainLink = harness('guest', [], [], { meta: unread });
   await byPlainLink.companion.handle({ type: 'join', invite: plain });
   assert.deepEqual(byPlainLink.joins, [plain], 'and a link with no fragment on the readable one');
+  assert.deepEqual(byPlainLink.joins2, [], 'never on the encrypted one');
 });
 
 test('a second host is refused rather than minting a second room', async () => {
@@ -430,6 +438,7 @@ test('a join while a session is live is refused the same way', async () => {
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
 
   assert.deepEqual(it.joins, []);
+  assert.deepEqual(it.joins2, []);
   assert.equal(it.engine.disconnected, false);
   assert.deepEqual(it.sent.slice(before), [
     { type: 'refused', what: 'join', roomId: 'r-test' },
