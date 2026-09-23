@@ -69,6 +69,15 @@ if root == nil then
   os.exit(1)
 end
 check('the plugin loaded from the directory the caller names', root, expected)
+if root ~= expected then
+  -- Everything below is asserted about the plugin Neovim loaded, and the check above is the one
+  -- line that says which plugin that is. A host with another installation on its runtime path — a
+  -- pack, a plugin manager's root — would otherwise have the rest of this file report the other
+  -- installation's files as this checkout's, which is evidence about neither of them.
+  print('FAIL stopping here: the rest of this file would be about ' .. tostring(root))
+  print('FAILED')
+  os.exit(1)
+end
 
 -- The rest of the package, from the same place: one that ships `lua/` and forgets `plugin/`
 -- installs cleanly and does nothing.

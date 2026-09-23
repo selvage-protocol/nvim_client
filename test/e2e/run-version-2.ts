@@ -128,6 +128,9 @@ async function main(): Promise<void> {
   const guestAckFile = resolve(RUN_DIR, 'guest-edit-seen.txt');
   const hostResultFile = resolve(RUN_DIR, 'host-result.json');
   const guestResultFile = resolve(RUN_DIR, 'guest-result.json');
+  // The host's companion writes its IPC trace here. `§5.1`'s fragment is the room's own key, and
+  // a trace outlives the room, so this file is read below as well as written.
+  const hostTraceFile = resolve(RUN_DIR, 'host-companion.log');
 
   const sharedEnv: Record<string, string> = {
     SELVAGE_E2E_PLUGIN_ROOT: ROOT,
@@ -147,6 +150,7 @@ async function main(): Promise<void> {
       ...sharedEnv,
       SELVAGE_E2E_RESULT_FILE: hostResultFile,
       SELVAGE_E2E_SERVER_URL: server.wsBase,
+      SELVAGE_COMPANION_LOG: hostTraceFile,
     },
     resolve(RUN_DIR, 'host.log'),
   );
@@ -172,6 +176,8 @@ async function main(): Promise<void> {
     throw new Error(`the invite is not a page link with §5.1's fragment: ${invite}`);
   }
   log('the host is inviting with a page link whose fragment carries both keys');
+  const fragment = invite.slice(invite.indexOf('#') + 1);
+  const roomKey = /(?:^|&)k=([^&]+)/.exec(fragment)?.[1] ?? '';
 
   const guestRun = runInstance(
     'guest',
@@ -241,7 +247,137 @@ async function main(): Promise<void> {
     throw new Error(`the host's file does not hold the guest's edit: ${JSON.stringify(onDisk)}`);
   }
 
+  // `§5.1`: the fragment is the room key every frame is sealed under and the host's public key, and
+  // a client **MUST NOT** log it. The host's companion ran with `SELVAGE_COMPANION_LOG` set to a
+  // file in this run, so what is read here is the file a trace really is rather than one a test
+  // built: the invite line has to be in it, and the keys have to be nowhere in it.
+  const trace = readFileSync(hostTraceFile, 'utf8');
+  const excerpt = trace.length > 600 ? `${trace.slice(0, 600)}…` : trace;
+  if (!trace.includes('"state":"hosting"')) {
+    throw new Error(`the trace does not hold the hosting status the invite travels in: ${excerpt}`);
+  }
+  for (const [what, secret] of [
+    ["the invite's fragment", fragment],
+    ['the room key', roomKey],
+  ] as const) {
+    if (secret !== '' && trace.includes(secret)) {
+      throw new Error(`${what} is in the trace the host's companion wrote: ${excerpt}`);
+    }
+  }
+  if (!trace.includes('#redacted')) {
+    throw new Error(`the trace holds no redacted invite: ${excerpt}`);
+  }
+  log("the host's own companion traced the invite with its fragment redacted out");
+
+  await proveTheAntiDowngradeRefusal(hostWorkspace);
+
   log('a version-2 host and guest exchanged an edit through a real server, both directions');
+}
+
+/** One status the companion sent: `companion/ipc.ts`'s notification, as far as this file reads it. */
+interface CompanionStatus {
+  state: string;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * The real companion, unpinned or pinned, given one `host` request: the statuses it sent, in order,
+ * up to the first that settles the session. Bounded, and killed on the way out.
+ */
+async function companionHosts(
+  serverUrl: string,
+  root: string,
+  wire?: 'selvage/1' | 'selvage/2',
+): Promise<CompanionStatus[]> {
+  const child = spawn(
+    process.execPath,
+    ['--no-warnings', resolve(ROOT, 'companion', 'main.ts')],
+    { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+  let buffer = '';
+  const statuses: CompanionStatus[] = [];
+  try {
+    return await new Promise<CompanionStatus[]>((resolvePromise, reject) => {
+      const expired = setTimeout(() => {
+        reject(
+          new Error(
+            `the companion settled nothing in ${DEADLINE_MS}ms: ${JSON.stringify(statuses)}`,
+          ),
+        );
+      }, DEADLINE_MS);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        buffer += chunk;
+        for (;;) {
+          const newline = buffer.indexOf('\n');
+          if (newline === -1) {
+            break;
+          }
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          let message: { type?: string } & CompanionStatus;
+          try {
+            message = JSON.parse(line) as { type?: string } & CompanionStatus;
+          } catch {
+            continue;
+          }
+          if (message.type !== 'status') {
+            continue;
+          }
+          statuses.push(message);
+          if (message.state === 'hosting' || message.state === 'error') {
+            clearTimeout(expired);
+            resolvePromise(statuses);
+            return;
+          }
+        }
+      });
+      child.on('error', reject);
+      child.stdin.write(
+        `${JSON.stringify({ type: 'host', serverUrl, root, ...(wire === undefined ? {} : { wire }) })}\n`,
+      );
+    });
+  } finally {
+    child.stdin.end();
+    child.kill('SIGKILL');
+  }
+}
+
+/**
+ * What a server that seats `selvage/1` alone does to an unpinned host: `/meta` answers, and the
+ * room it would mint is one the server can read, so the connection refuses rather than take it —
+ * locally, before it dials anything. The pin below mints on the same server, which is what tells a
+ * refusal from a server that was simply not there.
+ */
+async function proveTheAntiDowngradeRefusal(workspace: string): Promise<void> {
+  log('starting a selvage/1-only selvaged: a /meta that does not seat the encrypted wire');
+  const only1 = await RealServer.start({ serveVersion1Only: true });
+  try {
+    const refused = await companionHosts(only1.wsBase, workspace);
+    log('the unpinned host was answered', JSON.stringify(refused));
+    // One status and no `connecting`: the refusal is decided from `/meta` and sent where the
+    // attempt was made, so nothing was ever dialled — which is what makes it a refusal rather
+    // than a connection that failed.
+    const last = refused.at(-1);
+    if (refused.length !== 1 || last?.state !== 'error' || last.code !== 'wire_version_refused') {
+      throw new Error(`an unpinned host was not refused by /meta: ${JSON.stringify(refused)}`);
+    }
+    if (refused.some((status) => status.state === 'hosting')) {
+      throw new Error('an unpinned host minted a room the server can read');
+    }
+    if (!(last.message ?? '').includes('selvage/1')) {
+      throw new Error(`the refusal does not say what the server offers: ${last.message ?? ''}`);
+    }
+
+    const pinned = await companionHosts(only1.wsBase, workspace, 'selvage/1');
+    if (pinned.at(-1)?.state !== 'hosting') {
+      throw new Error(`the pinned host minted nothing on the same server: ${JSON.stringify(pinned)}`);
+    }
+    log('the pinned version-1 host minted on the same server, and the unpinned one refused');
+  } finally {
+    await only1.stop();
+  }
 }
 
 function existsInvite(path: string): boolean {

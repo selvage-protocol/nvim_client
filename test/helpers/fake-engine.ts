@@ -3,15 +3,17 @@
  * a way for a test to move the replica the way a peer would.
  */
 
-import type { PeerInfo, Role } from '../../vendor/engine/envelope.ts';
-import type { EngineEvent, EngineEventListener } from '../../vendor/engine/events.ts';
-import type { SessionInfo } from '../../vendor/engine/engine.ts';
 import type {
   AwarenessState,
+  EngineEvent,
+  EngineEventListener,
   OffsetSelection,
+  PeerInfo,
   Presence,
+  Role,
   Selection,
-} from '../../vendor/engine/presence.ts';
+  SessionInfo,
+} from '../../vendor/engine/index.ts';
 import type { CompanionEngine } from '../../companion/session.ts';
 import { baseOf } from './base.ts';
 
@@ -24,6 +26,13 @@ export class FakeEngine implements CompanionEngine {
   readonly grants: string[][] = [];
   /** What this replica holds of the room's grant, as a `doc.granted` would have left it. */
   granted: string[] = [];
+  /**
+   * When set, a published listing is echoed back the way a real server's `doc.granted` is: the
+   * replica holds it and the bridge reports the change to the front-end. A room whose listing was
+   * never published has nothing to echo, so a host that sent no `doc.grant` is visible from the
+   * guest's side as well as from `grants`.
+   */
+  echoGrants = false;
   /** When set, the next `grant` rejects with it — the way a refused listing reaches a caller. */
   grantError: Error | undefined;
   /** When set, the next `rename` rejects with it — the way a refused name reaches a caller. */
@@ -92,6 +101,16 @@ export class FakeEngine implements CompanionEngine {
     this.info.peer = { ...this.info.peer, peer_id: peerId };
   }
 
+  /**
+   * Gives this connection another role, the way the applied state that commits its key does
+   * (`§13.4`): the role is the state's, and a state that relabels this connection raises the
+   * event a test emits beside this call.
+   */
+  setRole(role: Role): void {
+    this.info.role = role;
+    this.info.peer = { ...this.info.peer, role };
+  }
+
   session(): SessionInfo {
     return this.info;
   }
@@ -136,6 +155,10 @@ export class FakeEngine implements CompanionEngine {
     this.grants.push([...paths]);
     const error = this.grantError;
     this.grantError = undefined;
+    if (error === undefined && this.echoGrants) {
+      this.granted = [...paths];
+      this.emit({ type: 'grantChanged', paths: [...paths] });
+    }
     return error === undefined ? Promise.resolve() : Promise.reject(error);
   }
 

@@ -23,6 +23,13 @@ local state = {
   --- replica nobody hears.
   reconnecting = false,
   role = nil,
+  --- Which wire version the session speaks, as the companion's seat said. The two versions end a
+  --- dropped connection differently (§9.1): a `selvage/1` host reclaims its room and a
+  --- `selvage/2` host cannot, so the sentence that closes the session depends on it.
+  wire2 = false,
+  --- Whether this session has said that the connection is a viewer, so it is said once rather than
+  --- at every report of the role (§13.9, `note_role`).
+  viewer_said = false,
   room = nil,
   invite = nil,
   --- @type table<string, table> room path to document
@@ -910,19 +917,15 @@ end
 ---
 --- §13.9 gives a viewer its own edit and publishes none of it, so a buffer that accepted one
 --- would show text the room never receives — a keystroke the person believes is shared, which is
---- worse than a refusal. Only a `selvage/2` room can seat a viewer: the role is the room state's
+--- worse than a refusal. What the room sends is not refused (`PROTOCOL.md` §13.9), so the read-only
+--- flag is the document's own to take and to write through (`document.lua`), and a keystroke is the
+--- one thing it stops. Only a `selvage/2` room can seat a viewer: the role is the room state's
 --- (§13.4) and version 1's server seats nobody as anything.
-local function apply_read_only_writable(bufnr)
-  if bufnr ~= nil and api.nvim_buf_is_valid(bufnr) then
-    vim.bo[bufnr].modifiable = true
-  end
-end
-
-local function apply_read_only(bufnr)
-  if bufnr == nil or not api.nvim_buf_is_valid(bufnr) then
+local function apply_read_only(document)
+  if document == nil then
     return
   end
-  vim.bo[bufnr].modifiable = state.role ~= 'viewer'
+  document:set_read_only(state.role == 'viewer')
 end
 
 --- Every room document this session holds, read-only or not as the role says. Called where a
@@ -930,7 +933,25 @@ end
 --- joined a full one end up the same.
 local function apply_read_only_to_room()
   for _, document in pairs(state.documents) do
-    apply_read_only(document.bufnr)
+    apply_read_only(document)
+  end
+end
+
+--- The role this session has, where the room's own state says it: at the seat, and again if the
+--- state gives this connection another one afterwards (§13.4).
+---
+--- The sentence is said once, here, because this is where the role first reaches the editor — a
+--- `selvage/2` state may seat the connection as a viewer only after the join, and a person who is
+--- handed a read-only editor is owed the reason for it.
+local function note_role(role)
+  if role == nil or role == state.role then
+    return
+  end
+  state.role = role
+  apply_read_only_to_room()
+  if role == 'viewer' and not state.viewer_said then
+    state.viewer_said = true
+    notify('you are a viewer in this room, so its documents are read-only.', vim.log.levels.WARN)
   end
 end
 
@@ -992,7 +1013,7 @@ local function share(bufnr, path)
   end)
   state.documents[path] = document
   document:attach()
-  apply_read_only(bufnr)
+  apply_read_only(document)
   state.process:send({ type = 'open', path = path, text = text })
   -- The document may already have a peer's caret resolved against it, and this buffer's own
   -- caret is worth publishing the moment the room holds it.
@@ -2690,9 +2711,10 @@ end
 local function forget_documents()
   for _, document in pairs(state.documents) do
     -- The room's documents are the room's; a buffer that leaves the session is the person's
-    -- again, and a read-only one that stayed read-only after `:SelvageLeave` would be a buffer
-    -- nobody could edit.
-    apply_read_only_writable(document.bufnr)
+    -- again, with the `modifiable` it had before the session took it — a buffer the person had
+    -- made uneditable stays uneditable, and one the session made read-only for a viewer is
+    -- editable again.
+    document:set_read_only(false)
     document:detach()
   end
   state.documents = {}
@@ -2830,6 +2852,8 @@ local function reset(land, keep_mirror)
   state.pending_go_to = nil
   land_room_buffers(held)
   state.role = nil
+  state.wire2 = false
+  state.viewer_said = false
   state.room = nil
   state.invite = nil
   state.auto_open = false
@@ -2897,19 +2921,20 @@ local hand_on_invite
 --- `connect` names which of the two this was — `{ what = 'host', address = … }` or
 --- `{ what = 'join' }` — because the two say different sentences.
 ---
---- The one failure that is neither: a wire version the server's `/meta` does not seat, which
---- the companion refuses before it dials anything (`PROTOCOL.md` §2, §10). There is no
---- connection to describe, and the companion's message is already that whole sentence — the
---- server, the version it does not seat and what it offers instead — so it is said as it
---- stands rather than behind a sentence about a dial that never happened.
+--- The two failures that are neither: a wire version the server's `/meta` does not seat, which
+--- the companion refuses before it dials anything (`PROTOCOL.md` §2, §10), and a link whose
+--- fragment it will not read (`PROTOCOL.md` §5.1). In both there is no connection to describe, and
+--- the companion's message is already the whole sentence — the server, the version it does not
+--- seat and what it offers instead; or what is wrong with the link — so each is said as it stands
+--- rather than behind a sentence about a dial that never happened.
 ---
 --- @param connect table|nil `what` and, for a host, `address`
---- @param code string|nil the protocol's own code for a refusal — or the companion's own, for the
---- version refusal above — absent for a socket
+--- @param code string|nil the protocol's own code for a refusal — or the companion's own, for one of
+--- the two local refusals above — absent for a socket
 --- @param message string|nil the failure's own words
 --- @return string
 local function connect_failure(connect, code, message)
-  if code == 'wire_version_refused' then
+  if code == 'wire_version_refused' or code == 'invite_refused' then
     return tostring(message or '')
   end
   local what = connect and connect.what or 'join'
@@ -2949,8 +2974,15 @@ end
 
 local function on_status(message)
   state.status = message.state
-  state.role = message.role
+  -- The role is the room state's word about this connection's key (§13.4), and a state that gives
+  -- it another one arrives after the seat: the companion sends that as a report of its own, and
+  -- `note_role` is where both reach the editor.
+  note_role(message.role)
   state.room = message.roomId
+  -- The version is the seat's own, next to the role, and a status that carries none is from a
+  -- companion that cannot name it: the readable wire, which is what every version-1-era front-end
+  -- gets and the version whose drop sentence this one already said.
+  state.wire2 = message.wire == 'selvage/2'
   -- A status is this session's own word: whatever the connection was doing before it, the
   -- companion has just said where the session stands.
   state.reconnecting = false
@@ -2998,18 +3030,13 @@ local function on_status(message)
     state.join_said = false
     state.join_empty = false
     state.join_listed = false
-    -- A viewer is told once, here, and its documents are made read-only: the role is the room
-    -- state's word and this is where it first reaches this editor.
-    if state.role == 'viewer' then
-      apply_read_only_to_room()
-      notify('you are a viewer in this room, so its documents are read-only.', vim.log.levels.WARN)
-    end
     watch_presence()
     watch_follow_window()
     refresh_indicators()
   elseif message.state == 'error' then
-    -- This state is only ever a connection that failed: the companion sends it when the open
-    -- behind a host or join throws.
+    -- A connection that failed, or a refusal the companion decided before it dialled anything:
+    -- a version the server's `/meta` does not seat (`§2`, `§10`) and a link whose fragment it will
+    -- not read (`§5.1`) both reach here, and both already carry the companion's own sentence.
     notify(connect_failure(state.connect, message.code, message.message), vim.log.levels.ERROR)
     -- Nothing is standing after it, so the row goes with the failure: the notification is
     -- what says why, and a word about a session that is not open would outlive it.
@@ -3229,6 +3256,12 @@ local function on_report(report)
     -- Membership is one of the frames a pending landing waits on: the room naming the peer
     -- is what tells a wait for their document from a wait for someone who left.
     retry_go_to()
+  elseif report.kind == 'role' then
+    -- `§13.4`: the role is the applied state's word about this connection's key, and a state that
+    -- gives it another one arrives after the seat — the seat's own status cannot carry it, because
+    -- no state has committed the key yet. This is that change: a viewer's documents are made
+    -- read-only here, and the sentence is said once (`note_role`).
+    note_role(report.role)
   elseif report.kind == 'roomGone' then
     -- The room is over and the companion has let the engine go, so the session here ends with
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
@@ -3306,11 +3339,24 @@ local function on_report(report)
     state.reconnecting = true
     refresh_indicators()
   elseif report.kind == 'disconnected' then
-    -- The bridge reconnects on its own until it runs out of attempts, and this is that end:
-    -- the session is over and typing would accumulate in a replica nobody hears. The
-    -- companion process is deliberately left running — `ensure` reuses it on the next host
-    -- or join, and the engine on the other side of it has already finished.
-    notify('the connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
+    -- The engine reconnects on its own until it runs out of attempts, and this is that end: the
+    -- session is over and typing would accumulate in a replica nobody hears. The companion process
+    -- is deliberately left running — `ensure` reuses it on the next host or join, and the engine on
+    -- the other side of it has already finished.
+    --
+    -- A `selvage/2` host is the one place no retry ran: `§9.1`'s host return is a fresh room state
+    -- signed by the host key, and this client writes no host store, so a hosting session on the
+    -- sealed wire is never re-dialled. The version said so at the seat, and the sentence says it
+    -- rather than implying an attempt that was never made; a `selvage/2` guest and any
+    -- `selvage/1` session reach here only after the bounded retry gave up.
+    if state.wire2 and state.role == 'host' then
+      notify(
+        'the connection ended and the session is over; this wire cannot resume a hosting session yet, so it will not reconnect.',
+        vim.log.levels.ERROR
+      )
+    else
+      notify('the connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
+    end
     reset(true)
   end
 end

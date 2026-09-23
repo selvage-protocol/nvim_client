@@ -21,19 +21,53 @@ import WebSocket from 'ws';
 
 import { PeerEngine } from '../vendor/bridge/index.ts';
 import type { CompanionEngine } from './session.ts';
-import type { WebSocketFactory, WebSocketLike } from '../vendor/engine/transport.ts';
+import type { WebSocketFactory, WebSocketLike } from '../vendor/engine/index.ts';
 
 /** The version this file speaks. `selvage/1` is the engine's, and stays where it is. */
 export const WIRE_VERSION_2 = 'selvage/2';
+
+/**
+ * The code a link this client will not join with is refused behind.
+ *
+ * `§5.1`'s refusal is local and has no wire form: it happens before a socket is opened, it is not a
+ * `session.error`, and `§11`'s vocabulary is not involved. What it is about is the whole of what
+ * there is to say, and the engine says it — so a front-end shown a failure with no code at all
+ * would read it as a server that did not answer and replace that sentence with one about a
+ * connection. This is the companion's own name for the case, and not a code of the protocol's.
+ */
+export const INVITE_REFUSED = 'invite_refused';
+
+/** A link refused locally, with the engine's own words for what is wrong with it. */
+export class UnreadableInvite extends Error {
+  readonly code = INVITE_REFUSED;
+}
 
 /** The socket this companion dials with, from the `ws` package it already depends on. */
 const factory: WebSocketFactory = (url: string): WebSocketLike =>
   new WebSocket(url) as unknown as WebSocketLike;
 
 /**
+ * The name of one fragment parameter, decoded the way `§5.1` reads one: `%XX` escapes, and a literal
+ * `+` as `+`. A name that carries no valid escape at all is not a name this reads — it cannot be `k`
+ * or `h` either way, the engine's own reader included.
+ */
+function fragmentName(text: string): string | undefined {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The version a link asks for, from the one thing that says it: `§5.1`'s fragment, which
  * carries the room key and the host key. A `selvage/1` invite has none, and the server seats a
  * version-2 room only for a connection that reads one.
+ *
+ * The names are read through `§5.1`'s own decoding, as the engine's fragment reader reads them: a
+ * link whose `k` is written `%6b` asks for `selvage/2`, and a chooser that read the raw spelling
+ * would send it to the readable wire while the reader that has to find the key in it reads the
+ * other way.
  */
 export function wireVersionOf(invite: string): 'selvage/1' | 'selvage/2' {
   const hash = invite.indexOf('#');
@@ -42,10 +76,10 @@ export function wireVersionOf(invite: string): 'selvage/1' | 'selvage/2' {
   }
   const fragment = invite.slice(hash + 1);
   const names = new Set(
-    fragment
-      .split('&')
-      .map((part) => part.split('=')[0])
-      .filter((name): name is string => name !== undefined && name !== ''),
+    fragment.split('&').map((part) => {
+      const at = part.indexOf('=');
+      return fragmentName(at === -1 ? part : part.slice(0, at));
+    }),
   );
   return names.has('k') && names.has('h') ? 'selvage/2' : 'selvage/1';
 }
@@ -103,12 +137,28 @@ export async function hostVersion2(
 
 /** Joins the `selvage/2` room an invite names, from either form of the link. */
 export async function joinVersion2(invite: string, displayName: string): Promise<CompanionEngine> {
-  return adapter(
-    await PeerEngine.join({
-      invite,
-      displayName,
-      webSocketFactory: factory,
-      client: 'selvage-nvim',
-    }),
-  );
+  // `§5.1`'s refusal happens before a socket is opened, and that is what tells it apart from a
+  // connection that failed: the factory below is the engine's one way to dial, so a join that threw
+  // with it never called is a link this client would not read, and the engine's sentence for it is
+  // the whole of what a person can act on.
+  let dialled = false;
+  const dialling: WebSocketFactory = (url: string): WebSocketLike => {
+    dialled = true;
+    return factory(url);
+  };
+  try {
+    return adapter(
+      await PeerEngine.join({
+        invite,
+        displayName,
+        webSocketFactory: dialling,
+        client: 'selvage-nvim',
+      }),
+    );
+  } catch (error: unknown) {
+    if (dialled) {
+      throw error;
+    }
+    throw new UnreadableInvite(error instanceof Error ? error.message : String(error));
+  }
 }

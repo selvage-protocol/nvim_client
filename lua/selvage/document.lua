@@ -34,6 +34,10 @@ function Document.new(bufnr, path, send)
     -- A remote edit changes the buffer too, and that change is not news for the room.
     applying = false,
     detached = false,
+    -- `modifiable` as the session took it, or nil while the flag is the person's own. See
+    -- `set_read_only`: a `viewer`'s buffer has to refuse a keystroke and still take the room's
+    -- text, and one flag cannot do both without knowing which of the two a write is.
+    held_modifiable = nil,
   }, Document)
   for index, line in ipairs(self.lines) do
     self.len16[index] = utf16.len(line)
@@ -109,6 +113,33 @@ function Document:reshadow(first, last, replacement)
   self.lines, self.len16 = lines, len16
 end
 
+--- Makes this document the room's to write and not the person's, or gives it back.
+---
+--- `§13.9`: a `viewer` may read the room's documents and publishes none of its own content, so a
+--- buffer that accepted a keystroke would hold text the room never received — worse than a
+--- refusal. `modifiable` is that refusal, made by the editor rather than by a plugin hook. The same
+--- section says what a viewer *receives* is not refused, so `apply` writes through this flag: the
+--- two are one mechanism here, and this is what tells `apply` that the flag is the session's.
+---
+--- What the buffer had is remembered, because the option is not this plugin's: a session that set it
+--- back to `true` would hand a person a buffer they had deliberately made uneditable.
+--- @param held boolean
+function Document:set_read_only(held)
+  if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
+    return
+  end
+  if held then
+    if self.held_modifiable == nil then
+      self.held_modifiable = vim.bo[self.bufnr].modifiable
+    end
+    vim.bo[self.bufnr].modifiable = false
+  elseif self.held_modifiable ~= nil then
+    local was = self.held_modifiable
+    self.held_modifiable = nil
+    vim.bo[self.bufnr].modifiable = was
+  end
+end
+
 --- Applies a remote edit. Returns whether the buffer now holds it.
 function Document:apply(edit)
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
@@ -126,6 +157,13 @@ function Document:apply(edit)
   local first, first_col = self:position(edit.start)
   local last, last_col = self:position(edit['end'])
   local replacement = vim.split(edit.text, '\n', { plain = true })
+  -- The room's own text is not a keystroke: where this session took `modifiable` away for a
+  -- viewer, the write goes through it and the flag is set again straight after. A buffer whose flag
+  -- is the person's own is left as it is, and a write it refuses is reported below.
+  local held = self.held_modifiable
+  if held ~= nil then
+    vim.bo[self.bufnr].modifiable = true
+  end
   self.applying = true
   local ok, err = pcall(
     api.nvim_buf_set_text,
@@ -137,6 +175,9 @@ function Document:apply(edit)
     replacement
   )
   self.applying = false
+  if held ~= nil then
+    vim.bo[self.bufnr].modifiable = false
+  end
   if not ok then
     vim.notify('selvage: could not apply an edit to ' .. self.path .. ': ' .. tostring(err), vim.log.levels.WARN)
     return false

@@ -289,6 +289,45 @@ check(
 check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
 selvage.leave()
 
+-- And the companion's own refusal of a link it will not read: `§5.1`'s fragment is where a
+-- version-2 room's two keys travel, and a link whose keys are missing or misspelled is refused
+-- locally, before a socket is opened. The engine's sentence says what is wrong with the link, and
+-- it is the whole of what a person reads: the failure carries no code of the protocol's, so a
+-- front-end that treated it as a connection that failed would replace it with a sentence about a
+-- server that never answered.
+selvage.join('ws://127.0.0.1:1/session?room=r-refused&token=t#k=short&h=short')
+local before_refused_invite = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'invite_refused',
+  message = '`k` is not a 32-byte key in the fragment\'s encoding',
+})
+check(
+  'a link the companion will not read is said as the engine wrote it',
+  said_since(before_refused_invite, 'selvage: `k` is not a 32-byte key in the fragment\'s encoding') ~= nil,
+  true
+)
+check(
+  '  and not behind a sentence about a connection that was never made',
+  said_since(before_refused_invite, 'could not join the session') == nil,
+  true
+)
+-- The code is what that sentence turns on: the same message with no code at all is what every
+-- socket failure leaves, and the front-end reads one of those as a server that did not answer.
+local before_codeless = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  message = '`k` is not a 32-byte key in the fragment\'s encoding',
+})
+check(
+  '  where the same failure with no code reads as a server that did not answer',
+  said_since(before_codeless, 'No server answered — check the invite is complete, and that the server is running at the address it names.') ~= nil,
+  true
+)
+selvage.leave()
+
 -- -- a guest has the room's document put in front of it -----------------------
 --
 -- The room path is the host's working directory plus the path within it — a VS Code host
@@ -1308,6 +1347,51 @@ check(
   true
 )
 
+-- -- which ending a give-up is ----------------------------------------------------------
+--
+-- A `selvage/2` host is the one session no retry ran for: §9.1's host return is a fresh room state
+-- signed by the host key and this client writes no host store, so a hosting session on the sealed
+-- wire ends at the first drop. The companion says the version at the seat, and the sentence has to
+-- say it rather than implying an attempt that was never made — the words the VS Code client's
+-- adapter uses at the same moment.
+
+local function drop_ending(name, status)
+  selvage.leave()
+  vim.cmd('edit! ' .. path)
+  selvage.host('ws://127.0.0.1:1')
+  handlers().on_message(status)
+  local before = #notices
+  handlers().on_message({ type = 'report', report = { kind = 'disconnected' } })
+  return said_since(before, name) ~= nil
+end
+
+--- The two sentences a drop can end with, as the front-end says them.
+local ENDING = {
+  guest = 'it could not be re-established.',
+  host = 'this wire cannot resume a hosting session yet, so it will not reconnect.',
+}
+
+check(
+  'a selvage/2 host is told its wire cannot resume a hosting session',
+  drop_ending(ENDING.host, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/2', roomId = 'r-v2' }),
+  true
+)
+check(
+  '  and is not told the guest sentence',
+  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/2', roomId = 'r-v2' }),
+  false
+)
+check(
+  'a selvage/1 host keeps the retried sentence its engine does run',
+  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/1', roomId = 'r-v1' }),
+  true
+)
+check(
+  'a selvage/2 guest that gave up keeps the retried sentence',
+  drop_ending(ENDING.guest, { type = 'status', state = 'joined', role = 'guest', wire = 'selvage/2', roomId = 'r-v2g' }),
+  true
+)
+
 -- -- the room's own comings and goings --------------------------------------------
 --
 -- Two more things the room says about itself: the host is back after a blip, and the room is
@@ -2319,8 +2403,14 @@ check('  naming its type', received[1] and received[1].type, 'leave')
 --
 -- `selvage/2` is the only version that seats a role other than host or guest: the room state
 -- assigns it (§13.4) and §13.9 has a viewer keep its own edit and publish none of it. A buffer
--- that accepted a keystroke would show text the room never receives, so the role is what decides
--- whether the buffer is modifiable at all — and the buffer is the person's again when they leave.
+-- that accepted a keystroke would show text the room never receives — worse than a refusal — while
+-- what the room applies is not the viewer's keystroke at all: both are the room's own text, and the
+-- second has to land. One flag does both, which is what `document.lua`'s `set_read_only` is for.
+--
+-- The role arrives as a report after the join, not with the seat: no applied state can commit this
+-- connection's key at the moment the seat is announced (§13.4), so a viewer that read the role once,
+-- there, would keep an editable buffer. And the buffer is the person's again when they leave, with
+-- the `modifiable` it had before the session took it.
 --
 -- This section uses the stub the plugin captured when it was loaded (replacing the module now
 -- would change `package.loaded` and nothing else), so it clears what that stub has recorded.
@@ -2332,7 +2422,9 @@ for index = #sent, 1, -1 do
 end
 
 local viewer_path = '.tmp/lua-viewer.txt'
-vim.fn.writefile({ "the room's own text" }, viewer_path)
+-- No file behind the path, deliberately: the room's text is what an `applyEdit` writes, and a
+-- buffer that was seeded from disk would hold it whether the room reached it or not.
+vim.fn.delete(viewer_path)
 selvage.join(
   'ws://127.0.0.1:1/session?room=r-viewer&token=t#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&h=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
 )
@@ -2343,7 +2435,9 @@ check(
   true
 )
 
-handlers().on_message({ type = 'status', state = 'joined', role = 'viewer', roomId = 'r-viewer' })
+-- The seat, as the companion really sends it: the role it can read then is the `guest` a key no
+-- state has committed yet is read as.
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-viewer' })
 handlers().on_message({
   type = 'report',
   report = { kind = 'documents', documents = { viewer_path } },
@@ -2356,16 +2450,130 @@ for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     viewer_buf = bufnr
   end
 end
-check('the room\'s document has a buffer', viewer_buf ~= nil, true)
-check('  and a viewer may not change it', viewer_buf ~= nil and vim.bo[viewer_buf].modifiable, false)
+check("the room's document has a buffer", viewer_buf ~= nil, true)
+check('  editable while the seat is a guest', viewer_buf ~= nil and vim.bo[viewer_buf].modifiable, true)
+
+-- -- the state that seats this connection as a viewer arrives after the join ----
+
+local before_role = #notices
+handlers().on_message({ type = 'report', report = { kind = 'role', role = 'viewer' } })
+check('the role the room gives is read where it is used', vim.bo[viewer_buf].modifiable, false)
+check(
+  '  and the reason is said once',
+  said_since(before_role, 'you are a viewer in this room, so its documents are read-only.') ~= nil,
+  true
+)
+check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
+
+local before_again = #notices
+handlers().on_message({ type = 'report', report = { kind = 'role', role = 'viewer' } })
+check(
+  '  and a second report of the same role says nothing again',
+  said_since(before_again, 'you are a viewer in this room') == nil,
+  true
+)
 
 local wrote = pcall(vim.api.nvim_buf_set_lines, viewer_buf, -1, -1, true, { 'mine' })
 check('  so a keystroke into it is refused', wrote, false)
+
+-- -- the room's own text is applied to a read-only buffer ------------------------
+
+local before_apply = #sent
+handlers().on_message({
+  type = 'applyEdit',
+  id = 7,
+  path = viewer_path,
+  start = 0,
+  ['end'] = 0,
+  text = "the room's own text",
+  version = 0,
+})
+check(
+  "the room's own text reaches a viewer's buffer",
+  table.concat(vim.api.nvim_buf_get_lines(viewer_buf, 0, -1, true), '\n'),
+  "the room's own text"
+)
+check('  and is answered as applied', sent[#sent] and sent[#sent].ok, true)
+check("  and the buffer is the room's read-only one still", vim.bo[viewer_buf].modifiable, false)
+local after_apply = pcall(vim.api.nvim_buf_set_lines, viewer_buf, -1, -1, true, { 'mine' })
+check('  which a keystroke still cannot enter', after_apply, false)
+check('  and the room is told nothing about it', #sent, before_apply + 1)
 
 selvage.leave()
 check('leaving gives the buffer back', viewer_buf ~= nil and vim.bo[viewer_buf].modifiable, true)
 local after = pcall(vim.api.nvim_buf_set_lines, viewer_buf, -1, -1, true, { 'mine' })
 check('  and the keystroke lands then', after, true)
+
+-- -- what the session takes, it gives back ---------------------------------------
+--
+-- `modifiable` is the person's option, not the plugin's: a buffer they made uneditable stays
+-- uneditable while a session shares it and after the session ends. A viewer is the one case the
+-- session takes the flag, and it puts back exactly the value it found.
+
+local protected_path = '.tmp/lua-protected.txt'
+vim.fn.writefile({ 'generated; do not edit' }, protected_path)
+vim.cmd('edit ' .. vim.fn.fnameescape(protected_path))
+local protected_buf = vim.api.nvim_get_current_buf()
+vim.bo[protected_buf].modifiable = false
+for index = #sent, 1, -1 do
+  table.remove(sent, index)
+end
+
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-protected' })
+check('the buffer the person made uneditable is shared', sent[#sent] and sent[#sent].type, 'open')
+check('  and sharing it does not make it editable', vim.bo[protected_buf].modifiable, false)
+
+selvage.leave()
+check('  and leaving leaves it as it was', vim.bo[protected_buf].modifiable, false)
+
+-- The host case above does not reach the held flag: a host's buffer is never held, so
+-- `set_read_only(false)` finds `held_modifiable == nil` and does nothing, and the check passes
+-- because nobody touched it. A viewer holds it, and a buffer the person had already made
+-- uneditable is the value that tells a restore from an unconditional `true`.
+
+local held_path = '.tmp/lua-viewer-held.txt'
+vim.fn.delete(held_path)
+for index = #sent, 1, -1 do
+  table.remove(sent, index)
+end
+
+selvage.join(
+  'ws://127.0.0.1:1/session?room=r-held&token=t#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&h=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+)
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-held' })
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { held_path } } })
+
+local held_buf = nil
+for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  if name:sub(-#held_path) == held_path then
+    held_buf = bufnr
+  end
+end
+check("a viewer has a buffer for the room's document", held_buf ~= nil, true)
+
+vim.bo[held_buf].modifiable = false
+handlers().on_message({ type = 'report', report = { kind = 'role', role = 'viewer' } })
+check('  held read-only from a buffer that already was', vim.bo[held_buf].modifiable, false)
+
+handlers().on_message({
+  type = 'applyEdit',
+  id = 8,
+  path = held_path,
+  start = 0,
+  ['end'] = 0,
+  text = "the room's own text",
+  version = 0,
+})
+check(
+  "  and it still takes the room's text",
+  table.concat(vim.api.nvim_buf_get_lines(held_buf, 0, -1, true), '\n'),
+  "the room's own text"
+)
+
+selvage.leave()
+check('  and leaving puts back the false it found', vim.bo[held_buf].modifiable, false)
 
 vim.notify = notify
 

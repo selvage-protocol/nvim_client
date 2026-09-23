@@ -11,7 +11,15 @@
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -19,13 +27,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
-import { Companion, WIRE_VERSION_REFUSED } from '../companion/session.ts';
+import { Companion, WIRE_VERSION_REFUSED, realWire2 } from '../companion/session.ts';
 import type { MetaReader } from '../companion/session.ts';
-import { ProtocolError } from '../vendor/engine/index.ts';
-import type { PeerInfo } from '../vendor/engine/envelope.ts';
+import { ProtocolError, parseInvite } from '../vendor/engine/index.ts';
+import type { PeerInfo } from '../vendor/engine/index.ts';
 
 import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
 import type { GrantedRead } from '../vendor/bridge/index.ts';
+import { INVITE_REFUSED, wireVersionOf } from '../companion/relay.ts';
+
 import { FakeEngine } from './helpers/fake-engine.ts';
 
 /**
@@ -88,6 +98,17 @@ function harness(
      * test about what this companion does with an answer supplies the answer.
      */
     meta?: MetaReader;
+    /**
+     * When set, every `selvage/2` mint this harness is asked for throws it, the way a dead
+     * address or a server that refuses the version-2 hello reaches the session. No engine is
+     * built for a mint that did not happen.
+     */
+    wire2MintFails?: Error;
+    /**
+     * Whether the replica echoes a published listing back the way a real server's `doc.granted`
+     * does. Off by default: a test that is not about the grant report should not be handed one.
+     */
+    echoGrants?: boolean;
   } = {},
 ): Harness {
   const sent: Notification[] = [];
@@ -103,6 +124,7 @@ function harness(
     const engine = new FakeEngine(role, documents, peers);
     engine.granted = [...(options.granted ?? [])];
     engine.grantError = options.grantError;
+    engine.echoGrants = options.echoGrants ?? false;
     engines.push(engine);
     return engine;
   };
@@ -128,6 +150,9 @@ function harness(
     wire2: {
       host: (serverUrl) => {
         hosts2.push(serverUrl);
+        if (options.wire2MintFails !== undefined) {
+          return Promise.reject(options.wire2MintFails);
+        }
         return Promise.resolve(open());
       },
       join: (invite) => {
@@ -320,6 +345,24 @@ test('an unpinned host mints the version the server seats', async () => {
   );
 });
 
+// Two versions end a dropped connection differently (`§9.1`): a `selvage/1` host reclaims its
+// room and a `selvage/2` host cannot, because the host return is a fresh room state signed by the
+// host key and this client writes no host store. The front-end is the one that says it, so the
+// seat has to carry which version it is.
+test('the seat tells the front-end which wire version it speaks', async () => {
+  const sealed = harness('host', [], [], { meta: metaOffers('selvage/1', 'selvage/2') });
+  await sealed.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  assert.equal(statuses(sealed).at(-1)?.wire, 'selvage/2');
+
+  const readable = harness('host');
+  await readable.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  assert.equal(statuses(readable).at(-1)?.wire, 'selvage/1');
+
+  const guest = harness('guest');
+  await guest.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  assert.equal(statuses(guest).at(-1)?.wire, 'selvage/1', 'a link with no fragment is the readable wire');
+});
+
 test('a server that does not seat selvage/2 is refused before anything is dialled', async () => {
   const it = harness('host', [], [], { meta: metaOffers('selvage/1') });
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
@@ -391,6 +434,43 @@ test('a pin the server does not seat is refused rather than fallen back from', a
   );
 });
 
+test('a link the client will not read is refused with the engine\'s own sentence', async () => {
+  // The real version-2 factories: a link whose fragment does not read is refused before anything is
+  // dialled, so this test opens no socket and needs no server — which is the property being
+  // pinned. The failure carries no code of the protocol's, and a front-end handed it as a
+  // connection that failed would replace the engine's sentence with one about a server.
+  const sent: Notification[] = [];
+  const companion = new Companion({
+    send: (notification) => sent.push(notification),
+    wire2: realWire2,
+  });
+
+  for (const invite of [
+    // Both names, a value that is not a key: the link asks for `selvage/2` and cannot be joined.
+    'ws://127.0.0.1:1/session?room=r&token=t#k=short&h=short',
+    // The same fragment on the page form a host hands on, which the engine resolves first.
+    'https://127.0.0.1:1/?room=r&token=t#k=short&h=short',
+  ]) {
+    sent.length = 0;
+    await companion.handle({ type: 'join', invite });
+    const heard = sent.filter(
+      (notification): notification is Extract<Notification, { type: 'status' }> =>
+        notification.type === 'status',
+    );
+    assert.deepEqual(
+      heard.map((status) => status.state),
+      ['connecting', 'error'],
+      `the refusal is a failed join rather than nothing at all: ${invite}`,
+    );
+    assert.equal(heard[1]?.code, INVITE_REFUSED, `the refusal carries a code: ${invite}`);
+    assert.equal(
+      heard[1]?.message,
+      "`k` is not a 32-byte key in the fragment's encoding",
+      `and the engine's own sentence for it: ${invite}`,
+    );
+  }
+});
+
 test('a join consults neither the setting nor the server: the link is the version', async () => {
   // A reader that fails the test rather than answering one: a join has nothing to ask, so a join
   // that asked would be the defect.
@@ -410,6 +490,60 @@ test('a join consults neither the setting nor the server: the link is the versio
   await byPlainLink.companion.handle({ type: 'join', invite: plain });
   assert.deepEqual(byPlainLink.joins, [plain], 'and a link with no fragment on the readable one');
   assert.deepEqual(byPlainLink.joins2, [], 'never on the encrypted one');
+});
+
+test('a fragment is read with §5.1\'s decoding, as the engine reads it', async () => {
+  // A name written `%6b` is `k`: the engine's fragment reader percent-decodes a name before it
+  // looks for one, so a chooser reading the raw spelling would send the link to the readable wire
+  // and the room it names would not be there. The two readers are asked the same question here,
+  // and a link with only one of the two names is still a version-1 link, as it always was.
+  // A key is 32 bytes in `§5.1`'s base64url, and 43 `A`s is one: 43 `a`s is not, because the final
+  // character's padding bits are not zero, so the value would be refused for the wrong reason.
+  const key = 'A'.repeat(43);
+  const encoded = `ws://127.0.0.1:1/session?room=r&token=t#%6b=${key}&h=${key}`;
+  assert.equal(
+    parseInvite(encoded).ok,
+    true,
+    'the engine reads a percent-encoded room key, which is what the chooser has to agree with',
+  );
+  assert.equal(wireVersionOf(encoded), 'selvage/2');
+  assert.equal(wireVersionOf(`ws://h/session?room=r&token=t#k=${key}&h=${key}`), 'selvage/2');
+  assert.equal(wireVersionOf(`ws://h/session?room=r&token=t#k=${key}`), 'selvage/1');
+  assert.equal(wireVersionOf('ws://h/session?room=r&token=t'), 'selvage/1');
+  assert.equal(wireVersionOf('ws://h/session?room=r&token=t#%zz=x&h=y'), 'selvage/1');
+
+  const it = harness('guest');
+  await it.companion.handle({ type: 'join', invite: encoded });
+  assert.deepEqual(it.joins2, [encoded], 'the link reached the encrypted wire');
+  assert.deepEqual(it.joins, [], 'and never the readable one');
+});
+
+test('a role the state gives this connection after the seat reaches the front-end', async () => {
+  // `§13.4`: the role is the applied state's word about this connection's key, and the state that
+  // commits the key is published after the connection announced it — so the status sent at the seat
+  // reads the `?? 'guest'` default and a viewer that stopped there would keep an editable buffer,
+  // which for `§13.9` is worse than a refusal. The role is read where it can change instead.
+  const it = harness('guest', ['notes.txt']);
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  const seat = statuses(it).at(-1);
+  assert.equal(seat?.state, 'joined');
+  assert.equal(seat?.role, 'guest', 'the seat is before any state has committed this key');
+  assert.deepEqual(roleReports(it), [], 'so no role has been reported yet');
+
+  // The room's state arrives and seats this connection as a viewer.
+  it.engine.setRole('viewer');
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+  assert.deepEqual(roleReports(it), ['viewer'], 'the change reached the front-end');
+
+  // The room's content arriving is an event of its own, and the role is read at each one: a state
+  // that relabelled this connection with no peer of its own to relabel raises no other event.
+  it.engine.emit({ type: 'documentChanged', path: 'notes.txt' });
+  assert.deepEqual(roleReports(it), ['viewer'], 'and nothing was said twice');
+
+  // What the state gives, it can take away.
+  it.engine.setRole('guest');
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+  assert.deepEqual(roleReports(it), ['viewer', 'guest']);
 });
 
 test('a second host is refused rather than minting a second room', async () => {
@@ -1142,6 +1276,28 @@ function refusals(it: Harness): string[] {
     .map((notification) => (notification.report as { message: string }).message);
 }
 
+/** The `grant` listings the front-end was handed, in the order the companion reported them. */
+function grantReports(it: Harness): string[][] {
+  return it.sent
+    .filter(
+      (notification): notification is Extract<Notification, { type: 'report' }> =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'grant',
+    )
+    .map((notification) => (notification.report as { paths: string[] }).paths);
+}
+
+/** The roles the companion reported as this connection's own, in the order it reported them. */
+function roleReports(it: Harness): string[] {
+  return it.sent
+    .filter(
+      (notification): notification is Extract<Notification, { type: 'report' }> =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'role',
+    )
+    .map((notification) => (notification.report as { role: string }).role);
+}
+
 // The read is real file system work, which lands on a later turn of the event loop than a drain
 // of the microtask queue ever reaches: `until` is the wait for it, and `settle` is only enough
 // for work that is already resolved.
@@ -1613,6 +1769,58 @@ test('the folder is published again by the next session', async (t) => {
   assert.deepEqual(it.engine.grants, [['notes.txt']]);
 });
 
+test('a version-2 mint that failed leaves no listing behind for the next host', async (t) => {
+  const root = folder(t);
+  tree(root, 'one.txt', 'one\n');
+  tree(root, 'two.txt', 'two\n');
+
+  // The first attempt walks the folder and then dies at the mint — a dead address, or a server
+  // that refuses the version-2 hello. It never opened a room, so the walk is not a listing
+  // anything holds.
+  const failed = harness('host', [], [], {
+    wire2MintFails: new Error('the WebSocket reported an error'),
+    echoGrants: true,
+  });
+  await failed.companion.handle({ type: 'host', wire: 'selvage/2', serverUrl: 'ws://127.0.0.1:1', root });
+  assert.deepEqual(failed.hosts2, ['ws://127.0.0.1:1'], 'the version-2 attempt reached the mint');
+  assert.deepEqual(
+    statuses(failed).map((status) => status.state),
+    ['connecting', 'error'],
+    'a mint that threw is reported and leaves nothing standing',
+  );
+
+  // The recovery a person follows: pin version 1 and host the same folder again. The room is
+  // minted, so it has to be told what it shares — and the listing the room echoes back is what
+  // the guest sees.
+  await failed.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the folder this host shares to reach the room',
+    () => failed.engine.grants.length > 0,
+    () => ({ listed: failed.engine.grants, reported: grantReports(failed) }),
+  );
+  assert.deepEqual(failed.engine.grants, [['one.txt', 'two.txt']], 'the room was told nothing');
+  // The first report is the handshake's own, before the listing was published; the second is the
+  // listing the room echoed back, which is what a guest's front-end is handed. A host that sent no
+  // `doc.grant` leaves the guest looking at an empty room and the front-end with the first alone.
+  assert.deepEqual(
+    grantReports(failed),
+    [[], ['one.txt', 'two.txt']],
+    'and the front-end was handed no listing either',
+  );
+
+  // The control: the same single version-1 host with no failed attempt before it publishes the
+  // same listing, so the assertions above are about the failed mint and not about the harness.
+  const control = harness('host', [], [], { echoGrants: true });
+  await control.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the control host to publish the folder',
+    () => control.engine.grants.length > 0,
+    () => control.engine.grants,
+  );
+  assert.deepEqual(control.engine.grants, [['one.txt', 'two.txt']]);
+  assert.deepEqual(grantReports(control), [[], ['one.txt', 'two.txt']]);
+});
+
 test('a folder a session has left is not published by the next one', async (t) => {
   const shared = folder(t);
   tree(shared, 'a.txt');
@@ -1760,6 +1968,36 @@ test('a guest that reseats after a drop publishes nothing and keeps its role', a
   assert.equal(it.engine.session().role, 'guest', 'a reconnect drifted toward host');
 });
 
+// -- what a drop says while the retry runs ------------------------------------------------
+//
+// `§9.1`'s bounded retry is `reconnecting`: its own event, so an adapter shows the drop instead
+// of inferring it from silence. The bridge forwards it to the editor host and the front-end's row
+// is where it is read — this is the seam a re-vendor can break — and the session it belongs to has
+// to go on, because the re-seat carries the same engine, the same replica and the same seam.
+
+test('a dropped connection is reported as a retry, and does not end the session', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await settle();
+
+  const before = it.sent.length;
+  it.engine.emit({ type: 'reconnecting' });
+  await settle();
+
+  const heard = it.sent.slice(before);
+  assert.deepEqual(
+    heard.filter((notification) => notification.type === 'report'),
+    [{ type: 'report', report: { kind: 'reconnecting' } }],
+    'the retry did not reach the front-end as its own report',
+  );
+  assert.equal(
+    heard.some((notification) => notification.type === 'status' && notification.state === 'idle'),
+    false,
+    'the session ended at the drop instead of waiting for the retry',
+  );
+  assert.equal(it.engine.disconnected, false, 'the companion let the engine go');
+});
+
 test('a guest watches nothing and publishes no listing', async () => {
   const it = harness('guest');
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
@@ -1835,3 +2073,116 @@ test(
   },
 );
 
+
+test(
+  "the trace never holds an invite's fragment",
+  { timeout: 30_000 },
+  async () => {
+    // `§5.1`: a `selvage/2` invite's fragment carries the room key and the host's public key, and a
+    // client **MUST NOT** log it. The invite crosses this pipe twice — the front-end's `join` and
+    // the host's own `status` — and both are written through the same redaction, keyed on the
+    // member a link travels in, so a real link sent in is the whole of what this pins.
+    const scratch = mkdtempSync(join(SCRATCH, 'trace-'));
+    const file = join(scratch, 'companion.log');
+    const roomKey = 'FgWuVJM2nsQn9DqDaRVQ4c2LmdmK3XWbczlKBUHu57A';
+    const hostKey = 'dQAm9nhUso4fDxMD3qDBfVQ9kojiU03k4PonWTjEla4';
+    const invite = `ws://127.0.0.1:1/session?room=r-trace&token=t#k=${roomKey}&h=${hostKey}`;
+    const child = spawn(
+      process.execPath,
+      [join(resolve(import.meta.dirname, '..'), 'companion', 'main.ts')],
+      {
+        env: { ...process.env, SELVAGE_COMPANION_LOG: file },
+        stdio: ['pipe', 'pipe', 'ignore'],
+      },
+    );
+    try {
+      // A document's own text crosses this pipe too, and one of its `#`es is not a link's: what the
+      // trace records about a document has to be the text the room holds.
+      const carried = 'a # b';
+      child.stdin.end(
+        `${JSON.stringify({ type: 'open', path: 'notes.md', text: carried })}\n` +
+          `${JSON.stringify({ type: 'join', invite })}\n`,
+      );
+      assert.equal(await exit_of(child), 0, 'the companion left when its input ended');
+
+      const written = readFileSync(file, 'utf8');
+      assert.notEqual(written.includes(roomKey), true, 'the room key reached the trace');
+      assert.notEqual(written.includes(hostKey), true, "the host's public key reached the trace");
+      // The link itself is still there: what a trace is for is the order the messages crossed in,
+      // and an invite's address and token are part of that record.
+      assert.equal(
+        written.includes(`"invite":"ws://127.0.0.1:1/session?room=r-trace&token=t#redacted"`),
+        true,
+        `the invite is not in the trace as a redacted link:\n${written}`,
+      );
+      assert.equal(
+        written.includes(`"text":${JSON.stringify(carried)}`),
+        true,
+        `a document's own text was rewritten by the redaction:\n${written}`,
+      );
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  },
+);
+
+// -- a warning about a refused line ----------------------------------------------------
+//
+// A line that is JSON but not a request is refused with a word, and what that word is for is
+// naming which member or type was wrong — not recording what the line held. A `selvage/2`
+// invite's fragment is the room's key (§5.1) and a client **MUST NOT** log it, so the warning
+// prints the parsed value through the same member-keyed redaction the trace uses.
+// `withoutFragment` reads only the first `#`, so a member before `invite` that carries one of
+// its own left the fragment standing.
+
+test(
+  "a warning about a refused line never carries an invite's fragment",
+  { timeout: 30_000 },
+  async () => {
+    const roomKey = 'FgWuVJM2nsQn9DqDaRVQ4c2LmdmK3XWbczlKBUHu57A';
+    const hostKey = 'dQAm9nhUso4fDxMD3qDBfVQ9kojiU03k4PonWTjEla4';
+    const invite = `ws://127.0.0.1:1/session?room=r-warn&token=t#k=${roomKey}&h=${hostKey}`;
+    // `display_name` comes before `invite` and carries a `#` of its own, which is what
+    // `withoutFragment` reads as the fragment's start: it returns the line unchanged, fragment
+    // and all, and the invite is not a request.
+    const line = JSON.stringify({ display_name: 'a#b', invite });
+    const child = spawn(
+      process.execPath,
+      [join(resolve(import.meta.dirname, '..'), 'companion', 'main.ts')],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    let said = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      said += chunk;
+    });
+    try {
+      child.stdin?.write(`${line}\n`);
+      await until(
+        'the refusal to be said',
+        () => said.includes('ignoring a message that is not a request: '),
+        () => said,
+      );
+
+      assert.notEqual(said.includes(roomKey), true, `the room key reached the warning:\n${said}`);
+      assert.notEqual(
+        said.includes(hostKey),
+        true,
+        `the host's public key reached the warning:\n${said}`,
+      );
+      // The link is still there, as in the trace: the address is what names the message that was
+      // wrong, and it is not the secret.
+      assert.equal(
+        said.includes(`"invite":"ws://127.0.0.1:1/session?room=r-warn&token=t#redacted"`),
+        true,
+        `the refused line was not reported with its address:\n${said}`,
+      );
+
+      child.stdin?.end();
+      assert.equal(await exit_of(child), 0, 'the companion left when its input ended');
+    } finally {
+      child.kill('SIGKILL');
+    }
+  },
+);

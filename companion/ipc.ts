@@ -95,22 +95,34 @@ export type Notification =
     }
   /** Write the document, and answer with `saved`. A document with nowhere to go answers `true`. */
   | { type: 'save'; id: number; path: string }
-  /** Where the session stands. `invite` is present for the connection that minted the room. */
+  /**
+   * Where the session stands. `invite` is present for the connection that minted the room.
+   *
+   * `wire` is which version the connection speaks, and it is the front-end's to know for one
+   * thing: the two versions end a dropped connection differently — a `selvage/1` host reclaims
+   * its room, and a `selvage/2` host cannot (`§9.1`) — so the sentence a person reads depends on
+   * it. It is the seat's own fact, next to `role`, and a front-end that has not been told is
+   * from before this field and says the version it cannot tell apart.
+   */
   | {
       type: 'status';
       state: 'idle' | 'connecting' | 'hosting' | 'joined' | 'error';
       role?: string;
+      wire?: 'selvage/1' | 'selvage/2';
       roomId?: string;
       invite?: string;
       message?: string;
       /**
        * The protocol's own code for a failure the server named (an `error` frame, a refused
-       * handshake), or `wire_version_refused` for the one refusal this process decides itself —
-       * the version a host asked for that the server's `/meta` does not seat. Absent for a
-       * failure nothing named — a socket that never got there. It is the code and not the
-       * message that a front-end says a refusal by: the server's message carries the values it
-       * refused about, which are not what a person acts on, where a version refusal's message is
-       * already the whole sentence and is shown as it stands.
+       * handshake) — or one of the two refusals this process decides itself. `wire_version_refused`
+       * is the version a host asked for that the server's `/meta` does not seat;
+       * `invite_refused` is a link whose fragment this client will not read, refused locally
+       * before a socket is opened (`PROTOCOL.md` §5.1). Both are absent for a failure nothing
+       * named — a socket that never got there.
+       *
+       * It is the code and not the message that a front-end says a refusal by: the server's message
+       * carries the values it refused about, which are not what a person acts on, where a local
+       * refusal's message is already the whole sentence and is shown as it stands.
        */
       code?: string;
     }
@@ -120,7 +132,11 @@ export type Notification =
    * about it changed.
    */
   | { type: 'refused'; what: 'host' | 'join'; roomId: string }
-  /** The bridge's own report, passed through unchanged; `kind` says which. */
+  /**
+   * A report, `kind` saying which. The bridge's own are passed through unchanged; `role` is this
+   * process's own, and says that the room's state has given this connection a different role than
+   * the status it was told at the seat (`PROTOCOL.md` §13.4).
+   */
   | { type: 'report'; report: unknown }
   /** The remote carets this replica can resolve, in buffer offsets. */
   | { type: 'presence'; cursors: Cursor[] };
