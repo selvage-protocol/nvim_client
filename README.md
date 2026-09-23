@@ -165,9 +165,9 @@ them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
-| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `code` is the protocol's own code for a failure the server named, or `wire_version_refused` for the version a host asked for that the server's `/meta` does not seat, which is this process's own refusal before it dials anything; it is absent for a failure nothing named. |
+| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `role` is the role the room's state assigns this connection (`§13.4`) as far as the session can read it at that moment, which at the seat is the `guest` a key no state has committed yet is read as. `code` is the protocol's own code for a failure the server named, or one of the two refusals this process decides itself: `wire_version_refused` for the version a host asked for that the server's `/meta` does not seat, and `invite_refused` for an invite whose fragment it will not read — both made before it dials anything. It is absent for a failure nothing named. |
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about; the room named is the one still standing. |
-| `report {report}` | The bridge's own report: the room's documents, its grant, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
+| `report {report}` | The bridge's own report: the room's documents, its grant, peers, a divergence, a refusal, or a connection the engine gave up re-establishing — and one of this process's own, `role {role}`, sent when the room's state gives this connection a different role than the seat's status carried. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
 
 A `disconnected` report is the end of the session. The engine reconnected on its own until it ran
@@ -188,7 +188,9 @@ room's text is what the buffer ends on.
 
 Setting `SELVAGE_COMPANION_LOG` to a path makes the companion append every message it sends and
 receives, with the time and the process id. The plugin and the companion are two processes, so one
-end's log cannot show the order the messages crossed in.
+end's log cannot show the order the messages crossed in. A `selvage/2` invite's fragment is not in
+the file: `§5.1` has the room key and the host key travel there, a client **MUST NOT** log them, and
+the invite is written without it — the address and the token stay, which is what the log is for.
 
 ### Remote cursors
 
@@ -327,10 +329,12 @@ What a person does:
 **A viewer's editor is read-only.** A `selvage/2` room's state assigns roles (`§13.4`), and a
 connection seated as `viewer` gets the room's documents with `modifiable` off: `§13.9` has a viewer
 publish no content, so a buffer that accepted a keystroke would show text the room never receives.
-The role is the room's to give and the state's to say, and leaving gives the buffers back. This
-client declares `guest` and has no command to ask for the other role: what a host does with the
-state is a later phase's, and a client that could ask to be a viewer would be inventing a request
-the protocol does not have.
+The role is read where it is used rather than remembered from the join — the state that commits this
+connection's key is published after the seat, so a viewer learns what it is from a report of its
+own — and what the room itself applies is written through the flag, because what a viewer receives
+is not refused. Leaving gives each buffer back the `modifiable` it had. This client declares no role
+and is seated as `guest`: what a host does with the state is a later phase's, and a client that
+could ask to be a viewer would be inventing a request the protocol does not have.
 
 **What is not carried.** The listing a `selvage/2` host publishes is sealed into the room state by
 its host key, so it is lost when the process ends; this client runs no resume (`§9.1`), so there is
@@ -540,14 +544,20 @@ has to be filled, which is what `:SelvageFetch` does. The VS Code client has the
 ```
 npm run typecheck
 npm test                    # the companion, against a replica with no server behind it
-scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plus actionlint
-scripts/test-lua.sh         # the Lua side, in a real headless Neovim
+scripts/ci-local.sh all     # the workflow's commands, plus actionlint and both proofs below
+scripts/test-lua.sh         # the Lua side, in a real headless Neovim (not in `all`: see below)
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
 scripts/e2e/run-version-2.sh      # the same two instances over selvage/2, the host pinned there
 
 nix flake check             # the same three suites, plus the built package, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
+
+`scripts/ci-local.sh checks` is what the workflow runs; `scripts/ci-local.sh all` adds actionlint
+and both end-to-end proofs, which need a real Neovim and a built `selvaged` and so cannot run on a
+runner. `scripts/test-lua.sh` is not in `all`: it needs a Neovim too, and `nix flake check` runs the
+same files in a sandbox. Run it by hand after changing `lua/` — it also reads the plugin the machine
+has installed, and says so rather than testing that one instead when the two are not the same.
 
 `nix flake check` runs `typecheck`, the companion suite and the thirteen files under `test/lua/`,
 each in its own Neovim, with no network and no editor session, and then the `plugin` check, which is
