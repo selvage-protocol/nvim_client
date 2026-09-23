@@ -287,6 +287,12 @@ scripts/sync-engine.sh [path-to-vscode_client]
 The script copies `src/engine` and `src/bridge`, removes anything the source has retired, and then
 diffs the result, so a run either brings `vendor/` into agreement or says what it could not.
 
+The copy carries `selvage/2`'s peer side with the rest of the engine — `vendor/engine/sealed.ts`
+is `CANONICAL.md` §6.1's bytes, `vendor/engine/peer.ts` is `PROTOCOL.md` §13, and
+`vendor/engine/crypto.ts` is the crypto seam a caller supplies, because a page has neither
+`node:crypto` nor a synchronous one. This client speaks `selvage/1`: nothing here drives those
+modules yet, and `vendor/engine/index.ts` exports them for the adapter that will.
+
 ## Commands
 
 Hosting starts outside the editor: start `selvaged`, note the address it prints, and give that
