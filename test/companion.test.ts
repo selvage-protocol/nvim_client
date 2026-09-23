@@ -30,7 +30,7 @@ import { NvimEditorHost } from '../companion/editor.ts';
 import { Companion, WIRE_VERSION_REFUSED, realWire2 } from '../companion/session.ts';
 import type { MetaReader } from '../companion/session.ts';
 import { ProtocolError, parseInvite } from '../vendor/engine/index.ts';
-import type { PeerInfo } from '../vendor/engine/envelope.ts';
+import type { PeerInfo } from '../vendor/engine/index.ts';
 
 import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
 import type { GrantedRead } from '../vendor/bridge/index.ts';

@@ -3,15 +3,17 @@
  * a way for a test to move the replica the way a peer would.
  */
 
-import type { PeerInfo, Role } from '../../vendor/engine/envelope.ts';
-import type { EngineEvent, EngineEventListener } from '../../vendor/engine/events.ts';
-import type { SessionInfo } from '../../vendor/engine/engine.ts';
 import type {
   AwarenessState,
+  EngineEvent,
+  EngineEventListener,
   OffsetSelection,
+  PeerInfo,
   Presence,
+  Role,
   Selection,
-} from '../../vendor/engine/presence.ts';
+  SessionInfo,
+} from '../../vendor/engine/index.ts';
 import type { CompanionEngine } from '../../companion/session.ts';
 import { baseOf } from './base.ts';
 
