@@ -187,6 +187,9 @@ local MESSAGES = {
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
   { 'ERROR', 'could not save %s; the file on disk is behind the room%s.' },
   { 'ERROR', 'the connection ended and the session is over; it could not be re-established.' },
+  -- The one ending no retry ran for: a hosting session on the sealed wire (`§9.1`), where the
+  -- guest sentence above would imply an attempt that was never made.
+  { 'ERROR', 'the connection ended and the session is over; this wire cannot resume a hosting session yet, so it will not reconnect.' },
   -- The one refusal the session itself maps from a code rather than repeating: the capacity
   -- policy the server states with `x.room_full`.
   { 'ERROR', 'the room is full — it seats no more people.' },

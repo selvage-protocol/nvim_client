@@ -165,14 +165,19 @@ them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
-| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `role` is the role the room's state assigns this connection (`§13.4`) as far as the session can read it at that moment, which at the seat is the `guest` a key no state has committed yet is read as. `code` is the protocol's own code for a failure the server named, or one of the two refusals this process decides itself: `wire_version_refused` for the version a host asked for that the server's `/meta` does not seat, and `invite_refused` for an invite whose fragment it will not read — both made before it dials anything. It is absent for a failure nothing named. |
+| `status {state, role?, wire?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `role` is the role the room's state assigns this connection (`§13.4`) as far as the session can read it at that moment, which at the seat is the `guest` a key no state has committed yet is read as. `wire` is `selvage/1` or `selvage/2`, the version the connection speaks, which the plugin needs for one thing: the two versions end a dropped connection differently (`§9.1`). `code` is the protocol's own code for a failure the server named, or one of the two refusals this process decides itself: `wire_version_refused` for the version a host asked for that the server's `/meta` does not seat, and `invite_refused` for an invite whose fragment it will not read — both made before it dials anything. It is absent for a failure nothing named. |
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about; the room named is the one still standing. |
-| `report {report}` | The bridge's own report: the room's documents, its grant, peers, a divergence, a refusal, or a connection the engine gave up re-establishing — and one of this process's own, `role {role}`, sent when the room's state gives this connection a different role than the seat's status carried. |
+| `report {report}` | The bridge's own report: the room's documents, its grant, peers, a divergence, a refusal, a dropped socket being retried (`reconnecting`), or a connection the engine gave up re-establishing — and one of this process's own, `role {role}`, sent when the room's state gives this connection a different role than the seat's status carried. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
 
+A `reconnecting` report is a dropped socket the engine is re-dialling (`§9.1`): the row says so
+while it lasts, and the re-seat's own documents and peers reports are what end it.
+
 A `disconnected` report is the end of the session. The engine reconnected on its own until it ran
-out of attempts, so the plugin says so and lets the documents go. The companion process is left
-running, and the next `:SelvageHost` or `:SelvageJoin` reuses it.
+out of attempts — except for a `selvage/2` host, which this client never re-dials, because
+`§9.1`'s host return is a fresh room state signed by the host key and this client writes no host
+store — so the plugin says which of the two it was and lets the documents go. The companion
+process is left running, and the next `:SelvageHost` or `:SelvageJoin` reuses it.
 
 `version` is the document version the range was computed against, counted on each side. A remote
 edit is computed against the companion's mirror of the buffer and applied to the buffer itself, and

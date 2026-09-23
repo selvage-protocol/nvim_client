@@ -345,6 +345,24 @@ test('an unpinned host mints the version the server seats', async () => {
   );
 });
 
+// Two versions end a dropped connection differently (`§9.1`): a `selvage/1` host reclaims its
+// room and a `selvage/2` host cannot, because the host return is a fresh room state signed by the
+// host key and this client writes no host store. The front-end is the one that says it, so the
+// seat has to carry which version it is.
+test('the seat tells the front-end which wire version it speaks', async () => {
+  const sealed = harness('host', [], [], { meta: metaOffers('selvage/1', 'selvage/2') });
+  await sealed.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  assert.equal(statuses(sealed).at(-1)?.wire, 'selvage/2');
+
+  const readable = harness('host');
+  await readable.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  assert.equal(statuses(readable).at(-1)?.wire, 'selvage/1');
+
+  const guest = harness('guest');
+  await guest.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  assert.equal(statuses(guest).at(-1)?.wire, 'selvage/1', 'a link with no fragment is the readable wire');
+});
+
 test('a server that does not seat selvage/2 is refused before anything is dialled', async () => {
   const it = harness('host', [], [], { meta: metaOffers('selvage/1') });
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
@@ -1948,6 +1966,36 @@ test('a guest that reseats after a drop publishes nothing and keeps its role', a
   await delay(QUIET_MS);
   assert.deepEqual(it.engine.grants, [], 'a reseated guest published a listing');
   assert.equal(it.engine.session().role, 'guest', 'a reconnect drifted toward host');
+});
+
+// -- what a drop says while the retry runs ------------------------------------------------
+//
+// `§9.1`'s bounded retry is `reconnecting`: its own event, so an adapter shows the drop instead
+// of inferring it from silence. The bridge forwards it to the editor host and the front-end's row
+// is where it is read — this is the seam a re-vendor can break — and the session it belongs to has
+// to go on, because the re-seat carries the same engine, the same replica and the same seam.
+
+test('a dropped connection is reported as a retry, and does not end the session', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await settle();
+
+  const before = it.sent.length;
+  it.engine.emit({ type: 'reconnecting' });
+  await settle();
+
+  const heard = it.sent.slice(before);
+  assert.deepEqual(
+    heard.filter((notification) => notification.type === 'report'),
+    [{ type: 'report', report: { kind: 'reconnecting' } }],
+    'the retry did not reach the front-end as its own report',
+  );
+  assert.equal(
+    heard.some((notification) => notification.type === 'status' && notification.state === 'idle'),
+    false,
+    'the session ended at the drop instead of waiting for the retry',
+  );
+  assert.equal(it.engine.disconnected, false, 'the companion let the engine go');
 });
 
 test('a guest watches nothing and publishes no listing', async () => {

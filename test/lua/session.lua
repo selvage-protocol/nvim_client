@@ -1347,6 +1347,51 @@ check(
   true
 )
 
+-- -- which ending a give-up is ----------------------------------------------------------
+--
+-- A `selvage/2` host is the one session no retry ran for: §9.1's host return is a fresh room state
+-- signed by the host key and this client writes no host store, so a hosting session on the sealed
+-- wire ends at the first drop. The companion says the version at the seat, and the sentence has to
+-- say it rather than implying an attempt that was never made — the words the VS Code client's
+-- adapter uses at the same moment.
+
+local function drop_ending(name, status)
+  selvage.leave()
+  vim.cmd('edit! ' .. path)
+  selvage.host('ws://127.0.0.1:1')
+  handlers().on_message(status)
+  local before = #notices
+  handlers().on_message({ type = 'report', report = { kind = 'disconnected' } })
+  return said_since(before, name) ~= nil
+end
+
+--- The two sentences a drop can end with, as the front-end says them.
+local ENDING = {
+  guest = 'it could not be re-established.',
+  host = 'this wire cannot resume a hosting session yet, so it will not reconnect.',
+}
+
+check(
+  'a selvage/2 host is told its wire cannot resume a hosting session',
+  drop_ending(ENDING.host, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/2', roomId = 'r-v2' }),
+  true
+)
+check(
+  '  and is not told the guest sentence',
+  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/2', roomId = 'r-v2' }),
+  false
+)
+check(
+  'a selvage/1 host keeps the retried sentence its engine does run',
+  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/1', roomId = 'r-v1' }),
+  true
+)
+check(
+  'a selvage/2 guest that gave up keeps the retried sentence',
+  drop_ending(ENDING.guest, { type = 'status', state = 'joined', role = 'guest', wire = 'selvage/2', roomId = 'r-v2g' }),
+  true
+)
+
 -- -- the room's own comings and goings --------------------------------------------
 --
 -- Two more things the room says about itself: the host is back after a blip, and the room is

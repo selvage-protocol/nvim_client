@@ -23,6 +23,10 @@ local state = {
   --- replica nobody hears.
   reconnecting = false,
   role = nil,
+  --- Which wire version the session speaks, as the companion's seat said. The two versions end a
+  --- dropped connection differently (§9.1): a `selvage/1` host reclaims its room and a
+  --- `selvage/2` host cannot, so the sentence that closes the session depends on it.
+  wire2 = false,
   --- Whether this session has said that the connection is a viewer, so it is said once rather than
   --- at every report of the role (§13.9, `note_role`).
   viewer_said = false,
@@ -2848,6 +2852,7 @@ local function reset(land, keep_mirror)
   state.pending_go_to = nil
   land_room_buffers(held)
   state.role = nil
+  state.wire2 = false
   state.viewer_said = false
   state.room = nil
   state.invite = nil
@@ -2974,6 +2979,10 @@ local function on_status(message)
   -- `note_role` is where both reach the editor.
   note_role(message.role)
   state.room = message.roomId
+  -- The version is the seat's own, next to the role, and a status that carries none is from a
+  -- companion that cannot name it: the readable wire, which is what every version-1-era front-end
+  -- gets and the version whose drop sentence this one already said.
+  state.wire2 = message.wire == 'selvage/2'
   -- A status is this session's own word: whatever the connection was doing before it, the
   -- companion has just said where the session stands.
   state.reconnecting = false
@@ -3330,11 +3339,24 @@ local function on_report(report)
     state.reconnecting = true
     refresh_indicators()
   elseif report.kind == 'disconnected' then
-    -- The bridge reconnects on its own until it runs out of attempts, and this is that end:
-    -- the session is over and typing would accumulate in a replica nobody hears. The
-    -- companion process is deliberately left running — `ensure` reuses it on the next host
-    -- or join, and the engine on the other side of it has already finished.
-    notify('the connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
+    -- The engine reconnects on its own until it runs out of attempts, and this is that end: the
+    -- session is over and typing would accumulate in a replica nobody hears. The companion process
+    -- is deliberately left running — `ensure` reuses it on the next host or join, and the engine on
+    -- the other side of it has already finished.
+    --
+    -- A `selvage/2` host is the one place no retry ran: `§9.1`'s host return is a fresh room state
+    -- signed by the host key, and this client writes no host store, so a hosting session on the
+    -- sealed wire is never re-dialled. The version said so at the seat, and the sentence says it
+    -- rather than implying an attempt that was never made; a `selvage/2` guest and any
+    -- `selvage/1` session reach here only after the bounded retry gave up.
+    if state.wire2 and state.role == 'host' then
+      notify(
+        'the connection ended and the session is over; this wire cannot resume a hosting session yet, so it will not reconnect.',
+        vim.log.levels.ERROR
+      )
+    else
+      notify('the connection ended and the session is over; it could not be re-established.', vim.log.levels.ERROR)
+    end
     reset(true)
   end
 end

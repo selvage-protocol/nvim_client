@@ -194,8 +194,7 @@ export class Companion {
   /**
    * The peer id the current connection seated with. A reconnect is a new peer under the
    * same room, so a seat report under a different id is the reclaim rather than later
-   * room news — the re-seat signal this engine generation carries (`reconnecting` only
-   * exists upstream; see the re-vendor note in the reclaim-grant round log).
+   * room news.
    */
   private seatedPeer?: string;
 
@@ -642,6 +641,7 @@ export class Companion {
       type: 'status',
       state: session.role === 'host' ? 'hosting' : 'joined',
       role: session.role,
+      wire: version,
       roomId: session.roomId,
       ...(invite === undefined ? {} : { invite }),
     });

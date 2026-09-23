@@ -95,11 +95,20 @@ export type Notification =
     }
   /** Write the document, and answer with `saved`. A document with nowhere to go answers `true`. */
   | { type: 'save'; id: number; path: string }
-  /** Where the session stands. `invite` is present for the connection that minted the room. */
+  /**
+   * Where the session stands. `invite` is present for the connection that minted the room.
+   *
+   * `wire` is which version the connection speaks, and it is the front-end's to know for one
+   * thing: the two versions end a dropped connection differently — a `selvage/1` host reclaims
+   * its room, and a `selvage/2` host cannot (`§9.1`) — so the sentence a person reads depends on
+   * it. It is the seat's own fact, next to `role`, and a front-end that has not been told is
+   * from before this field and says the version it cannot tell apart.
+   */
   | {
       type: 'status';
       state: 'idle' | 'connecting' | 'hosting' | 'joined' | 'error';
       role?: string;
+      wire?: 'selvage/1' | 'selvage/2';
       roomId?: string;
       invite?: string;
       message?: string;
