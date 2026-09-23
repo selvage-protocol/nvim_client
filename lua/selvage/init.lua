@@ -906,6 +906,34 @@ local function refuse_unreadable(path)
   notify(('%s could not be read, so it is not shared.'):format(path), vim.log.levels.WARN)
 end
 
+--- A `viewer`'s editor is read-only in the room.
+---
+--- §13.9 gives a viewer its own edit and publishes none of it, so a buffer that accepted one
+--- would show text the room never receives — a keystroke the person believes is shared, which is
+--- worse than a refusal. Only a `selvage/2` room can seat a viewer: the role is the room state's
+--- (§13.4) and version 1's server seats nobody as anything.
+local function apply_read_only_writable(bufnr)
+  if bufnr ~= nil and api.nvim_buf_is_valid(bufnr) then
+    vim.bo[bufnr].modifiable = true
+  end
+end
+
+local function apply_read_only(bufnr)
+  if bufnr == nil or not api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  vim.bo[bufnr].modifiable = state.role ~= 'viewer'
+end
+
+--- Every room document this session holds, read-only or not as the role says. Called where a
+--- role arrives and where a document does, so a viewer that joined an empty room and one that
+--- joined a full one end up the same.
+local function apply_read_only_to_room()
+  for _, document in pairs(state.documents) do
+    apply_read_only(document.bufnr)
+  end
+end
+
 local function share(bufnr, path)
   if state.process == nil or state.documents[path] ~= nil then
     return
@@ -964,6 +992,7 @@ local function share(bufnr, path)
   end)
   state.documents[path] = document
   document:attach()
+  apply_read_only(bufnr)
   state.process:send({ type = 'open', path = path, text = text })
   -- The document may already have a peer's caret resolved against it, and this buffer's own
   -- caret is worth publishing the moment the room holds it.
@@ -2660,6 +2689,10 @@ end
 --- refusal goes the same way, so the next session looks at the buffer again.
 local function forget_documents()
   for _, document in pairs(state.documents) do
+    -- The room's documents are the room's; a buffer that leaves the session is the person's
+    -- again, and a read-only one that stayed read-only after `:SelvageLeave` would be a buffer
+    -- nobody could edit.
+    apply_read_only_writable(document.bufnr)
     document:detach()
   end
   state.documents = {}
@@ -2672,8 +2705,16 @@ end
 --- The buffers a guest session put on screen, captured before its documents are forgotten: they
 --- are the room's only for as long as the session holds them. A host's buffers are its own
 --- files, which outlive the room, so there is nothing here for a host to land.
+--- Whether this connection is a peer rather than the room's host: a guest, or — in a `selvage/2`
+--- room — a viewer. The two differ in what the room accepts from them (§13.9 refuses a viewer's
+--- content) and not in where the room's documents live, which is what most of these rules are
+--- about.
+local function is_peer()
+  return state.role == 'guest' or state.role == 'viewer'
+end
+
 local function room_buffers()
-  if state.role ~= 'guest' then
+  if not is_peer() then
     return nil
   end
   local held = {}
@@ -2947,6 +2988,12 @@ local function on_status(message)
     state.join_said = false
     state.join_empty = false
     state.join_listed = false
+    -- A viewer is told once, here, and its documents are made read-only: the role is the room
+    -- state's word and this is where it first reaches this editor.
+    if state.role == 'viewer' then
+      apply_read_only_to_room()
+      notify('you are a viewer in this room, so its documents are read-only.', vim.log.levels.WARN)
+    end
     watch_presence()
     watch_follow_window()
     refresh_indicators()
@@ -2968,7 +3015,7 @@ local function on_report(report)
     refresh_indicators()
   end
   if report.kind == 'documents' then
-    if state.role == 'guest' then
+    if is_peer() then
       local first = nil
       for _, path in ipairs(report.documents) do
         local bufnr = guest_buffer(path)
@@ -3053,7 +3100,7 @@ local function on_report(report)
       written_before[path] = mirror.written(path)
     end
     state.grant = report.paths or {}
-    if state.role == 'guest' then
+    if is_peer() then
       local root, blocked, created = mirror.setup(state.room, state.grant)
       if root ~= nil then
         if created then
@@ -3627,6 +3674,21 @@ end
 --- Whether a document the room changes is written. Nothing is sent when the plugin's global says
 --- nothing, so the companion's own default — write it — stands, as the other client's setting
 --- defaults to on.
+--- The version a hosted room is minted at: `vim.g.selvage_wire_version`, which is `2` (or
+--- `selvage/2`) for a `selvage/2` room and anything else — including unset, which is what every
+--- published client is — for `selvage/1`.
+---
+--- It is a host's setting and not a guest's. A join speaks the version the *link* names, because
+--- the `selvage/2` invite's fragment is the room key and the host key: a client that cannot read
+--- them cannot join the room at all, and one that can has been told which version to speak.
+local function wire_version()
+  local configured = vim.g.selvage_wire_version
+  if configured == 2 or configured == '2' or configured == 'selvage/2' then
+    return 'selvage/2'
+  end
+  return 'selvage/1'
+end
+
 local function auto_save()
   local configured = vim.g.selvage_auto_save
   if type(configured) == 'boolean' then
@@ -3704,7 +3766,7 @@ end
 
 --- Reads the room and its token out of a query string. Keys match whole, so a `bedroom=`
 --- lookalike does not pass, and empty values do not count.
-local function query_parts(query)
+local function query_parts(query, fragment)
   local found = {}
   for pair in tostring(query):gmatch('[^&]+') do
     local key, value = pair:match('^([^=]*)=(.*)$')
@@ -3717,7 +3779,20 @@ local function query_parts(query)
   if found.room == nil or found.room == '' or found.token == nil or found.token == '' then
     return nil
   end
+  -- §5.1's fragment is not a parameter and never a parameter's value: it is the two keys a
+  -- `selvage/2` invite carries, opaque to everything that only joins a room. It is kept as it
+  -- arrived, because handing the link on has to hand it on whole.
+  found.fragment = fragment or ''
   return found
+end
+
+--- The fragment of a link as it is written, `#` included, and the address before it.
+local function split_fragment(text)
+  local hash = text:find('#', 1, true)
+  if hash == nil then
+    return text, ''
+  end
+  return text:sub(1, hash - 1), text:sub(hash)
 end
 
 --- Splits a wire invite into the server base and the room/token it carries, or
@@ -3727,15 +3802,21 @@ local function parse_wire_invite(text)
   if trimmed:match('^wss?://%S+$') == nil then
     return nil
   end
-  local mark = trimmed:find('?', 1, true)
+  local address, fragment = split_fragment(trimmed)
+  local mark = address:find('?', 1, true)
   if mark == nil then
     return nil
   end
-  local parts = query_parts(trimmed:sub(mark + 1))
+  local parts = query_parts(address:sub(mark + 1), fragment)
   if parts == nil then
     return nil
   end
-  return { base = (trimmed:sub(1, mark - 1):gsub('/session$', '')), room = parts.room, token = parts.token }
+  return {
+    base = (address:sub(1, mark - 1):gsub('/session$', '')),
+    room = parts.room,
+    token = parts.token,
+    fragment = parts.fragment,
+  }
 end
 
 --- Reads a pasted page link back into the room and its token — the page's own parsing,
@@ -3746,26 +3827,33 @@ local function parse_page_link(text)
   if trimmed:match('^https?://%S+$') == nil then
     return nil
   end
-  local mark = trimmed:find('?', 1, true)
+  local address, fragment = split_fragment(trimmed)
+  local mark = address:find('?', 1, true)
   if mark == nil then
     return nil
   end
-  local parts = query_parts(trimmed:sub(mark + 1))
+  local parts = query_parts(address:sub(mark + 1), fragment)
   if parts == nil then
     return nil
   end
-  return { room = parts.room, token = parts.token, origin = trimmed:sub(1, mark - 1) }
+  return {
+    room = parts.room,
+    token = parts.token,
+    origin = address:sub(1, mark - 1),
+    fragment = parts.fragment,
+  }
 end
 
 --- The guest link for a room: the page the room's own server serves, carrying room and token.
 --- The link *is* the server — its origin is the address the guest dials — so it carries nothing
 --- else.
-local function build_page_link(room, token, base)
+local function build_page_link(room, token, base, fragment)
   return page_origin(base)
     .. '/?room='
     .. encode_component(room)
     .. '&token='
     .. encode_component(token)
+    .. (fragment or '')
 end
 
 --- The wire URL an invite joins on: a page link resolves to the server its own origin names,
@@ -3777,7 +3865,12 @@ local function resolve_invite_to_wire(link)
     return link
   end
   local server = (page.origin:gsub('^https://', 'wss://'):gsub('^http://', 'ws://'))
-  return (server:gsub('/+$', '')) .. '/session?room=' .. encode_component(page.room) .. '&token=' .. encode_component(page.token)
+  return (server:gsub('/+$', ''))
+    .. '/session?room='
+    .. encode_component(page.room)
+    .. '&token='
+    .. encode_component(page.token)
+    .. (page.fragment or '')
 end
 
 --- Whether a typed value has an invite link's shape: the page link the host copies,
@@ -3862,12 +3955,12 @@ hand_on_invite = function()
     return 'no-invite'
   end
   local link = invite
-  if state.role ~= 'guest' then
+  if not is_peer() then
     local wire = parse_wire_invite(invite)
     if wire == nil then
       return 'no-invite'
     end
-    link = build_page_link(wire.room, wire.token, wire.base)
+    link = build_page_link(wire.room, wire.token, wire.base, wire.fragment)
   end
   vim.fn.setreg('"', link)
   -- The system clipboard is not this editor's to command: a Neovim with no clipboard provider
@@ -3941,6 +4034,7 @@ function M.host(url)
           displayName = display_name,
           autoSave = auto_save(),
           root = state.root,
+          wire = wire_version(),
         })
       end
     end)

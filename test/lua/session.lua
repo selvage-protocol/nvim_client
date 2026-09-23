@@ -2287,6 +2287,58 @@ receive({ '{"type":"leave"}\n', '' })
 check('  while a shaped line still reaches its handler', #received, 1)
 check('  naming its type', received[1] and received[1].type, 'leave')
 
+-- -- a viewer's documents are read-only -----------------------------------------
+--
+-- `selvage/2` is the only version that seats a role other than host or guest: the room state
+-- assigns it (§13.4) and §13.9 has a viewer keep its own edit and publish none of it. A buffer
+-- that accepted a keystroke would show text the room never receives, so the role is what decides
+-- whether the buffer is modifiable at all — and the buffer is the person's again when they leave.
+--
+-- This section uses the stub the plugin captured when it was loaded (replacing the module now
+-- would change `package.loaded` and nothing else), so it clears what that stub has recorded.
+
+selvage.leave()
+vim.g.selvage_display_name = 'Test User'
+for index = #sent, 1, -1 do
+  table.remove(sent, index)
+end
+
+local viewer_path = '.tmp/lua-viewer.txt'
+vim.fn.writefile({ "the room's own text" }, viewer_path)
+selvage.join(
+  'ws://127.0.0.1:1/session?room=r-viewer&token=t#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&h=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+)
+check('joining a link with a fragment sends the command', sent[1] and sent[1].type, 'join')
+check(
+  '  with the fragment carried onto the wire URL',
+  sent[1] ~= nil and sent[1].invite:find('#k=', 1, true) ~= nil,
+  true
+)
+
+handlers().on_message({ type = 'status', state = 'joined', role = 'viewer', roomId = 'r-viewer' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { viewer_path } },
+})
+
+local viewer_buf = nil
+for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  if name:sub(-#viewer_path) == viewer_path then
+    viewer_buf = bufnr
+  end
+end
+check('the room\'s document has a buffer', viewer_buf ~= nil, true)
+check('  and a viewer may not change it', viewer_buf ~= nil and vim.bo[viewer_buf].modifiable, false)
+
+local wrote = pcall(vim.api.nvim_buf_set_lines, viewer_buf, -1, -1, true, { 'mine' })
+check('  so a keystroke into it is refused', wrote, false)
+
+selvage.leave()
+check('leaving gives the buffer back', viewer_buf ~= nil and vim.bo[viewer_buf].modifiable, true)
+local after = pcall(vim.api.nvim_buf_set_lines, viewer_buf, -1, -1, true, { 'mine' })
+check('  and the keystroke lands then', after, true)
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))

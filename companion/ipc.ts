@@ -30,7 +30,19 @@ export type Request =
    * peer asks for: a front-end that cannot name a folder shares nothing beyond the buffers it
    * sends.
    */
-  | { type: 'host'; serverUrl: string; displayName?: string; autoSave?: boolean; root?: string }
+  | {
+      type: 'host';
+      serverUrl: string;
+      displayName?: string;
+      autoSave?: boolean;
+      root?: string;
+      /**
+       * The version this room is minted at. Absent means `selvage/1`, which is what every
+       * published client speaks; `selvage/2` seals its states under this connection's host key
+       * and is reached by the front-end's own setting (`vim.g.selvage_wire_version`).
+       */
+      wire?: 'selvage/1' | 'selvage/2';
+    }
   /** Join the room an invite link names. Refused while a session is live: see `refused`. */
   | { type: 'join'; invite: string; displayName?: string; autoSave?: boolean }
   /** Leave the session and drop the connection. The process stays up. */
@@ -205,7 +217,10 @@ export function isRequest(value: unknown): value is Request {
         text('serverUrl') &&
         maybeText('displayName') &&
         maybeFlag('autoSave') &&
-        maybeText('root')
+        maybeText('root') &&
+        (fields['wire'] === undefined ||
+          fields['wire'] === 'selvage/1' ||
+          fields['wire'] === 'selvage/2')
       );
     case 'join':
       return text('invite') && maybeText('displayName') && maybeFlag('autoSave');
