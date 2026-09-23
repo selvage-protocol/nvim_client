@@ -269,7 +269,115 @@ async function main(): Promise<void> {
   }
   log("the host's own companion traced the invite with its fragment redacted out");
 
+  await proveTheAntiDowngradeRefusal(hostWorkspace);
+
   log('a version-2 host and guest exchanged an edit through a real server, both directions');
+}
+
+/** One status the companion sent: `companion/ipc.ts`'s notification, as far as this file reads it. */
+interface CompanionStatus {
+  state: string;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * The real companion, unpinned or pinned, given one `host` request: the statuses it sent, in order,
+ * up to the first that settles the session. Bounded, and killed on the way out.
+ */
+async function companionHosts(
+  serverUrl: string,
+  root: string,
+  wire?: 'selvage/1' | 'selvage/2',
+): Promise<CompanionStatus[]> {
+  const child = spawn(
+    process.execPath,
+    ['--no-warnings', resolve(ROOT, 'companion', 'main.ts')],
+    { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+  let buffer = '';
+  const statuses: CompanionStatus[] = [];
+  try {
+    return await new Promise<CompanionStatus[]>((resolvePromise, reject) => {
+      const expired = setTimeout(() => {
+        reject(
+          new Error(
+            `the companion settled nothing in ${DEADLINE_MS}ms: ${JSON.stringify(statuses)}`,
+          ),
+        );
+      }, DEADLINE_MS);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        buffer += chunk;
+        for (;;) {
+          const newline = buffer.indexOf('\n');
+          if (newline === -1) {
+            break;
+          }
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          let message: { type?: string } & CompanionStatus;
+          try {
+            message = JSON.parse(line) as { type?: string } & CompanionStatus;
+          } catch {
+            continue;
+          }
+          if (message.type !== 'status') {
+            continue;
+          }
+          statuses.push(message);
+          if (message.state === 'hosting' || message.state === 'error') {
+            clearTimeout(expired);
+            resolvePromise(statuses);
+            return;
+          }
+        }
+      });
+      child.on('error', reject);
+      child.stdin.write(
+        `${JSON.stringify({ type: 'host', serverUrl, root, ...(wire === undefined ? {} : { wire }) })}\n`,
+      );
+    });
+  } finally {
+    child.stdin.end();
+    child.kill('SIGKILL');
+  }
+}
+
+/**
+ * What a server that seats `selvage/1` alone does to an unpinned host: `/meta` answers, and the
+ * room it would mint is one the server can read, so the connection refuses rather than take it —
+ * locally, before it dials anything. The pin below mints on the same server, which is what tells a
+ * refusal from a server that was simply not there.
+ */
+async function proveTheAntiDowngradeRefusal(workspace: string): Promise<void> {
+  log('starting a selvage/1-only selvaged: a /meta that does not seat the encrypted wire');
+  const only1 = await RealServer.start({ serveVersion1Only: true });
+  try {
+    const refused = await companionHosts(only1.wsBase, workspace);
+    log('the unpinned host was answered', JSON.stringify(refused));
+    // One status and no `connecting`: the refusal is decided from `/meta` and sent where the
+    // attempt was made, so nothing was ever dialled — which is what makes it a refusal rather
+    // than a connection that failed.
+    const last = refused.at(-1);
+    if (refused.length !== 1 || last?.state !== 'error' || last.code !== 'wire_version_refused') {
+      throw new Error(`an unpinned host was not refused by /meta: ${JSON.stringify(refused)}`);
+    }
+    if (refused.some((status) => status.state === 'hosting')) {
+      throw new Error('an unpinned host minted a room the server can read');
+    }
+    if (!(last.message ?? '').includes('selvage/1')) {
+      throw new Error(`the refusal does not say what the server offers: ${last.message ?? ''}`);
+    }
+
+    const pinned = await companionHosts(only1.wsBase, workspace, 'selvage/1');
+    if (pinned.at(-1)?.state !== 'hosting') {
+      throw new Error(`the pinned host minted nothing on the same server: ${JSON.stringify(pinned)}`);
+    }
+    log('the pinned version-1 host minted on the same server, and the unpinned one refused');
+  } finally {
+    await only1.stop();
+  }
 }
 
 function existsInvite(path: string): boolean {
