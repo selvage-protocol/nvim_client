@@ -21,8 +21,48 @@ import type { Notification, Request } from './ipc.ts';
  * credential for as long as the room lives, so the file is written for its owner alone. The mode
  * applies to a file this creates; one that is already there keeps the mode it has, and a trace a
  * person kept from an earlier session is theirs to leave as it is.
+ *
+ * A `selvage/2` invite carries more than the token. `§5.1`'s fragment is the room key every frame
+ * of the room is sealed under and the host's public key, and a client **MUST NOT** log it: a trace
+ * outlives the room, and a file holding the key decrypts whatever the operator kept beside it. The
+ * keys are no part of what a trace is for — the order the messages crossed in needs the types, the
+ * ids and the addresses — so the invite is written without its fragment.
  */
 const traceFile = process.env['SELVAGE_COMPANION_LOG'];
+
+/**
+ * A link with its fragment taken off. `§5.1`'s keys are everything after the first `#`, encoded
+ * or not, so nothing has to be decoded or guessed to remove them; a `#` no scheme precedes is
+ * some other text — a document's own content, which a trace is for reading as it stands — and is
+ * returned unchanged.
+ */
+function withoutFragment(text: string): string {
+  const hash = text.indexOf('#');
+  if (hash === -1 || !text.slice(0, hash).includes('://')) {
+    return text;
+  }
+  return `${text.slice(0, hash)}#redacted`;
+}
+
+/**
+ * A message as it is written to the trace: the one member either direction can carry a link in is
+ * `invite`, and every other member is written as it stands. A document's text crosses this pipe
+ * too, and a trace that rewrote it would misrepresent what the room holds.
+ */
+function redacted(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redacted(item));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([name, item]) => [
+      name,
+      name === 'invite' && typeof item === 'string' ? withoutFragment(item) : redacted(item),
+    ]),
+  );
+}
 
 function trace(direction: '>' | '<', payload: unknown): void {
   if (traceFile === undefined || traceFile === '') {
@@ -31,7 +71,7 @@ function trace(direction: '>' | '<', payload: unknown): void {
   try {
     appendFileSync(
       traceFile,
-      `${new Date().toISOString()} ${String(process.pid)} ${direction} ${JSON.stringify(payload)}\n`,
+      `${new Date().toISOString()} ${String(process.pid)} ${direction} ${JSON.stringify(redacted(payload))}\n`,
       { mode: 0o600 },
     );
   } catch {
@@ -63,11 +103,13 @@ const reader = new LineReader((line) => {
   try {
     parsed = JSON.parse(line);
   } catch (error: unknown) {
-    warn(`ignoring a line that is not JSON: ${error instanceof Error ? error.message : line}`);
+    warn(
+      `ignoring a line that is not JSON: ${error instanceof Error ? error.message : withoutFragment(line)}`,
+    );
     return;
   }
   if (!isRequest(parsed)) {
-    warn(`ignoring a message that is not a request: ${line}`);
+    warn(`ignoring a message that is not a request: ${withoutFragment(line)}`);
     return;
   }
   const request: Request = parsed;

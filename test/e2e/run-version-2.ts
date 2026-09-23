@@ -128,6 +128,9 @@ async function main(): Promise<void> {
   const guestAckFile = resolve(RUN_DIR, 'guest-edit-seen.txt');
   const hostResultFile = resolve(RUN_DIR, 'host-result.json');
   const guestResultFile = resolve(RUN_DIR, 'guest-result.json');
+  // The host's companion writes its IPC trace here. `§5.1`'s fragment is the room's own key, and
+  // a trace outlives the room, so this file is read below as well as written.
+  const hostTraceFile = resolve(RUN_DIR, 'host-companion.log');
 
   const sharedEnv: Record<string, string> = {
     SELVAGE_E2E_PLUGIN_ROOT: ROOT,
@@ -147,6 +150,7 @@ async function main(): Promise<void> {
       ...sharedEnv,
       SELVAGE_E2E_RESULT_FILE: hostResultFile,
       SELVAGE_E2E_SERVER_URL: server.wsBase,
+      SELVAGE_COMPANION_LOG: hostTraceFile,
     },
     resolve(RUN_DIR, 'host.log'),
   );
@@ -172,6 +176,8 @@ async function main(): Promise<void> {
     throw new Error(`the invite is not a page link with §5.1's fragment: ${invite}`);
   }
   log('the host is inviting with a page link whose fragment carries both keys');
+  const fragment = invite.slice(invite.indexOf('#') + 1);
+  const roomKey = /(?:^|&)k=([^&]+)/.exec(fragment)?.[1] ?? '';
 
   const guestRun = runInstance(
     'guest',
@@ -240,6 +246,28 @@ async function main(): Promise<void> {
   if (!onDisk.includes(MARKER_GUEST)) {
     throw new Error(`the host's file does not hold the guest's edit: ${JSON.stringify(onDisk)}`);
   }
+
+  // `§5.1`: the fragment is the room key every frame is sealed under and the host's public key, and
+  // a client **MUST NOT** log it. The host's companion ran with `SELVAGE_COMPANION_LOG` set to a
+  // file in this run, so what is read here is the file a trace really is rather than one a test
+  // built: the invite line has to be in it, and the keys have to be nowhere in it.
+  const trace = readFileSync(hostTraceFile, 'utf8');
+  const excerpt = trace.length > 600 ? `${trace.slice(0, 600)}…` : trace;
+  if (!trace.includes('"state":"hosting"')) {
+    throw new Error(`the trace does not hold the hosting status the invite travels in: ${excerpt}`);
+  }
+  for (const [what, secret] of [
+    ["the invite's fragment", fragment],
+    ['the room key', roomKey],
+  ] as const) {
+    if (secret !== '' && trace.includes(secret)) {
+      throw new Error(`${what} is in the trace the host's companion wrote: ${excerpt}`);
+    }
+  }
+  if (!trace.includes('#redacted')) {
+    throw new Error(`the trace holds no redacted invite: ${excerpt}`);
+  }
+  log("the host's own companion traced the invite with its fragment redacted out");
 
   log('a version-2 host and guest exchanged an edit through a real server, both directions');
 }

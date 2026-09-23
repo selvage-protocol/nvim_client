@@ -11,7 +11,15 @@
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -1913,3 +1921,56 @@ test(
   },
 );
 
+
+test(
+  "the trace never holds an invite's fragment",
+  { timeout: 30_000 },
+  async () => {
+    // `§5.1`: a `selvage/2` invite's fragment carries the room key and the host's public key, and a
+    // client **MUST NOT** log it. The invite crosses this pipe twice — the front-end's `join` and
+    // the host's own `status` — and both are written through the same redaction, keyed on the
+    // member a link travels in, so a real link sent in is the whole of what this pins.
+    const scratch = mkdtempSync(join(SCRATCH, 'trace-'));
+    const file = join(scratch, 'companion.log');
+    const roomKey = 'FgWuVJM2nsQn9DqDaRVQ4c2LmdmK3XWbczlKBUHu57A';
+    const hostKey = 'dQAm9nhUso4fDxMD3qDBfVQ9kojiU03k4PonWTjEla4';
+    const invite = `ws://127.0.0.1:1/session?room=r-trace&token=t#k=${roomKey}&h=${hostKey}`;
+    const child = spawn(
+      process.execPath,
+      [join(resolve(import.meta.dirname, '..'), 'companion', 'main.ts')],
+      {
+        env: { ...process.env, SELVAGE_COMPANION_LOG: file },
+        stdio: ['pipe', 'pipe', 'ignore'],
+      },
+    );
+    try {
+      // A document's own text crosses this pipe too, and one of its `#`es is not a link's: what the
+      // trace records about a document has to be the text the room holds.
+      const carried = 'a # b';
+      child.stdin.end(
+        `${JSON.stringify({ type: 'open', path: 'notes.md', text: carried })}\n` +
+          `${JSON.stringify({ type: 'join', invite })}\n`,
+      );
+      assert.equal(await exit_of(child), 0, 'the companion left when its input ended');
+
+      const written = readFileSync(file, 'utf8');
+      assert.notEqual(written.includes(roomKey), true, 'the room key reached the trace');
+      assert.notEqual(written.includes(hostKey), true, "the host's public key reached the trace");
+      // The link itself is still there: what a trace is for is the order the messages crossed in,
+      // and an invite's address and token are part of that record.
+      assert.equal(
+        written.includes(`"invite":"ws://127.0.0.1:1/session?room=r-trace&token=t#redacted"`),
+        true,
+        `the invite is not in the trace as a redacted link:\n${written}`,
+      );
+      assert.equal(
+        written.includes(`"text":${JSON.stringify(carried)}`),
+        true,
+        `a document's own text was rewritten by the redaction:\n${written}`,
+      );
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  },
+);
