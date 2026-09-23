@@ -175,6 +175,9 @@ local MESSAGES = {
   { 'INFO', 'the "vim.g.selvage_server_url" setting fixes the server at %s; change it in your config to use a different one.' },
   -- The list of participants.
   { 'WARN', 'no other participants yet.' },
+  -- The role a `selvage/2` room's state gives this connection (§13.4): a viewer's documents
+  -- are the room's and its own edit is never published (§13.9).
+  { 'WARN', 'you are a viewer in this room, so its documents are read-only.' },
   -- What the room's own reports say.
   { 'INFO', '%s is back — the session continues.' },
   { 'WARN', 'the room is gone (%s).' },

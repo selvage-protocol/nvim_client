@@ -291,8 +291,43 @@ The copy carries `selvage/2`'s session layer with the rest of the engine — `ve
 is `CANONICAL.md` §6.1's bytes, `vendor/engine/peer.ts` is `PROTOCOL.md` §13, `vendor/engine/host.ts`
 is §7.1's producer half, the room state the host key seals and the rule for each state that goes out,
 and `vendor/engine/crypto.ts` is the crypto seam a caller supplies, because a page has neither
-`node:crypto` nor a synchronous one. This client speaks `selvage/1`: nothing here drives those
-modules yet, and `vendor/engine/index.ts` exports them for the adapter that will.
+`node:crypto` nor a synchronous one.
+
+### Sessions at `selvage/2`
+
+This companion drives both versions. `companion/session.ts` picks one per request through the
+`EngineFactory` seam it already had; `companion/relay.ts` is the version-2 half, and it is small on
+purpose: the socket wiring lives in `vendor/engine/relay.ts`, the adapter's own vocabulary in
+`vendor/bridge/peer-engine.ts`, and what is left for this repository is its own socket (`ws`) and its
+own listing. The crypto seam is the engine's default, WebCrypto — Node 22.18 has it globally, so
+this repository carries no Node-only crypto of its own.
+
+What a person does:
+
+- **Host.** Start `selvaged --serve-version-2`, and set `vim.g.selvage_wire_version = 2` (or
+  `'2'`, or `'selvage/2'`) before `:SelvageHost <address>`. Unset means `selvage/1`, which is what
+  every published client speaks. The address, the folder and the invite are unchanged.
+- **Join.** Nothing: paste the link. A `selvage/2` invite carries the room key and the host key on
+  its fragment, and a client that cannot read them cannot join the room at all, so the link is the
+  version the join speaks. A link with no fragment is a `selvage/1` join, as it always was.
+- **Copy the invite.** Unchanged, and it now carries the fragment: the page link this client hands
+  on is the same room, token and two keys as the connection's own wire invite.
+- **Everything else** — `:SelvageOpen`, the mirror, `:SelvageFetch`, `:SelvagePeers`, follow,
+  cursors — is the same code over the same bridge, so it works in a version-2 room without being
+  told which version it is in.
+
+**A viewer's editor is read-only.** A `selvage/2` room's state assigns roles (`§13.4`), and a
+connection seated as `viewer` gets the room's documents with `modifiable` off: `§13.9` has a viewer
+publish no content, so a buffer that accepted a keystroke would show text the room never receives.
+The role is the room's to give and the state's to say, and leaving gives the buffers back. This
+client declares `guest` and has no command to ask for the other role: what a host does with the
+state is a later phase's, and a client that could ask to be a viewer would be inventing a request
+the protocol does not have.
+
+**What is not carried.** The listing a `selvage/2` host publishes is sealed into the room state by
+its host key, so it is lost when the process ends; this client runs no resume (`§9.1`), so there is
+no returning host to continue the `issued` series from and no `HostStore` is written. §13.11's
+per-receiver caps are unimplemented, as they are in the reference client.
 
 ## Commands
 
@@ -500,6 +535,7 @@ npm test                    # the companion, against a replica with no server be
 scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plus actionlint
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
+scripts/e2e/run-version-2.sh      # the same two instances over selvage/2, a real selvaged --serve-version-2
 
 nix flake check             # the same three suites, plus the built package, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks

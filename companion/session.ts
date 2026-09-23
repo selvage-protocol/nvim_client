@@ -16,6 +16,8 @@ import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engin
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant } from './grant.ts';
 import { isRequest } from './ipc.ts';
+import { hostVersion2, joinVersion2, wireVersionOf } from './relay.ts';
+import type { ListingSource } from './relay.ts';
 import type { Notification, Request } from './ipc.ts';
 
 /**
@@ -63,10 +65,21 @@ export interface EngineFactory {
   join(invite: string, displayName: string): Promise<CompanionEngine>;
 }
 
+/**
+ * The `selvage/2` half, kept apart from the version-1 factory because it is handed one thing
+ * more: a host's listing, which `§7.1` seals into the room state rather than the server keeping.
+ */
+export interface Wire2Factory {
+  host(serverUrl: string, displayName: string, listing: ListingSource): Promise<CompanionEngine>;
+  join(invite: string, displayName: string): Promise<CompanionEngine>;
+}
+
 export const realEngines: EngineFactory = {
   host: (serverUrl, displayName) => SelvageEngine.host(serverUrl, displayName),
   join: (invite, displayName) => SelvageEngine.join(invite, displayName),
 };
+
+export const realWire2: Wire2Factory = { host: hostVersion2, join: joinVersion2 };
 
 /**
  * A document the front-end has opened whose text the room has not sent yet: the text it was
@@ -86,6 +99,11 @@ export interface CompanionOptions {
   editor?: NvimEditorHost;
   engines?: EngineFactory;
   /**
+   * The `selvage/2` factories. A test supplies its own for the same reason it supplies an
+   * `engines`: the room behind them is real, and what a test is about is what this process does.
+   */
+  wire2?: Wire2Factory;
+  /**
    * How the shared folder is read. `enumerateGrant` in a real session; a test supplies one whose
    * completion it decides, because a walk that outlasts the window a burst is gathered in is the
    * only way to see two of them in flight at once.
@@ -103,6 +121,7 @@ export interface CompanionOptions {
 export class Companion {
   private readonly send: (notification: Notification) => void;
   private readonly engines: EngineFactory;
+  private readonly wire2: Wire2Factory;
   private readonly enumerate: (root: string) => Promise<string[]>;
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
@@ -144,6 +163,7 @@ export class Companion {
     this.send = options.send;
     this.editor = options.editor ?? new NvimEditorHost({ send: this.send });
     this.engines = options.engines ?? realEngines;
+    this.wire2 = options.wire2 ?? realWire2;
     this.enumerate = options.enumerate ?? enumerateGrant;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
@@ -162,19 +182,40 @@ export class Companion {
     }
     switch (request.type) {
       case 'host': {
+        // Which version a new room is minted at is the host's own choice, and it is the only one
+        // it could make: a version-2 room's state is sealed by this connection's host key, and a
+        // version-1 room's grant is the server's. `vim.g.selvage_wire_version` says which.
+        const version2 = request.wire === 'selvage/2';
         await this.connect(
           'host',
-          () => this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
+          () =>
+            version2
+              ? this.hosting2(
+                  request.serverUrl,
+                  request.displayName ?? this.defaultName,
+                  request.root,
+                )
+              : this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
           request.autoSave,
           request.root,
+          version2,
         );
         break;
       }
       case 'join': {
+        // Which version a join speaks is the link's to say and not a setting's: `§5.1`'s
+        // fragment carries the room key and the host key, and a room pinned to `selvage/2` seats
+        // no connection that cannot read them.
+        const version2 = wireVersionOf(request.invite) === 'selvage/2';
         await this.connect(
           'join',
-          () => this.engines.join(request.invite, request.displayName ?? this.defaultName),
+          () =>
+            version2
+              ? this.wire2.join(request.invite, request.displayName ?? this.defaultName)
+              : this.engines.join(request.invite, request.displayName ?? this.defaultName),
           request.autoSave,
+          undefined,
+          version2,
         );
         break;
       }
@@ -428,6 +469,7 @@ export class Companion {
     open: () => Promise<CompanionEngine>,
     autoSave?: boolean,
     root?: string,
+    version2 = false,
   ): Promise<void> {
     const live = this.engine;
     if (live !== undefined) {
@@ -545,9 +587,55 @@ export class Companion {
     this.grantRoot = session.role === 'host' ? root : undefined;
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
-      this.publishGrant(root);
+      // A `selvage/2` host published the listing before this point — the state it sealed at mint
+      // carries it — so its first reading is the one already in the room, and the watcher starts
+      // from it rather than publishing the same tree again. A `selvage/1` host publishes here,
+      // because a version-1 room's grant is the server's to hold and this is the frame that puts
+      // it there.
+      if (!version2) {
+        this.publishGrant(root);
+      }
       this.watchGrant(root);
     }
+  }
+
+  /**
+   * Opens a `selvage/2` room as its host, with the shared folder's own reading as its first
+   * listing.
+   *
+   * `§7.1` seals a state from the listing rather than the server holding one, so the walk has to
+   * come before the mint: a host that minted first would put an empty tree in front of its first
+   * guest, and a room that grants nothing is a different room from one whose listing is late.
+   */
+  private async hosting2(
+    serverUrl: string,
+    displayName: string,
+    root?: string,
+  ): Promise<CompanionEngine> {
+    const listing: ListingSource = {
+      current: () => this.grantedListing ?? [],
+      replace: (paths) => {
+        this.grantedListing = [...paths];
+      },
+    };
+    if (root !== undefined && root !== '') {
+      try {
+        listing.replace(await this.enumerate(root));
+      } catch (error: unknown) {
+        // A folder this process cannot read is not a reason to refuse the room: the host's
+        // listing is empty until it can be read, and the walk's own failure is reported by
+        // `publishGrant`, which the watcher runs on the next change.
+        this.send({
+          type: 'report',
+          report: {
+            kind: 'sessionError',
+            code: 'error',
+            message: `could not read the folder this session shares: ${describe(error)}`,
+          },
+        });
+      }
+    }
+    return this.wire2.host(serverUrl, displayName, listing);
   }
 
   /**

@@ -49,9 +49,18 @@ export class RealServer {
     this.wsBase = `ws://${address}`;
   }
 
-  static async start(): Promise<RealServer> {
+  /**
+   * Starts a server on an ephemeral loopback port. `serveVersion2` adds `--serve-version-2`, which
+   * seats `selvage/2` too: a room is pinned to the version its minting connection spoke either
+   * way, so a version-1 proof is unaffected by a server that also offers the other one.
+   */
+  static async start(options: { serveVersion2?: boolean } = {}): Promise<RealServer> {
     const binary = selvagedBinary();
-    const child = spawn(binary, ['--listen', '127.0.0.1:0'], {
+    const args = ['--listen', '127.0.0.1:0'];
+    if (options.serveVersion2 === true) {
+      args.push('--serve-version-2');
+    }
+    const child = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return new Promise<RealServer>((resolve_, reject) => {
