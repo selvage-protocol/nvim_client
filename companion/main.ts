@@ -109,7 +109,10 @@ const reader = new LineReader((line) => {
     return;
   }
   if (!isRequest(parsed)) {
-    warn(`ignoring a message that is not a request: ${withoutFragment(line)}`);
+    // The parsed value, redacted by member name, and not the line: `withoutFragment` reads the
+    // first `#`, so a member before `invite` that carries one of its own leaves an invite's
+    // fragment in the warning.
+    warn(`ignoring a message that is not a request: ${JSON.stringify(redacted(parsed))}`);
     return;
   }
   const request: Request = parsed;
