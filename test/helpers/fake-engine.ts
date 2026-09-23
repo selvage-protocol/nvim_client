@@ -24,6 +24,13 @@ export class FakeEngine implements CompanionEngine {
   readonly grants: string[][] = [];
   /** What this replica holds of the room's grant, as a `doc.granted` would have left it. */
   granted: string[] = [];
+  /**
+   * When set, a published listing is echoed back the way a real server's `doc.granted` is: the
+   * replica holds it and the bridge reports the change to the front-end. A room whose listing was
+   * never published has nothing to echo, so a host that sent no `doc.grant` is visible from the
+   * guest's side as well as from `grants`.
+   */
+  echoGrants = false;
   /** When set, the next `grant` rejects with it — the way a refused listing reaches a caller. */
   grantError: Error | undefined;
   /** When set, the next `rename` rejects with it — the way a refused name reaches a caller. */
@@ -136,6 +143,10 @@ export class FakeEngine implements CompanionEngine {
     this.grants.push([...paths]);
     const error = this.grantError;
     this.grantError = undefined;
+    if (error === undefined && this.echoGrants) {
+      this.granted = [...paths];
+      this.emit({ type: 'grantChanged', paths: [...paths] });
+    }
     return error === undefined ? Promise.resolve() : Promise.reject(error);
   }
 

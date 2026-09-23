@@ -88,6 +88,17 @@ function harness(
      * test about what this companion does with an answer supplies the answer.
      */
     meta?: MetaReader;
+    /**
+     * When set, every `selvage/2` mint this harness is asked for throws it, the way a dead
+     * address or a server that refuses the version-2 hello reaches the session. No engine is
+     * built for a mint that did not happen.
+     */
+    wire2MintFails?: Error;
+    /**
+     * Whether the replica echoes a published listing back the way a real server's `doc.granted`
+     * does. Off by default: a test that is not about the grant report should not be handed one.
+     */
+    echoGrants?: boolean;
   } = {},
 ): Harness {
   const sent: Notification[] = [];
@@ -103,6 +114,7 @@ function harness(
     const engine = new FakeEngine(role, documents, peers);
     engine.granted = [...(options.granted ?? [])];
     engine.grantError = options.grantError;
+    engine.echoGrants = options.echoGrants ?? false;
     engines.push(engine);
     return engine;
   };
@@ -128,6 +140,9 @@ function harness(
     wire2: {
       host: (serverUrl) => {
         hosts2.push(serverUrl);
+        if (options.wire2MintFails !== undefined) {
+          return Promise.reject(options.wire2MintFails);
+        }
         return Promise.resolve(open());
       },
       join: (invite) => {
@@ -1142,6 +1157,17 @@ function refusals(it: Harness): string[] {
     .map((notification) => (notification.report as { message: string }).message);
 }
 
+/** The `grant` listings the front-end was handed, in the order the companion reported them. */
+function grantReports(it: Harness): string[][] {
+  return it.sent
+    .filter(
+      (notification): notification is Extract<Notification, { type: 'report' }> =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'grant',
+    )
+    .map((notification) => (notification.report as { paths: string[] }).paths);
+}
+
 // The read is real file system work, which lands on a later turn of the event loop than a drain
 // of the microtask queue ever reaches: `until` is the wait for it, and `settle` is only enough
 // for work that is already resolved.
@@ -1611,6 +1637,58 @@ test('the folder is published again by the next session', async (t) => {
   );
   assert.notEqual(it.engine, first, 'a second session is a second room');
   assert.deepEqual(it.engine.grants, [['notes.txt']]);
+});
+
+test('a version-2 mint that failed leaves no listing behind for the next host', async (t) => {
+  const root = folder(t);
+  tree(root, 'one.txt', 'one\n');
+  tree(root, 'two.txt', 'two\n');
+
+  // The first attempt walks the folder and then dies at the mint — a dead address, or a server
+  // that refuses the version-2 hello. It never opened a room, so the walk is not a listing
+  // anything holds.
+  const failed = harness('host', [], [], {
+    wire2MintFails: new Error('the WebSocket reported an error'),
+    echoGrants: true,
+  });
+  await failed.companion.handle({ type: 'host', wire: 'selvage/2', serverUrl: 'ws://127.0.0.1:1', root });
+  assert.deepEqual(failed.hosts2, ['ws://127.0.0.1:1'], 'the version-2 attempt reached the mint');
+  assert.deepEqual(
+    statuses(failed).map((status) => status.state),
+    ['connecting', 'error'],
+    'a mint that threw is reported and leaves nothing standing',
+  );
+
+  // The recovery a person follows: pin version 1 and host the same folder again. The room is
+  // minted, so it has to be told what it shares — and the listing the room echoes back is what
+  // the guest sees.
+  await failed.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the folder this host shares to reach the room',
+    () => failed.engine.grants.length > 0,
+    () => ({ listed: failed.engine.grants, reported: grantReports(failed) }),
+  );
+  assert.deepEqual(failed.engine.grants, [['one.txt', 'two.txt']], 'the room was told nothing');
+  // The first report is the handshake's own, before the listing was published; the second is the
+  // listing the room echoed back, which is what a guest's front-end is handed. A host that sent no
+  // `doc.grant` leaves the guest looking at an empty room and the front-end with the first alone.
+  assert.deepEqual(
+    grantReports(failed),
+    [[], ['one.txt', 'two.txt']],
+    'and the front-end was handed no listing either',
+  );
+
+  // The control: the same single version-1 host with no failed attempt before it publishes the
+  // same listing, so the assertions above are about the failed mint and not about the harness.
+  const control = harness('host', [], [], { echoGrants: true });
+  await control.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the control host to publish the folder',
+    () => control.engine.grants.length > 0,
+    () => control.engine.grants,
+  );
+  assert.deepEqual(control.engine.grants, [['one.txt', 'two.txt']]);
+  assert.deepEqual(grantReports(control), [[], ['one.txt', 'two.txt']]);
 });
 
 test('a folder a session has left is not published by the next one', async (t) => {

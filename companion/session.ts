@@ -672,16 +672,24 @@ export class Companion {
    * `§7.1` seals a state from the listing rather than the server holding one, so the walk has to
    * come before the mint: a host that minted first would put an empty tree in front of its first
    * guest, and a room that grants nothing is a different room from one whose listing is late.
+   *
+   * The walk is held in this attempt's own scope until the room that seals it exists. A mint can
+   * throw — a dead address, a server that refuses the version-2 hello — and a listing written into
+   * the session's own field before that would outlive the attempt: `publishGrant` compares against
+   * what it holds, so the next `selvage/1` host of the same folder would find it unchanged and
+   * send no `doc.grant` at all. A room the mint sealed a state from holds the walk; one that never
+   * minted holds nothing.
    */
   private async hosting2(
     serverUrl: string,
     displayName: string,
     root?: string,
   ): Promise<CompanionEngine> {
+    let walked: readonly string[] = [];
     const listing: ListingSource = {
-      current: () => this.grantedListing ?? [],
+      current: () => walked,
       replace: (paths) => {
-        this.grantedListing = [...paths];
+        walked = [...paths];
       },
     };
     if (root !== undefined && root !== '') {
@@ -701,7 +709,11 @@ export class Companion {
         });
       }
     }
-    return this.wire2.host(serverUrl, displayName, listing);
+    const engine = await this.wire2.host(serverUrl, displayName, listing);
+    // The state the mint sealed carries this listing, so the room has been handed it: from here
+    // it is what `publishGrant` compares a fresh walk against.
+    this.grantedListing = [...walked];
+    return engine;
   }
 
   /**
