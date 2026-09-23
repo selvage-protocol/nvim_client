@@ -37,9 +37,14 @@ export type Request =
       autoSave?: boolean;
       root?: string;
       /**
-       * The version this room is minted at. Absent means `selvage/1`, which is what every
-       * published client speaks; `selvage/2` seals its states under this connection's host key
-       * and is reached by the front-end's own setting (`vim.g.selvage_wire_version`).
+       * The wire version this room is pinned to, or absent for a front-end that has pinned
+       * nothing. A pin is deliberate and outranks the server: `selvage/1` hosts a room the server
+       * can read, `selvage/2` the encrypted one. Without one the server's `/meta` decides — this
+       * process mints `selvage/2` where it is seated, refuses locally rather than falling back to
+       * the readable wire where it is not, and attempts it where `/meta` could not be read
+       * (`PROTOCOL.md` §2, §10). The front-end's own setting is the pin
+       * (`vim.g.selvage_wire_version`); a join never consults either, because it speaks the
+       * version the invite link names (§5.1).
        */
       wire?: 'selvage/1' | 'selvage/2';
     }
@@ -100,9 +105,12 @@ export type Notification =
       message?: string;
       /**
        * The protocol's own code for a failure the server named (an `error` frame, a refused
-       * handshake). Absent for a failure nothing named — a socket that never got there. It is
-       * the code and not the message that a front-end says a refusal by: the server's message
-       * carries the values it refused about, which are not what a person acts on.
+       * handshake), or `wire_version_refused` for the one refusal this process decides itself —
+       * the version a host asked for that the server's `/meta` does not seat. Absent for a
+       * failure nothing named — a socket that never got there. It is the code and not the
+       * message that a front-end says a refusal by: the server's message carries the values it
+       * refused about, which are not what a person acts on, where a version refusal's message is
+       * already the whole sentence and is shown as it stands.
        */
       code?: string;
     }

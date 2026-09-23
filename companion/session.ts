@@ -11,14 +11,32 @@ import { watch, type FSWatcher } from 'node:fs';
 
 import { SessionBridge } from '../vendor/bridge/index.ts';
 import type { Engine, TextChange } from '../vendor/bridge/index.ts';
-import { SelvageEngine, code as errCode, isProtocolError } from '../vendor/engine/index.ts';
+import {
+  SelvageEngine,
+  code as errCode,
+  fetchMeta,
+  hostVersion,
+  isProtocolError,
+} from '../vendor/engine/index.ts';
+import type { HostDecision, Meta, WireVersion } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant } from './grant.ts';
 import { isRequest } from './ipc.ts';
-import { hostVersion2, joinVersion2, wireVersionOf } from './relay.ts';
+import { WIRE_VERSION_2, hostVersion2, joinVersion2, wireVersionOf } from './relay.ts';
 import type { ListingSource } from './relay.ts';
 import type { Notification, Request } from './ipc.ts';
+
+/** The readable wire, the version a room the server can read is minted at. */
+const WIRE_VERSION_1: WireVersion = 'selvage/1';
+
+/**
+ * The code a version refusal carries. It is not the protocol's: no server said it, and there is no
+ * server in it — the refusal is this process's own decision, taken before anything was dialled — so
+ * a front-end reads it as such and shows the sentence that comes with it rather than one about a
+ * connection.
+ */
+export const WIRE_VERSION_REFUSED = 'wire_version_refused';
 
 /**
  * How long a burst of file-system events is gathered for before the shared folder is read again.
@@ -116,7 +134,17 @@ export interface CompanionOptions {
    * what that leaves for a front-end that says nothing.
    */
   autoSave?: boolean;
+  /**
+   * Reads the server's `/meta` before a host, or `undefined` for one that could not be read. The
+   * default is the real endpoint, best effort; a test supplies its own for the same reason it
+   * supplies an `engines`: what it is about is what this process does with the answer, and a
+   * process in a test should not dial one.
+   */
+  meta?: MetaReader;
 }
+
+/** How a server's `/meta` is read: the body, or `undefined` when it could not be read at all. */
+export type MetaReader = (baseUrl: string) => Promise<Meta | undefined>;
 
 export class Companion {
   private readonly send: (notification: Notification) => void;
@@ -126,6 +154,7 @@ export class Companion {
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
   private readonly autoSave: boolean;
+  private readonly readMeta: MetaReader;
   private engine?: CompanionEngine;
   private bridge?: SessionBridge;
   /** Documents the front-end has opened whose text the room has not sent yet — see `open`. */
@@ -167,6 +196,7 @@ export class Companion {
     this.enumerate = options.enumerate ?? enumerateGrant;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
+    this.readMeta = options.meta ?? readMetaBestEffort;
   }
 
   /**
@@ -182,14 +212,24 @@ export class Companion {
     }
     switch (request.type) {
       case 'host': {
-        // Which version a new room is minted at is the host's own choice, and it is the only one
-        // it could make: a version-2 room's state is sealed by this connection's host key, and a
-        // version-1 room's grant is the server's. `vim.g.selvage_wire_version` says which.
-        const version2 = request.wire === 'selvage/2';
+        // Which version a new room is minted at is the server's to say and the front-end's to pin
+        // (`PROTOCOL.md` §2): a client that can speak `selvage/2` mints it where `/meta` seats it,
+        // refuses locally rather than falling back where the list is reachable and holds nothing
+        // at that major, and attempts it where `/meta` could not be read. A pin outranks the list
+        // both ways, and a pin the server does not seat is refused rather than fallen back from.
+        if (this.refuseWhileLive('host')) {
+          break;
+        }
+        const decided = hostVersion(await this.readMeta(request.serverUrl), request.wire);
+        if (decided.outcome === 'refuse') {
+          this.refuseVersion(request.serverUrl, decided);
+          break;
+        }
+        const version = decided.version;
         await this.connect(
           'host',
           () =>
-            version2
+            version === WIRE_VERSION_2
               ? this.hosting2(
                   request.serverUrl,
                   request.displayName ?? this.defaultName,
@@ -198,7 +238,7 @@ export class Companion {
               : this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
           request.autoSave,
           request.root,
-          version2,
+          version,
         );
         break;
       }
@@ -206,16 +246,16 @@ export class Companion {
         // Which version a join speaks is the link's to say and not a setting's: `§5.1`'s
         // fragment carries the room key and the host key, and a room pinned to `selvage/2` seats
         // no connection that cannot read them.
-        const version2 = wireVersionOf(request.invite) === 'selvage/2';
+        const version = wireVersionOf(request.invite);
         await this.connect(
           'join',
           () =>
-            version2
+            version === WIRE_VERSION_2
               ? this.wire2.join(request.invite, request.displayName ?? this.defaultName)
               : this.engines.join(request.invite, request.displayName ?? this.defaultName),
           request.autoSave,
           undefined,
-          version2,
+          version,
         );
         break;
       }
@@ -456,24 +496,50 @@ export class Companion {
   }
 
   /**
+   * Refuses a request while a session is live, and says which room still stands. Which session a
+   * person gives up, and whether they meant to, is a question only the front-end can ask — the
+   * front-end refuses a second host or join before it sends one. This process is the engine's
+   * host, so a request that arrives anyway is refused and said so, rather than obeyed: opening a
+   * second session would end the first behind the front-end's back, and the host of a room would
+   * lose it to a mistyped address. True when the request was answered that way.
+   */
+  private refuseWhileLive(what: 'host' | 'join'): boolean {
+    const live = this.engine;
+    if (live === undefined) {
+      return false;
+    }
+    this.send({ type: 'refused', what, roomId: live.session().roomId });
+    return true;
+  }
+
+  /**
+   * Says a local refusal of the version a host asked for, in the front-end's own words. It is a
+   * failure of the session rather than of a connection — this process never dialled anything — so
+   * it is a `status` the front-end shows and not a report of a room that was joined.
+   */
+  private refuseVersion(
+    address: string,
+    refusal: Extract<HostDecision, { outcome: 'refuse' }>,
+  ): void {
+    this.send({
+      type: 'status',
+      state: 'error',
+      code: WIRE_VERSION_REFUSED,
+      message: hostVersionRefusal(address, refusal),
+    });
+  }
+
+  /**
    * Opens a session, unless one is live.
-   *
-   * Which session a person gives up, and whether they meant to, is a question only the
-   * front-end can ask — the front-end refuses a second host or join before it sends one. This
-   * process is the engine's host, so a request that arrives anyway is refused and said so,
-   * rather than obeyed: opening a second session would end the first behind the front-end's
-   * back, and the host of a room would lose it to a mistyped address.
    */
   private async connect(
     what: 'host' | 'join',
     open: () => Promise<CompanionEngine>,
     autoSave?: boolean,
     root?: string,
-    version2 = false,
+    version: WireVersion = WIRE_VERSION_1,
   ): Promise<void> {
-    const live = this.engine;
-    if (live !== undefined) {
-      this.send({ type: 'refused', what, roomId: live.session().roomId });
+    if (this.refuseWhileLive(what)) {
       return;
     }
     this.send({ type: 'status', state: 'connecting' });
@@ -592,7 +658,7 @@ export class Companion {
       // from it rather than publishing the same tree again. A `selvage/1` host publishes here,
       // because a version-1 room's grant is the server's to hold and this is the frame that puts
       // it there.
-      if (!version2) {
+      if (version !== WIRE_VERSION_2) {
         this.publishGrant(root);
       }
       this.watchGrant(root);
@@ -804,6 +870,40 @@ export class Companion {
 /** Whether two listings name the same paths, in the same order. */
 function sameListing(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
+/**
+ * What the server's `/meta` answers, or `undefined` when it could not be read at all —
+ * unreachable, not JSON, no fetch. Best effort by design: the endpoint is advisory and the
+ * handshake reports the truth, so a body that could not be read decides nothing (`PROTOCOL.md`
+ * §10).
+ */
+async function readMetaBestEffort(baseUrl: string): Promise<Meta | undefined> {
+  try {
+    return await fetchMeta(baseUrl);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What a local refusal says: the server it names, the version that server does not seat, and what
+ * it seats instead, in `/meta`'s own words. It is the sentence the other client shows, without the
+ * `Selvage: ` wrapper each editor adds in its own spelling — the two clients say one sentence, and
+ * where the version a room is minted at comes from is not a thing to learn twice.
+ */
+function hostVersionRefusal(
+  address: string,
+  refusal: Extract<HostDecision, { outcome: 'refuse' }>,
+): string {
+  // A `/meta` that named no version at all cannot happen here — a body with no versions is not an
+  // answer, and `hostVersion` reads it as one that decides nothing — but a front-end told "its
+  // /meta offers " with nothing after it reads as a truncated message.
+  const offered = refusal.offered.length === 0 ? 'nothing' : refusal.offered.join(', ');
+  if (refusal.reason === 'pin-not-seated') {
+    return `the wire version is pinned to ${refusal.pin}, and ${address} does not seat it — its /meta offers ${offered} — so hosting there is refused rather than fallen back from.`;
+  }
+  return `${address} does not seat selvage/2, the encrypted wire — its /meta offers ${offered} — so a room hosted there would be one the server can read.`;
 }
 
 /** A failure as a sentence: the message of an Error, or whatever was thrown instead. */
