@@ -2126,3 +2126,63 @@ test(
     }
   },
 );
+
+// -- a warning about a refused line ----------------------------------------------------
+//
+// A line that is JSON but not a request is refused with a word, and what that word is for is
+// naming which member or type was wrong — not recording what the line held. A `selvage/2`
+// invite's fragment is the room's key (§5.1) and a client **MUST NOT** log it, so the warning
+// prints the parsed value through the same member-keyed redaction the trace uses.
+// `withoutFragment` reads only the first `#`, so a member before `invite` that carries one of
+// its own left the fragment standing.
+
+test(
+  "a warning about a refused line never carries an invite's fragment",
+  { timeout: 30_000 },
+  async () => {
+    const roomKey = 'FgWuVJM2nsQn9DqDaRVQ4c2LmdmK3XWbczlKBUHu57A';
+    const hostKey = 'dQAm9nhUso4fDxMD3qDBfVQ9kojiU03k4PonWTjEla4';
+    const invite = `ws://127.0.0.1:1/session?room=r-warn&token=t#k=${roomKey}&h=${hostKey}`;
+    // `display_name` comes before `invite` and carries a `#` of its own, which is what
+    // `withoutFragment` reads as the fragment's start: it returns the line unchanged, fragment
+    // and all, and the invite is not a request.
+    const line = JSON.stringify({ display_name: 'a#b', invite });
+    const child = spawn(
+      process.execPath,
+      [join(resolve(import.meta.dirname, '..'), 'companion', 'main.ts')],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    let said = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      said += chunk;
+    });
+    try {
+      child.stdin?.write(`${line}\n`);
+      await until(
+        'the refusal to be said',
+        () => said.includes('ignoring a message that is not a request: '),
+        () => said,
+      );
+
+      assert.notEqual(said.includes(roomKey), true, `the room key reached the warning:\n${said}`);
+      assert.notEqual(
+        said.includes(hostKey),
+        true,
+        `the host's public key reached the warning:\n${said}`,
+      );
+      // The link is still there, as in the trace: the address is what names the message that was
+      // wrong, and it is not the secret.
+      assert.equal(
+        said.includes(`"invite":"ws://127.0.0.1:1/session?room=r-warn&token=t#redacted"`),
+        true,
+        `the refused line was not reported with its address:\n${said}`,
+      );
+
+      child.stdin?.end();
+      assert.equal(await exit_of(child), 0, 'the companion left when its input ended');
+    } finally {
+      child.kill('SIGKILL');
+    }
+  },
+);
