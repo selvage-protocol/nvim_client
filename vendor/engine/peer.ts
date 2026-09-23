@@ -392,6 +392,16 @@ export class PeerSession {
   /** The clock of the most recent tick or delivery, which a queued frame is stamped with. */
   private clockOfLastMove = 0;
   private readonly outbound: Uint8Array[] = [];
+  /**
+   * Whether the socket under this session is gone and no new one has taken its place (§9.1).
+   *
+   * The session key a dropped connection held is not one the room will commit again, so an edit
+   * sealed under it now is a frame every peer refuses `uncommitted_key`. A detached session
+   * therefore publishes nothing — what it would have sent goes to {@link unsent} instead, and the
+   * state that commits the re-seat's key flushes it — and keeps nothing queued for the socket
+   * that went (see {@link detach}).
+   */
+  private detached = false;
   private readonly held = new Set<string>();
   private holdsSent: string[] = [];
   private holdsAnnouncedAt: number | undefined;
@@ -944,6 +954,7 @@ export class PeerSession {
         return;
       }
       this.session = session;
+      this.detached = false;
       this.seat = seat;
       this.roster = new Set(roster);
       const previousAwareness = this.awareness.clientID;
@@ -1377,8 +1388,23 @@ export class PeerSession {
 
   /** Whether §13.1's step 4 lets this client publish anything but its announcement. */
   private mayPublish(): boolean {
-    // A session that has ended publishes nothing, whichever ending reached it (§13.10).
-    return this.ending === undefined && this.stateHeld() && this.commitsOurs();
+    // A session that has ended publishes nothing, whichever ending reached it (§13.10), and one
+    // whose socket is gone publishes nothing under the key that socket held (§9.1).
+    return !this.detached && this.ending === undefined && this.stateHeld() && this.commitsOurs();
+  }
+
+  /**
+   * The socket under this session is gone: it keeps its replica and its holds, and publishes
+   * nothing under the key the dead connection held until {@link reseat} seats a new one (§9.1).
+   *
+   * What that socket left queued goes with it, and here rather than at the re-seat: those frames
+   * are sealed under the key being left, and a re-dial that has the new socket before the re-seat
+   * has run would put them on it — where every peer refuses them, and where the edit they carry
+   * is not in {@link unsent} to be published later.
+   */
+  detach(): void {
+    this.detached = true;
+    this.outbound.splice(0, this.outbound.length);
   }
 
   /** §13.1's step 4: the session-key announcement, `kind = 4`, signed by the key it names. */
