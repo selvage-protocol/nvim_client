@@ -196,6 +196,9 @@ receives, with the time and the process id. The plugin and the companion are two
 end's log cannot show the order the messages crossed in. A `selvage/2` invite's fragment is not in
 the file: `§5.1` has the room key and the host key travel there, a client **MUST NOT** log them, and
 the invite is written without it — the address and the token stay, which is what the log is for.
+A line the companion refuses is said on stderr the same way: the warning names the member that was
+wrong through the same redaction, rather than quoting the line it read, so the fragment has no more
+of a way out there than into the log.
 
 ### Remote cursors
 
