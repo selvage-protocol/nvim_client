@@ -2527,6 +2527,54 @@ check('  and sharing it does not make it editable', vim.bo[protected_buf].modifi
 selvage.leave()
 check('  and leaving leaves it as it was', vim.bo[protected_buf].modifiable, false)
 
+-- The host case above does not reach the held flag: a host's buffer is never held, so
+-- `set_read_only(false)` finds `held_modifiable == nil` and does nothing, and the check passes
+-- because nobody touched it. A viewer holds it, and a buffer the person had already made
+-- uneditable is the value that tells a restore from an unconditional `true`.
+
+local held_path = '.tmp/lua-viewer-held.txt'
+vim.fn.delete(held_path)
+for index = #sent, 1, -1 do
+  table.remove(sent, index)
+end
+
+selvage.join(
+  'ws://127.0.0.1:1/session?room=r-held&token=t#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&h=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+)
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-held' })
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { held_path } } })
+
+local held_buf = nil
+for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  if name:sub(-#held_path) == held_path then
+    held_buf = bufnr
+  end
+end
+check("a viewer has a buffer for the room's document", held_buf ~= nil, true)
+
+vim.bo[held_buf].modifiable = false
+handlers().on_message({ type = 'report', report = { kind = 'role', role = 'viewer' } })
+check('  held read-only from a buffer that already was', vim.bo[held_buf].modifiable, false)
+
+handlers().on_message({
+  type = 'applyEdit',
+  id = 8,
+  path = held_path,
+  start = 0,
+  ['end'] = 0,
+  text = "the room's own text",
+  version = 0,
+})
+check(
+  "  and it still takes the room's text",
+  table.concat(vim.api.nvim_buf_get_lines(held_buf, 0, -1, true), '\n'),
+  "the room's own text"
+)
+
+selvage.leave()
+check('  and leaving puts back the false it found', vim.bo[held_buf].modifiable, false)
+
 vim.notify = notify
 
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
