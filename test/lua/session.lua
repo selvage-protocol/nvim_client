@@ -310,7 +310,20 @@ check(
 )
 check(
   '  and not behind a sentence about a connection that was never made',
-  said_since(before_refused_invite, 'No server answered') == nil,
+  said_since(before_refused_invite, 'could not join the session') == nil,
+  true
+)
+-- The code is what that sentence turns on: the same message with no code at all is what every
+-- socket failure leaves, and the front-end reads one of those as a server that did not answer.
+local before_codeless = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  message = '`k` is not a 32-byte key in the fragment\'s encoding',
+})
+check(
+  '  where the same failure with no code reads as a server that did not answer',
+  said_since(before_codeless, 'No server answered — check the invite is complete, and that the server is running at the address it names.') ~= nil,
   true
 )
 selvage.leave()
