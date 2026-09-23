@@ -1,7 +1,11 @@
 /**
  * The two-real-instance convergence proof: two independent headless Neovim processes, each
  * loading the real plugin out of this checkout and starting its own real companion process,
- * one hosting and one joining over a real `selvaged`, editing the same document.
+ * one hosting and one joining over a real `selvaged`, editing the same document. The room is a
+ * `selvage/1` one: this proof is about two windows converging, and the wire version is a
+ * different proof next door (`test/e2e/run-version-2.ts`, `scripts/e2e/run-version-2.sh`). The
+ * hosting window pins `selvage/1` in `test/e2e/host.lua`, because a `selvaged` on its defaults
+ * seats both versions and an unpinned host would mint the encrypted one instead.
  *
  * Nothing here is a stub. The only things this file does itself are start the server, hand the
  * two Neovims a scratch directory and a file to pass the invite through, and compare what they
@@ -398,6 +402,18 @@ async function main(): Promise<void> {
     throw error;
   });
   log('phase 1 converged in both editors');
+
+  // The room this proof is about is a `selvage/1` one, and this is where that is checked rather
+  // than assumed: the hosting window pins the version (`test/e2e/host.lua`), and a pin nobody
+  // reads is not evidence — an unpinned host against a `selvaged` on its defaults would mint the
+  // encrypted room and converge just as well, which is the one way this proof could quietly
+  // become the other proof. The link is where the version shows: `§5.1`'s fragment is what a
+  // sealed invite carries and a readable one does not.
+  const invite = readFileSync(inviteFile, 'utf8').trim();
+  if (invite.includes('#')) {
+    throw new Error(`the room is not a selvage/1 one; its invite carries a fragment: ${invite}`);
+  }
+  log('the room is selvage/1:', invite);
 
   // The guest opens a granted path the host never opened. The guest writes the control file once
   // its own copy of that file's text has arrived and it has written into it, so the host's half

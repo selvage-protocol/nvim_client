@@ -261,6 +261,34 @@ check(
 check('  and still not its code', said_since(before_full, 'x.room_full') == nil, true)
 selvage.leave()
 
+-- The companion's own refusal of a wire version: it is decided before anything is dialled, so
+-- there is no connection to describe. The sentence the companion sends names the server and the
+-- version it does not seat, and it is the whole of what a person reads — wrapping it in `could
+-- not host on <address>.` would be a sentence about a dial that never happened.
+selvage.host('ws://127.0.0.1:1')
+local before_refused_version = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'wire_version_refused',
+  message = 'ws://127.0.0.1:1 does not seat selvage/2, the encrypted wire — its /meta offers selvage/1 — so a room hosted there would be one the server can read.',
+})
+check(
+  'a version the server does not seat is said as the companion wrote it',
+  said_since(
+    before_refused_version,
+    'selvage: ws://127.0.0.1:1 does not seat selvage/2, the encrypted wire — its /meta offers selvage/1 — so a room hosted there would be one the server can read.'
+  ) ~= nil,
+  true
+)
+check(
+  '  and not behind a sentence about a connection that was never made',
+  said_since(before_refused_version, 'could not host on') == nil,
+  true
+)
+check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
+selvage.leave()
+
 -- -- a guest has the room's document put in front of it -----------------------
 --
 -- The room path is the host's working directory plus the path within it — a VS Code host

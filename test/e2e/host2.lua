@@ -2,10 +2,11 @@
 --
 --   nvim --headless -l test/e2e/host2.lua
 --
--- A real Neovim, the real plugin, a real companion process, a real `selvaged --serve-version-2`
--- and, on the far side, a second Neovim. It hosts at version 2 because `vim.g.selvage_wire_version`
--- says so, hands the invite on through a file, and then makes and waits for edits with bounded
--- deadlines — the two directions the version's own handshake is what makes possible.
+-- A real Neovim, the real plugin, a real companion process, a real `selvaged` on its defaults,
+-- which seat both versions — and, on the far side, a second Neovim. It hosts at version 2 because
+-- `vim.g.selvage_wire_version` pins it there, hands the invite on through a file, and then makes
+-- and waits for edits with bounded deadlines — the two directions the version's own handshake is
+-- what makes possible.
 --
 -- It needs none of the version-1 driver's phases: no grant, no mirror, no reconnect. What is being
 -- proved is the version, and a phase that is not about the version would be a second proof with the

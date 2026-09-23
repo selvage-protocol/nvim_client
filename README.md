@@ -113,7 +113,7 @@ A first session:
 
 1. Start `selvaged` and note the address it prints.
 2. `:SelvageHost` shares the current buffer. Answer its one question with that address (the host
-   alone is enough, since `selvage.dontblameme.dev` means `wss://selvage.dontblameme.dev`), and
+   alone is enough, since `selvage-demo.dontblameme.dev` means `wss://selvage-demo.dontblameme.dev`), and
    the invite link goes on the clipboard as the room opens.
 3. Send the link. The other person runs `:SelvageJoin <invite>`, which joins the room and opens its
    first document.
@@ -150,7 +150,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 
 | Plugin → companion | |
 |---|---|
-| `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the host publishes its listing to the room, republishes it when the folder changes, and serves a path from it when a peer asks. |
+| `host {serverUrl, displayName?, autoSave?, root?, wire?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the host publishes its listing to the room, republishes it when the folder changes, and serves a path from it when a peer asks. `wire` is the version this host is pinned to, absent for a front-end that has pinned nothing. |
 | `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
 | `leave {}` | End the session; the process stays up. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
@@ -165,7 +165,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
-| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `code` is the protocol's own code for a failure the server named, and is absent for one nothing named. |
+| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `code` is the protocol's own code for a failure the server named, or `wire_version_refused` for the version a host asked for that the server's `/meta` does not seat, which is this process's own refusal before it dials anything; it is absent for a failure nothing named. |
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about; the room named is the one still standing. |
 | `report {report}` | The bridge's own report: the room's documents, its grant, peers, a divergence, a refusal, or a connection the engine gave up re-establishing. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
@@ -304,12 +304,20 @@ this repository carries no Node-only crypto of its own.
 
 What a person does:
 
-- **Host.** Start `selvaged --serve-version-2`, and set `vim.g.selvage_wire_version = 2` (or
-  `'2'`, or `'selvage/2'`) before `:SelvageHost <address>`. Unset means `selvage/1`, which is what
-  every published client speaks. The address, the folder and the invite are unchanged.
-- **Join.** Nothing: paste the link. A `selvage/2` invite carries the room key and the host key on
-  its fragment, and a client that cannot read them cannot join the room at all, so the link is the
-  version the join speaks. A link with no fragment is a `selvage/1` join, as it always was.
+- **Host.** Set `vim.g.selvage_wire_version` to pin the room's version, and leave it unset to let
+  the server decide. Unset — or anything no version spelling accepts, the `'auto'` the other client
+  names its default with included — pins nothing, and the companion reads the server's `/meta`
+  before it mints anything: a server that seats `selvage/2` gets a `selvage/2` room, one whose
+  `/meta` answers without it is refused with an explanation and no connection at all, and a `/meta`
+  that could not be read is no answer — the companion attempts `selvage/2` and lets the handshake
+  refuse out loud (`PROTOCOL.md` §2, §10). `selvage/1` (or `'1'`, or `'selvage/1'`) is the pin for a
+  room the server can read, `2` (or `'2'`, or `'selvage/2'`) for the encrypted one, and a pin the
+  server does not seat is refused rather than fallen back from. The address, the folder and the
+  invite are otherwise unchanged.
+- **Join.** Nothing, and the setting is not consulted: paste the link. A `selvage/2` invite carries
+  the room key and the host key on its fragment, and a client that cannot read them cannot join the
+  room at all, so the link is the version the join speaks. A link with no fragment is a
+  `selvage/1` join, as it always was.
 - **Copy the invite.** Unchanged, and it now carries the fragment: the page link this client hands
   on is the same room, token and two keys as the connection's own wire invite.
 - **Everything else** — `:SelvageOpen`, the mirror, `:SelvageFetch`, `:SelvagePeers`, follow,
@@ -535,7 +543,7 @@ npm test                    # the companion, against a replica with no server be
 scripts/ci-local.sh all     # the same commands as .github/workflows/ci.yml, plus actionlint
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
-scripts/e2e/run-version-2.sh      # the same two instances over selvage/2, a real selvaged --serve-version-2
+scripts/e2e/run-version-2.sh      # the same two instances over selvage/2, the host pinned there
 
 nix flake check             # the same three suites, plus the built package, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks

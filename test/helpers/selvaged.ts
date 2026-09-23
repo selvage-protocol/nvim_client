@@ -50,15 +50,16 @@ export class RealServer {
   }
 
   /**
-   * Starts a server on an ephemeral loopback port. `serveVersion2` adds `--serve-version-2`, which
-   * seats `selvage/2` too: a room is pinned to the version its minting connection spoke either
-   * way, so a version-1 proof is unaffected by a server that also offers the other one.
+   * Starts a server on an ephemeral loopback port. The default seats both wire versions, which is
+   * what `selvaged` does now and what `/meta` advertises; `serveVersion1Only` adds
+   * `--serve-version-1-only`, which narrows it to `selvage/1` alone. A room is pinned to the
+   * version that minted it either way.
    */
-  static async start(options: { serveVersion2?: boolean } = {}): Promise<RealServer> {
+  static async start(options: { serveVersion1Only?: boolean } = {}): Promise<RealServer> {
     const binary = selvagedBinary();
     const args = ['--listen', '127.0.0.1:0'];
-    if (options.serveVersion2 === true) {
-      args.push('--serve-version-2');
+    if (options.serveVersion1Only === true) {
+      args.push('--serve-version-1-only');
     }
     const child = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],

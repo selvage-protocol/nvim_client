@@ -2897,11 +2897,21 @@ local hand_on_invite
 --- `connect` names which of the two this was — `{ what = 'host', address = … }` or
 --- `{ what = 'join' }` — because the two say different sentences.
 ---
+--- The one failure that is neither: a wire version the server's `/meta` does not seat, which
+--- the companion refuses before it dials anything (`PROTOCOL.md` §2, §10). There is no
+--- connection to describe, and the companion's message is already that whole sentence — the
+--- server, the version it does not seat and what it offers instead — so it is said as it
+--- stands rather than behind a sentence about a dial that never happened.
+---
 --- @param connect table|nil `what` and, for a host, `address`
---- @param code string|nil the protocol's own code for a refusal, absent for a socket
+--- @param code string|nil the protocol's own code for a refusal — or the companion's own, for the
+--- version refusal above — absent for a socket
 --- @param message string|nil the failure's own words
 --- @return string
 local function connect_failure(connect, code, message)
+  if code == 'wire_version_refused' then
+    return tostring(message or '')
+  end
   local what = connect and connect.what or 'join'
   local why
   if code == 'room_unknown' then
@@ -3603,7 +3613,7 @@ end
 
 --- The address the engine dials, from whatever was typed in a server-address position.
 ---
---- A person types a host, not a URL: `selvage.dontblameme.dev` means the published shape,
+--- A person types a host, not a URL: `selvage-demo.dontblameme.dev` means the published shape,
 --- which is TLS, so a bare address means `wss://<host>`. The endpoint path is not part of a
 --- server address — the engine appends `/session` to the base it is given — so an address that
 --- already names the endpoint loses it, or the room would be dialled at `/session/session`,
@@ -3674,19 +3684,26 @@ end
 --- Whether a document the room changes is written. Nothing is sent when the plugin's global says
 --- nothing, so the companion's own default — write it — stands, as the other client's setting
 --- defaults to on.
---- The version a hosted room is minted at: `vim.g.selvage_wire_version`, which is `2` (or
---- `selvage/2`) for a `selvage/2` room and anything else — including unset, which is what every
---- published client is — for `selvage/1`.
+---
+--- The version a host is pinned to: `vim.g.selvage_wire_version`, which is `1` (or `'1'`, or
+--- `'selvage/1'`) for the readable wire and `2` (or `'2'`, or `'selvage/2'`) for the encrypted one.
+--- Anything else — including unset, and the `'auto'` the other client spells its default with —
+--- pins nothing, and the server's `/meta` decides: a client that can speak `selvage/2` mints it
+--- where the server seats it, and is refused rather than fallen back to `selvage/1` where it does
+--- not, so a room the server can read is asked for deliberately or not at all.
 ---
 --- It is a host's setting and not a guest's. A join speaks the version the *link* names, because
 --- the `selvage/2` invite's fragment is the room key and the host key: a client that cannot read
 --- them cannot join the room at all, and one that can has been told which version to speak.
-local function wire_version()
+local function pinned_wire_version()
   local configured = vim.g.selvage_wire_version
   if configured == 2 or configured == '2' or configured == 'selvage/2' then
     return 'selvage/2'
   end
-  return 'selvage/1'
+  if configured == 1 or configured == '1' or configured == 'selvage/1' then
+    return 'selvage/1'
+  end
+  return nil
 end
 
 local function auto_save()
@@ -4034,7 +4051,7 @@ function M.host(url)
           displayName = display_name,
           autoSave = auto_save(),
           root = state.root,
-          wire = wire_version(),
+          wire = pinned_wire_version(),
         })
       end
     end)

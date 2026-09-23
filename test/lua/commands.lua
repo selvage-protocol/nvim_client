@@ -228,7 +228,7 @@ vim.g.selvage_server_url = nil
 
 -- -- a typed address is completed, not refused ---------------------------------------
 --
--- A person types a host, not a URL. `selvage.dontblameme.dev` is the published shape — TLS, and
+-- A person types a host, not a URL. `selvage-demo.dontblameme.dev` is the published shape — TLS, and
 -- the engine's own `/session` — while an address that already names the endpoint keeps it from
 -- being dialled twice (`/session/session` is nobody's server), and a path someone typed is
 -- theirs and is left alone. `:SelvageChangeServer` completes what it is given and reports the
@@ -236,29 +236,29 @@ vim.g.selvage_server_url = nil
 
 local remembered_file = vim.fs.joinpath(vim.fn.stdpath('data'), 'selvage', 'last_server')
 
-vim.cmd('SelvageHost selvage.dontblameme.dev')
+vim.cmd('SelvageHost selvage-demo.dontblameme.dev')
 check(
   'a bare host means the TLS server',
   last_of('host') and last_of('host').serverUrl,
-  'wss://selvage.dontblameme.dev'
+  'wss://selvage-demo.dontblameme.dev'
 )
-vim.cmd('SelvageHost selvage.dontblameme.dev/')
+vim.cmd('SelvageHost selvage-demo.dontblameme.dev/')
 check(
   '  a trailing slash is not a second server',
   last_of('host') and last_of('host').serverUrl,
-  'wss://selvage.dontblameme.dev'
+  'wss://selvage-demo.dontblameme.dev'
 )
-vim.cmd('SelvageHost wss://selvage.dontblameme.dev/session')
+vim.cmd('SelvageHost wss://selvage-demo.dontblameme.dev/session')
 check(
   '  an address that names the endpoint is dialled once',
   last_of('host') and last_of('host').serverUrl,
-  'wss://selvage.dontblameme.dev'
+  'wss://selvage-demo.dontblameme.dev'
 )
-vim.cmd('SelvageHost wss://selvage.dontblameme.dev/prefix')
+vim.cmd('SelvageHost wss://selvage-demo.dontblameme.dev/prefix')
 check(
   '  a path someone typed is kept',
   last_of('host') and last_of('host').serverUrl,
-  'wss://selvage.dontblameme.dev/prefix'
+  'wss://selvage-demo.dontblameme.dev/prefix'
 )
 vim.cmd('SelvageHost ws://127.0.0.1:1234')
 check(
@@ -273,29 +273,29 @@ check(
 )
 
 before = #notices
-vim.cmd('SelvageChangeServer selvage.dontblameme.dev')
+vim.cmd('SelvageChangeServer selvage-demo.dontblameme.dev')
 check(
   'changing the server completes a bare host the same way',
-  said_since(before, 'will host on wss://selvage.dontblameme.dev next.') ~= nil,
+  said_since(before, 'will host on wss://selvage-demo.dontblameme.dev next.') ~= nil,
   true
 )
 check(
   '  and writes the completed address down',
   table.concat(vim.fn.readfile(remembered_file), '\n'),
-  'wss://selvage.dontblameme.dev'
+  'wss://selvage-demo.dontblameme.dev'
 )
 before = #notices
 prompted = nil
 vim.cmd('SelvageChangeServer')
 check(
   '  a bare :SelvageChangeServer reports it completed too',
-  said_since(before, 'the next host uses wss://selvage.dontblameme.dev.') ~= nil,
+  said_since(before, 'the next host uses wss://selvage-demo.dontblameme.dev.') ~= nil,
   true
 )
 check(
   '  and its box starts from what would be dialled',
   prompted and prompted.default,
-  'wss://selvage.dontblameme.dev'
+  'wss://selvage-demo.dontblameme.dev'
 )
 
 -- The box's answer is completed like an argument is: what the command reports is the address
@@ -537,7 +537,7 @@ check(
 check('  and nothing is dialled for it either', count_type('join'), joins_before)
 
 -- A truncated page link is refused the same way, before any dial.
-answer_with('https://selvage.dontblameme.dev/?room=r-one')
+answer_with('https://selvage-demo.dontblameme.dev/?room=r-one')
 joins_before = count_type('join')
 before = #notices
 vim.cmd('SelvageJoin')
@@ -597,7 +597,7 @@ check('  with nothing dialled', count_type('join'), joins_before)
 -- always makes, and it fails here rather than at the server.
 joins_before = count_type('join')
 before = #notices
-vim.cmd('SelvageJoin https://selvage.dontblameme.dev/?room=r-one')
+vim.cmd('SelvageJoin https://selvage-demo.dontblameme.dev/?room=r-one')
 check(
   'a truncated page link argument is refused too',
   said_since(before, 'that does not look like a Selvage invite link') ~= nil,
@@ -647,6 +647,57 @@ check('  and on', last_of('host') and last_of('host').autoSave, true)
 vim.g.selvage_auto_save = nil
 vim.cmd('SelvageHost ws://127.0.0.1:1')
 check('  and an unset global puts nothing on the wire', vim.json.encode(last_of('host')):find('autoSave'), nil)
+
+
+-- -- the wire version a host is pinned to ------------------------------------------------
+--
+-- `PROTOCOL.md` §2: an unpinned client that can speak `selvage/2` mints it where the server's
+-- `/meta` seats it, so the global is a *pin* and not a default. Nothing rides in the request for a
+-- front-end that has pinned nothing — the companion asks the server and decides — and a join is
+-- untouched: the version a join speaks is the link's, whatever this says.
+
+local function carries_wire(kind)
+  return vim.json.encode(last_of(kind)):find('"wire"', 1, true) ~= nil
+end
+
+vim.g.selvage_wire_version = 2
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('the number two pins the encrypted wire', last_of('host') and last_of('host').wire, 'selvage/2')
+
+vim.g.selvage_wire_version = '2'
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  and so does its string form', last_of('host') and last_of('host').wire, 'selvage/2')
+
+vim.g.selvage_wire_version = 'selvage/2'
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  and the spelling the protocol uses', last_of('host') and last_of('host').wire, 'selvage/2')
+
+vim.g.selvage_wire_version = 1
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('the number one pins the readable wire', last_of('host') and last_of('host').wire, 'selvage/1')
+
+vim.g.selvage_wire_version = 'selvage/1'
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  and its spelled form too', last_of('host') and last_of('host').wire, 'selvage/1')
+
+vim.g.selvage_wire_version = 'auto'
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check("  and the other client's default of 'auto' pins nothing", carries_wire('host'), false)
+
+vim.g.selvage_wire_version = true
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  and neither does a value no version grammar accepts', carries_wire('host'), false)
+
+vim.g.selvage_wire_version = nil
+vim.cmd('SelvageHost ws://127.0.0.1:1')
+check('  and an unset global pins nothing', carries_wire('host'), false)
+
+vim.g.selvage_wire_version = 'selvage/2'
+local joins_before_pin = count_type('join')
+vim.cmd('SelvageJoin ws://127.0.0.1:1/session?room=r-pin&token=t')
+check('a join goes out with the pin set', count_type('join'), joins_before_pin + 1)
+check('  and carries no version', carries_wire('join'), false)
+vim.g.selvage_wire_version = nil
 
 
 -- -- a session being opened -----------------------------------------------------------
@@ -820,13 +871,13 @@ check(
 -- A TLS room links at its own https origin: this is the link a person sends, and the page it
 -- opens dials the same host. There is no second address for it to name, which is what a page
 -- setting used to be — and how a room on one server came to be linked at another's page.
-report_status('hosting', 'r-tls', 'wss://selvage.dontblameme.dev/session?room=r-tls&token=ttls')
+report_status('hosting', 'r-tls', 'wss://selvage-demo.dontblameme.dev/session?room=r-tls&token=ttls')
 registers = {}
 vim.cmd('SelvageCopyInvite')
 check(
   '  a TLS room links at its own page',
   registers['+'],
-  'https://selvage.dontblameme.dev/?room=r-tls&token=ttls'
+  'https://selvage-demo.dontblameme.dev/?room=r-tls&token=ttls'
 )
 
 -- A server behind a prefix keeps it: the page is served where the socket is answered.
@@ -901,14 +952,14 @@ check('  and a refused join', said_since(before, 'already in a session; leave th
 -- reached the room over `ws://` has no page for it, so that link is what it passes on.
 
 selvage.leave()
-vim.cmd('SelvageJoin https://selvage.dontblameme.dev/?room=r-page&token=tpage')
+vim.cmd('SelvageJoin https://selvage-demo.dontblameme.dev/?room=r-page&token=tpage')
 report_status('joined', 'r-page')
 registers = {}
 vim.cmd('SelvageCopyInvite')
 check(
   'a guest joined by page link copies that link',
   registers['+'],
-  'https://selvage.dontblameme.dev/?room=r-page&token=tpage'
+  'https://selvage-demo.dontblameme.dev/?room=r-page&token=tpage'
 )
 check('  and the unnamed register too', registers['"'], registers['+'])
 
