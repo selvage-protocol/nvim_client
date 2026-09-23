@@ -105,12 +105,15 @@ export type Notification =
       message?: string;
       /**
        * The protocol's own code for a failure the server named (an `error` frame, a refused
-       * handshake), or `wire_version_refused` for the one refusal this process decides itself —
-       * the version a host asked for that the server's `/meta` does not seat. Absent for a
-       * failure nothing named — a socket that never got there. It is the code and not the
-       * message that a front-end says a refusal by: the server's message carries the values it
-       * refused about, which are not what a person acts on, where a version refusal's message is
-       * already the whole sentence and is shown as it stands.
+       * handshake) — or one of the two refusals this process decides itself. `wire_version_refused`
+       * is the version a host asked for that the server's `/meta` does not seat;
+       * `invite_refused` is a link whose fragment this client will not read, refused locally
+       * before a socket is opened (`PROTOCOL.md` §5.1). Both are absent for a failure nothing
+       * named — a socket that never got there.
+       *
+       * It is the code and not the message that a front-end says a refusal by: the server's message
+       * carries the values it refused about, which are not what a person acts on, where a local
+       * refusal's message is already the whole sentence and is shown as it stands.
        */
       code?: string;
     }

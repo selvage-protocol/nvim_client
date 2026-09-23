@@ -289,6 +289,32 @@ check(
 check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
 selvage.leave()
 
+-- And the companion's own refusal of a link it will not read: `§5.1`'s fragment is where a
+-- version-2 room's two keys travel, and a link whose keys are missing or misspelled is refused
+-- locally, before a socket is opened. The engine's sentence says what is wrong with the link, and
+-- it is the whole of what a person reads: the failure carries no code of the protocol's, so a
+-- front-end that treated it as a connection that failed would replace it with a sentence about a
+-- server that never answered.
+selvage.join('ws://127.0.0.1:1/session?room=r-refused&token=t#k=short&h=short')
+local before_refused_invite = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'invite_refused',
+  message = '`k` is not a 32-byte key in the fragment\'s encoding',
+})
+check(
+  'a link the companion will not read is said as the engine wrote it',
+  said_since(before_refused_invite, 'selvage: `k` is not a 32-byte key in the fragment\'s encoding') ~= nil,
+  true
+)
+check(
+  '  and not behind a sentence about a connection that was never made',
+  said_since(before_refused_invite, 'No server answered') == nil,
+  true
+)
+selvage.leave()
+
 -- -- a guest has the room's document put in front of it -----------------------
 --
 -- The room path is the host's working directory plus the path within it — a VS Code host

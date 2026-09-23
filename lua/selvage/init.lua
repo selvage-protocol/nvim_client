@@ -2897,19 +2897,20 @@ local hand_on_invite
 --- `connect` names which of the two this was — `{ what = 'host', address = … }` or
 --- `{ what = 'join' }` — because the two say different sentences.
 ---
---- The one failure that is neither: a wire version the server's `/meta` does not seat, which
---- the companion refuses before it dials anything (`PROTOCOL.md` §2, §10). There is no
---- connection to describe, and the companion's message is already that whole sentence — the
---- server, the version it does not seat and what it offers instead — so it is said as it
---- stands rather than behind a sentence about a dial that never happened.
+--- The two failures that are neither: a wire version the server's `/meta` does not seat, which
+--- the companion refuses before it dials anything (`PROTOCOL.md` §2, §10), and a link whose
+--- fragment it will not read (`PROTOCOL.md` §5.1). In both there is no connection to describe, and
+--- the companion's message is already the whole sentence — the server, the version it does not
+--- seat and what it offers instead; or what is wrong with the link — so each is said as it stands
+--- rather than behind a sentence about a dial that never happened.
 ---
 --- @param connect table|nil `what` and, for a host, `address`
---- @param code string|nil the protocol's own code for a refusal — or the companion's own, for the
---- version refusal above — absent for a socket
+--- @param code string|nil the protocol's own code for a refusal — or the companion's own, for one of
+--- the two local refusals above — absent for a socket
 --- @param message string|nil the failure's own words
 --- @return string
 local function connect_failure(connect, code, message)
-  if code == 'wire_version_refused' then
+  if code == 'wire_version_refused' or code == 'invite_refused' then
     return tostring(message or '')
   end
   local what = connect and connect.what or 'join'
@@ -3008,8 +3009,9 @@ local function on_status(message)
     watch_follow_window()
     refresh_indicators()
   elseif message.state == 'error' then
-    -- This state is only ever a connection that failed: the companion sends it when the open
-    -- behind a host or join throws.
+    -- A connection that failed, or a refusal the companion decided before it dialled anything:
+    -- a version the server's `/meta` does not seat (`§2`, `§10`) and a link whose fragment it will
+    -- not read (`§5.1`) both reach here, and both already carry the companion's own sentence.
     notify(connect_failure(state.connect, message.code, message.message), vim.log.levels.ERROR)
     -- Nothing is standing after it, so the row goes with the failure: the notification is
     -- what says why, and a word about a session that is not open would outlive it.

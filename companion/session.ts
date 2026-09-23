@@ -23,7 +23,13 @@ import type { HostDecision, Meta, WireVersion } from '../vendor/engine/index.ts'
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant } from './grant.ts';
 import { isRequest } from './ipc.ts';
-import { WIRE_VERSION_2, hostVersion2, joinVersion2, wireVersionOf } from './relay.ts';
+import {
+  UnreadableInvite,
+  WIRE_VERSION_2,
+  hostVersion2,
+  joinVersion2,
+  wireVersionOf,
+} from './relay.ts';
 import type { ListingSource } from './relay.ts';
 import type { Notification, Request } from './ipc.ts';
 
@@ -547,14 +553,22 @@ export class Companion {
     try {
       engine = await open();
     } catch (error: unknown) {
+      // A refusal the protocol named carries its code as well as its words: the server's
+      // message answers with values the person never chose to see — `no such room: <id>` —
+      // and the code is the same fact without them, for a front-end that says it its own way.
+      // A refusal this process decided carries its code for the mirror-image reason: a local
+      // refusal's sentence is already the whole of what there is to say, and a front-end handed
+      // it with no code reads it as a connection that failed (`§5.1`'s link, `§2`'s version).
+      const code = isProtocolError(error)
+        ? error.code
+        : error instanceof UnreadableInvite
+          ? error.code
+          : undefined;
       this.send({
         type: 'status',
         state: 'error',
         message: error instanceof Error ? error.message : String(error),
-        // A refusal the protocol named carries its code as well as its words: the server's
-        // message answers with values the person never chose to see — `no such room: <id>` —
-        // and the code is the same fact without them, for a front-end that says it its own way.
-        ...(isProtocolError(error) ? { code: error.code } : {}),
+        ...(code === undefined ? {} : { code }),
       });
       return;
     }

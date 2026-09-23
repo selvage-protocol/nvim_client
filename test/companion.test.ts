@@ -27,13 +27,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
-import { Companion, WIRE_VERSION_REFUSED } from '../companion/session.ts';
+import { Companion, WIRE_VERSION_REFUSED, realWire2 } from '../companion/session.ts';
 import type { MetaReader } from '../companion/session.ts';
-import { ProtocolError } from '../vendor/engine/index.ts';
+import { ProtocolError, parseInvite } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/envelope.ts';
 
 import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
 import type { GrantedRead } from '../vendor/bridge/index.ts';
+import { INVITE_REFUSED, wireVersionOf } from '../companion/relay.ts';
+
 import { FakeEngine } from './helpers/fake-engine.ts';
 
 /**
@@ -414,6 +416,43 @@ test('a pin the server does not seat is refused rather than fallen back from', a
   );
 });
 
+test('a link the client will not read is refused with the engine\'s own sentence', async () => {
+  // The real version-2 factories: a link whose fragment does not read is refused before anything is
+  // dialled, so this test opens no socket and needs no server — which is the property being
+  // pinned. The failure carries no code of the protocol's, and a front-end handed it as a
+  // connection that failed would replace the engine's sentence with one about a server.
+  const sent: Notification[] = [];
+  const companion = new Companion({
+    send: (notification) => sent.push(notification),
+    wire2: realWire2,
+  });
+
+  for (const invite of [
+    // Both names, a value that is not a key: the link asks for `selvage/2` and cannot be joined.
+    'ws://127.0.0.1:1/session?room=r&token=t#k=short&h=short',
+    // The same fragment on the page form a host hands on, which the engine resolves first.
+    'https://127.0.0.1:1/?room=r&token=t#k=short&h=short',
+  ]) {
+    sent.length = 0;
+    await companion.handle({ type: 'join', invite });
+    const heard = sent.filter(
+      (notification): notification is Extract<Notification, { type: 'status' }> =>
+        notification.type === 'status',
+    );
+    assert.deepEqual(
+      heard.map((status) => status.state),
+      ['connecting', 'error'],
+      `the refusal is a failed join rather than nothing at all: ${invite}`,
+    );
+    assert.equal(heard[1]?.code, INVITE_REFUSED, `the refusal carries a code: ${invite}`);
+    assert.equal(
+      heard[1]?.message,
+      "`k` is not a 32-byte key in the fragment's encoding",
+      `and the engine's own sentence for it: ${invite}`,
+    );
+  }
+});
+
 test('a join consults neither the setting nor the server: the link is the version', async () => {
   // A reader that fails the test rather than answering one: a join has nothing to ask, so a join
   // that asked would be the defect.
@@ -433,6 +472,32 @@ test('a join consults neither the setting nor the server: the link is the versio
   await byPlainLink.companion.handle({ type: 'join', invite: plain });
   assert.deepEqual(byPlainLink.joins, [plain], 'and a link with no fragment on the readable one');
   assert.deepEqual(byPlainLink.joins2, [], 'never on the encrypted one');
+});
+
+test('a fragment is read with §5.1\'s decoding, as the engine reads it', async () => {
+  // A name written `%6b` is `k`: the engine's fragment reader percent-decodes a name before it
+  // looks for one, so a chooser reading the raw spelling would send the link to the readable wire
+  // and the room it names would not be there. The two readers are asked the same question here,
+  // and a link with only one of the two names is still a version-1 link, as it always was.
+  // A key is 32 bytes in `§5.1`'s base64url, and 43 `A`s is one: 43 `a`s is not, because the final
+  // character's padding bits are not zero, so the value would be refused for the wrong reason.
+  const key = 'A'.repeat(43);
+  const encoded = `ws://127.0.0.1:1/session?room=r&token=t#%6b=${key}&h=${key}`;
+  assert.equal(
+    parseInvite(encoded).ok,
+    true,
+    'the engine reads a percent-encoded room key, which is what the chooser has to agree with',
+  );
+  assert.equal(wireVersionOf(encoded), 'selvage/2');
+  assert.equal(wireVersionOf(`ws://h/session?room=r&token=t#k=${key}&h=${key}`), 'selvage/2');
+  assert.equal(wireVersionOf(`ws://h/session?room=r&token=t#k=${key}`), 'selvage/1');
+  assert.equal(wireVersionOf('ws://h/session?room=r&token=t'), 'selvage/1');
+  assert.equal(wireVersionOf('ws://h/session?room=r&token=t#%zz=x&h=y'), 'selvage/1');
+
+  const it = harness('guest');
+  await it.companion.handle({ type: 'join', invite: encoded });
+  assert.deepEqual(it.joins2, [encoded], 'the link reached the encrypted wire');
+  assert.deepEqual(it.joins, [], 'and never the readable one');
 });
 
 test('a second host is refused rather than minting a second room', async () => {
