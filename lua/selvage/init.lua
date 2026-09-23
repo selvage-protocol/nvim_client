@@ -3613,7 +3613,7 @@ end
 
 --- The address the engine dials, from whatever was typed in a server-address position.
 ---
---- A person types a host, not a URL: `selvage.dontblameme.dev` means the published shape,
+--- A person types a host, not a URL: `selvage-demo.dontblameme.dev` means the published shape,
 --- which is TLS, so a bare address means `wss://<host>`. The endpoint path is not part of a
 --- server address — the engine appends `/session` to the base it is given — so an address that
 --- already names the endpoint loses it, or the room would be dialled at `/session/session`,

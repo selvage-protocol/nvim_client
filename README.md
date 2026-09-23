@@ -113,7 +113,7 @@ A first session:
 
 1. Start `selvaged` and note the address it prints.
 2. `:SelvageHost` shares the current buffer. Answer its one question with that address (the host
-   alone is enough, since `selvage.dontblameme.dev` means `wss://selvage.dontblameme.dev`), and
+   alone is enough, since `selvage-demo.dontblameme.dev` means `wss://selvage-demo.dontblameme.dev`), and
    the invite link goes on the clipboard as the room opens.
 3. Send the link. The other person runs `:SelvageJoin <invite>`, which joins the room and opens its
    first document.
