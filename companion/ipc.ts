@@ -123,7 +123,11 @@ export type Notification =
    * about it changed.
    */
   | { type: 'refused'; what: 'host' | 'join'; roomId: string }
-  /** The bridge's own report, passed through unchanged; `kind` says which. */
+  /**
+   * A report, `kind` saying which. The bridge's own are passed through unchanged; `role` is this
+   * process's own, and says that the room's state has given this connection a different role than
+   * the status it was told at the seat (`PROTOCOL.md` §13.4).
+   */
   | { type: 'report'; report: unknown }
   /** The remote carets this replica can resolve, in buffer offsets. */
   | { type: 'presence'; cursors: Cursor[] };

@@ -500,6 +500,34 @@ test('a fragment is read with §5.1\'s decoding, as the engine reads it', async 
   assert.deepEqual(it.joins, [], 'and never the readable one');
 });
 
+test('a role the state gives this connection after the seat reaches the front-end', async () => {
+  // `§13.4`: the role is the applied state's word about this connection's key, and the state that
+  // commits the key is published after the connection announced it — so the status sent at the seat
+  // reads the `?? 'guest'` default and a viewer that stopped there would keep an editable buffer,
+  // which for `§13.9` is worse than a refusal. The role is read where it can change instead.
+  const it = harness('guest', ['notes.txt']);
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+  const seat = statuses(it).at(-1);
+  assert.equal(seat?.state, 'joined');
+  assert.equal(seat?.role, 'guest', 'the seat is before any state has committed this key');
+  assert.deepEqual(roleReports(it), [], 'so no role has been reported yet');
+
+  // The room's state arrives and seats this connection as a viewer.
+  it.engine.setRole('viewer');
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+  assert.deepEqual(roleReports(it), ['viewer'], 'the change reached the front-end');
+
+  // The room's content arriving is an event of its own, and the role is read at each one: a state
+  // that relabelled this connection with no peer of its own to relabel raises no other event.
+  it.engine.emit({ type: 'documentChanged', path: 'notes.txt' });
+  assert.deepEqual(roleReports(it), ['viewer'], 'and nothing was said twice');
+
+  // What the state gives, it can take away.
+  it.engine.setRole('guest');
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+  assert.deepEqual(roleReports(it), ['viewer', 'guest']);
+});
+
 test('a second host is refused rather than minting a second room', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
@@ -1239,6 +1267,17 @@ function grantReports(it: Harness): string[][] {
         (notification.report as { kind: string }).kind === 'grant',
     )
     .map((notification) => (notification.report as { paths: string[] }).paths);
+}
+
+/** The roles the companion reported as this connection's own, in the order it reported them. */
+function roleReports(it: Harness): string[] {
+  return it.sent
+    .filter(
+      (notification): notification is Extract<Notification, { type: 'report' }> =>
+        notification.type === 'report' &&
+        (notification.report as { kind: string }).kind === 'role',
+    )
+    .map((notification) => (notification.report as { role: string }).role);
 }
 
 // The read is real file system work, which lands on a later turn of the event loop than a drain

@@ -187,6 +187,11 @@ export class Companion {
   /** The folder this session shares while hosting it: the listing a reclaim republishes. */
   private grantRoot?: string;
   /**
+   * The role this front-end was last told, so a report is sent when it changes rather than at every
+   * event the engine raises. It is the connection's own, from the applied state (`§13.4`).
+   */
+  private toldRole?: string;
+  /**
    * The peer id the current connection seated with. A reconnect is a new peer under the
    * same room, so a seat report under a different id is the reclaim rather than later
    * room news — the re-seat signal this engine generation carries (`reconnecting` only
@@ -320,6 +325,7 @@ export class Companion {
     this.stopWatching();
     this.grantRoot = undefined;
     this.seatedPeer = undefined;
+    this.toldRole = undefined;
     this.unarrived.clear();
     const engine = this.engine;
     this.engine = undefined;
@@ -376,7 +382,10 @@ export class Companion {
     const engine = this.engine;
     // The bridge holds a guest document back by the same rule; this deferral is here too because
     // the count an edit is offered against is the mirror's, and the mirror is `arrive`'s to make.
-    if (engine !== undefined && engine.session().role === 'guest' && !engine.has(path)) {
+    // A peer, not the room's host: a `selvage/2` room seats a `viewer` too, and a viewer is
+    // handed the room's documents exactly as a guest is — it differs in what it may publish
+    // (`§13.9`), not in what it holds, which is the same rule the front-end's `is_peer` reads.
+    if (engine !== undefined && engine.session().role !== 'host' && !engine.has(path)) {
       this.unarrived.set(path, { text, changes: [] });
       void engine
         .open(path)
@@ -576,6 +585,8 @@ export class Companion {
     // The peer id this connection seated with: a reconnect seats again under a new one,
     // which is what tells a reclaim apart from later room news below.
     this.seatedPeer = engine.session().peer.peer_id;
+    // Which role the front-end has been told is the session's own too.
+    this.toldRole = engine.session().role;
     // Which listing reports this session has produced is the session's, not the process's.
     this.grantReported = false;
     this.bridge = new SessionBridge({
@@ -594,6 +605,12 @@ export class Companion {
     // left with an engine it cannot use. The bridge's own report of them reaches the front-end
     // first — `leave` here does not know the reason, so the reason is the bridge's to say.
     const stop = engine.on((event) => {
+      // `§13.4`: the role is the applied state's word about this connection's key, and the state
+      // that commits the key is published after the connection announced it — so the status sent at
+      // the seat cannot carry it, and a role read once there is a role a viewer never learns. The
+      // sibling clients read it live at the event their engine raises for that state; here the
+      // front-end is told, and this is the moment to look.
+      this.reportRole(engine);
       if (event.type === 'grantChanged') {
         // The bridge forwards this itself, and it was constructed above, so its `grant` report
         // is already on its way: the snapshot below must not write the same listing again.
@@ -645,7 +662,7 @@ export class Companion {
     // already in front of the documents, and writing it twice would put a whole grant on the pipe
     // for nothing. The wait is what gives the bridge that chance; a room with nothing to list has
     // no report to stand down for, and the empty snapshot below is its answer.
-    if (session.role === 'guest' && session.documents.length === 0 && !this.grantReported) {
+    if (session.role !== 'host' && session.documents.length === 0 && !this.grantReported) {
       await this.settleGrant(engine);
     }
     if (!this.grantReported) {
@@ -728,6 +745,24 @@ export class Companion {
     // it is what `publishGrant` compares a fresh walk against.
     this.grantedListing = [...walked];
     return engine;
+  }
+
+  /**
+   * Tells the front-end the role this connection has now, when it is not the one it was last told.
+   *
+   * A `viewer` is the case this exists for: its buffers are read-only in the front-end, which can
+   * only act on a role it has been told, and "its documents are the room's and its keystrokes are
+   * not" is a fact about a live state (`§13.4`, `§13.9`). A role that changed with no event after it
+   * is not something this can see; every event the bridge raises passes through here, so the first
+   * one is where it is learned.
+   */
+  private reportRole(engine: CompanionEngine): void {
+    const role = engine.session().role;
+    if (role === this.toldRole) {
+      return;
+    }
+    this.toldRole = role;
+    this.send({ type: 'report', report: { kind: 'role', role } });
   }
 
   /**

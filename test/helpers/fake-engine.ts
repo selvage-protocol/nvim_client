@@ -99,6 +99,16 @@ export class FakeEngine implements CompanionEngine {
     this.info.peer = { ...this.info.peer, peer_id: peerId };
   }
 
+  /**
+   * Gives this connection another role, the way the applied state that commits its key does
+   * (`§13.4`): the role is the state's, and a state that relabels this connection raises the
+   * event a test emits beside this call.
+   */
+  setRole(role: Role): void {
+    this.info.role = role;
+    this.info.peer = { ...this.info.peer, role };
+  }
+
   session(): SessionInfo {
     return this.info;
   }
