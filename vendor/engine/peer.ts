@@ -543,6 +543,45 @@ export class PeerSession {
     // read as a participant with no caret.
     this.awareness.setLocalState(null);
     this.wireAwareness();
+    this.doc.on('afterTransaction', (transaction: Y.Transaction) => {
+      this.noteTouched(transaction);
+    });
+  }
+
+  /**
+   * The paths whose text a transaction changed, local or applied, kept until
+   * {@link takeTouched} reads them. Every change to a `Y.Text` is a transaction on this one
+   * document, so a path that is not here since the last read holds the text it held then.
+   */
+  private readonly touched = new Set<string>();
+
+  private noteTouched(transaction: Y.Transaction): void {
+    // A root type is a path's document. It is recorded whatever class it has now: content for a
+    // path this replica has not asked for yet arrives under a placeholder type, which becomes the
+    // path's `Y.Text` only when something reads it — and that swap is no transaction.
+    const roots = new Set<unknown>();
+    for (const type of transaction.changed.keys()) {
+      if (type._item === null) {
+        roots.add(type);
+      }
+    }
+    if (roots.size === 0) {
+      return;
+    }
+    // One pass over the documents, so a sync that changes many of them costs one walk and not
+    // one per changed document.
+    for (const [name, shared] of this.doc.share) {
+      if (roots.has(shared)) {
+        this.touched.add(name);
+      }
+    }
+  }
+
+  /** The paths whose text changed since the last call, and forgets them. */
+  takeTouched(): string[] {
+    const paths = [...this.touched];
+    this.touched.clear();
+    return paths;
   }
 
   /**
@@ -733,14 +772,18 @@ export class PeerSession {
     return out;
   }
 
-  /** The text this replica holds at a path, which is what a decision vector reads. */
+  /**
+   * The text this replica holds at a path, which is what a decision vector reads. Empty for a
+   * path nothing has arrived for, and reading one does not bring a document into being: see
+   * {@link has}, which an adapter asks precisely that question of.
+   */
   text(path: string): string {
-    return this.doc.getText(path).toString();
+    return this.textIfPresent(path)?.toString() ?? '';
   }
 
   /** The length of a document's text in UTF-16 code units, the unit every editor counts in. */
   length(path: string): number {
-    return this.doc.getText(path).length;
+    return this.textIfPresent(path)?.length ?? 0;
   }
 
   /** The paths this replica holds any text for: the documents that have arrived. */
@@ -754,7 +797,14 @@ export class PeerSession {
     return paths.sort();
   }
 
-  /** Whether this replica holds text for a path. */
+  /**
+   * Whether this replica has received anything at all for a path (§13.5): text the room sent,
+   * or text this window wrote into the document. A path this window only *read* — an empty
+   * buffer drawn from the room's listing — has received nothing, and an adapter that could not
+   * tell the two apart would treat the read as the room's own publication: a guest would stop
+   * holding a listed path nothing has arrived for, and a host that had read its replica would
+   * refuse to seed its working copy over it.
+   */
   has(path: string): boolean {
     return this.doc.share.has(path);
   }
@@ -1221,7 +1271,12 @@ export class PeerSession {
     });
   }
 
-  /** The `Y.Text` a path already names, without creating one (§8.1's sender rule). */
+  /**
+   * The `Y.Text` a path already names, without creating one (§8.1's sender rule, and what
+   * {@link has} means). `share` names a type as soon as this replica has one — written here,
+   * or arrived in a peer's update — and nothing at all before that, so a read that created a
+   * document would make "nothing has arrived" indistinguishable from "the room sent it".
+   */
   private textIfPresent(path: string): Y.Text | undefined {
     return this.doc.share.has(path) ? this.doc.getText(path) : undefined;
   }
@@ -1370,6 +1425,12 @@ export class PeerSession {
     if (this.commitsOurs()) {
       await this.handshakeOnce(clock);
       await this.flushHeldBackEdits();
+      // §13.7 asks for the whole held set when it changes. A hold taken while this connection
+      // could not publish — the open that lands the window in the room, before the state that
+      // commits this key has arrived — is a change with nothing sent for it, and the renewal
+      // clock alone would hold it back a whole window: for the room that is a path nobody asked
+      // for, and for a path the host has to supply, no read at all.
+      await this.announceHolds(clock);
     } else {
       await this.announce(clock);
     }
