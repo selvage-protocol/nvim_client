@@ -52,7 +52,10 @@ jobs:
           node-version: "22.18.0"
           cache: npm
 
-      - run: npm ci
+      # No dependency's install script runs here: this job holds a `contents: write` token and the
+      # checkout keeps it in `.git/config` for the tag push below, and none of the companion's
+      # dependencies has an install script to need.
+      - run: npm ci --ignore-scripts
 
       # The release version comes from the dispatch input, or from the tag
       # name on a tag push. It passes through `env` rather than a workflow
