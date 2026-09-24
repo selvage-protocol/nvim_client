@@ -371,6 +371,41 @@ check(
   kept
 )
 
+-- Each shape is refused for its own reason, so removing one condition cannot leave these checks
+-- green: a query on its own, a fragment on its own (which is where §5.1's keys ride), credentials,
+-- a host with no port and a port with no host.
+for _, shape in ipairs({
+  'https://selvage.example:8443/?room=r&token=t',
+  'https://selvage.example:8443/#k=KEY&h=HOSTKEY',
+  'wss://user:pass@selvage.example:8443',
+  'wss://selvage.example:not-a-port',
+  'wss://:8443',
+}) do
+  before = #notices
+  vim.cmd('SelvageChangeServer ' .. shape)
+  check(
+    ('%s is refused as a server address'):format(shape),
+    said_since(before, 'Paste the address the server printed when it started') ~= nil,
+    true
+  )
+end
+check(
+  '  and none of them is written down',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  kept
+)
+-- The shape the refusal does not catch is still taken: a host, with or without a port.
+for _, shape in ipairs({ 'selvage.example', 'ws://127.0.0.1:8080', 'wss://[::1]:8080' }) do
+  before = #notices
+  vim.cmd('SelvageChangeServer ' .. shape)
+  check(
+    ('%s is taken as a server address'):format(shape),
+    said_since(before, 'will host on') ~= nil,
+    true
+  )
+end
+vim.cmd('SelvageChangeServer ' .. kept)
+
 -- -- :SelvageChangeServer reports the address in force and offers to change it ----------
 --
 -- The palette-reachable answer to "how do I change which server I am using", without hosting
@@ -809,6 +844,19 @@ check(
 
 -- The same for hosting while a guest, which is the other half of it.
 report_status('joined', 'r-guest')
+-- An invite link is refused before the leave question, so a refusal costs no room: the guest
+-- session stands, nothing is asked and nothing is left.
+local leaves_before = count_type('leave')
+confirmations = 0
+before = #notices
+vim.cmd('SelvageHost ' .. invite)
+check('an invite link costs no session', confirmations, 0)
+check('  and leaves none', count_type('leave'), leaves_before)
+check(
+  '  and says why',
+  said_since(before, 'that is an invite link, not a server address.') ~= nil,
+  true
+)
 local hosts_before = count_type('host')
 local asks_before = confirmations
 confirmation = 0
@@ -1098,6 +1146,10 @@ local function in_history(needle)
   return false
 end
 selvage.leave()
+vim.fn.histadd(':', 'SelvageHost ' .. LINK)
+vim.fn.histadd('@', LINK)
+selvage.host(LINK)
+check('a refused host takes the link it read out of the histories', in_history('r-shada'), false)
 vim.fn.histadd(':', 'SelvageJoin ' .. LINK)
 vim.fn.histadd(':', 'echo "kept"')
 vim.fn.histadd('@', LINK)

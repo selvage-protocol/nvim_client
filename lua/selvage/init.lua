@@ -3721,15 +3721,40 @@ local function normalise_server_address(text)
   return (addressed:gsub('/session$', ''))
 end
 
+--- The host `authority` names, or nil when it names none.
+---
+--- The engine parses the address as a URL, and a URL reads no host out of what it refuses: a port
+--- on its own (`:8080`), an empty or unclosed bracketed address (`[]`, `[::1`), a port that is
+--- not a number or is past 65535, credentials, and whitespace anywhere in the authority.
+local function authority_host(authority)
+  if authority:find('[%s@]') ~= nil then
+    return nil
+  end
+  local host, port = authority, ''
+  local bracketed, after = authority:match('^(%[[^%]]*%])(.*)$')
+  if bracketed ~= nil then
+    host, port = bracketed, after
+  else
+    host, port = authority:match('^([^:]*)(.*)$')
+  end
+  if host == nil or host == '' or host == '[]' then
+    return nil
+  end
+  if port ~= '' and port ~= ':' then
+    local digits = port:match('^:(%d+)$')
+    if digits == nil or tonumber(digits) > 65535 then
+      return nil
+    end
+  end
+  return host
+end
+
 --- Whether `text` is a server address the companion's engine can dial.
 ---
 --- The engine owns that reading (`sessionBase` in the vendored engine): a `ws`, `wss`, `http` or
---- `https` scheme with a host, and none of the parts a server address never carries —
---- credentials, a query or a fragment, the last two being a link's room, token and key.
+--- `https` scheme, a host, and none of the parts a server address never carries — credentials, a
+--- query or a fragment, the last two being a link's room, token and key.
 local function is_server_address(text)
-  if text:find('%s') ~= nil then
-    return false
-  end
   local scheme, rest = text:match('^(%a[%w+.-]*)://(.*)$')
   if scheme == nil then
     return false
@@ -3739,10 +3764,10 @@ local function is_server_address(text)
     return false
   end
   local authority, remainder = rest:match('^([^/?#]*)(.*)$')
-  if authority == nil or authority == '' or authority:find('@', 1, true) ~= nil then
+  if authority == nil or remainder:find('[?#]') ~= nil then
     return false
   end
-  return remainder:find('[?#]') == nil
+  return authority_host(authority) ~= nil
 end
 
 --- Refuses `address` when it is not a server address, saying so in the reader's own words, and
@@ -3756,7 +3781,12 @@ local function refuse_server_address(address)
   if is_server_address(normalise_server_address(address)) then
     return false
   end
-  if vim.trim(address or ''):find('[?#]') ~= nil then
+  local text = vim.trim(address or '')
+  if text:find('[?#]') ~= nil then
+    -- An invite pasted into a server-address position is an invite: its query is the room and its
+    -- token and its fragment the key, and ShaDa writes the histories to disk, so it is taken out
+    -- of them here exactly as one typed into `:SelvageJoin` is (`forget_invite`).
+    forget_invite(text)
     notify(
       'that is an invite link, not a server address. Paste the address the server printed when it started, not the link you send to your guest.',
       vim.log.levels.ERROR
@@ -3826,10 +3856,10 @@ end
 --- remembered in this Neovim and in the file, and confirmed. Only the next host, never a live
 --- room.
 local function write_server(address)
-  address = normalise_server_address(address)
   if refuse_server_address(address) then
     return false
   end
+  address = normalise_server_address(address)
   remember_last_server(address)
   notify(('will host on %s next. Leave this session and host again to move there.'):format(address))
   return true
@@ -4157,26 +4187,26 @@ function M.host(url)
     notify('a session is already being opened.', vim.log.levels.WARN)
     return
   end
-  if in_session() then
-    local can_leave = confirm_leave(
-      'you are in this session; hosting a session means leaving it first.',
-      'Leave and host'
-    )
-    if not can_leave then
-      return
-    end
-    end_session()
-  end
   local function with_url(address)
     -- Whatever was typed — an argument, an answer to the first-run question, a remembered one — is
-    -- completed here, so one place decides what a bare host means and the command that reports
-    -- an address reports the address a host would dial.
-    address = normalise_server_address(address)
-    -- An invite link is not a server address: refused here, before the file is written and before
-    -- the companion is asked to dial it, so the key it carries is never stored.
+    -- refused and completed here, so one place decides what a bare host means and the command that
+    -- reports an address reports the address a host would dial.
     if refuse_server_address(address) then
       return
     end
+    -- A session is given up only for an address that passed: an invite link pasted into this
+    -- command or its box is refused before the question, so it costs no room.
+    if in_session() then
+      local can_leave = confirm_leave(
+        'you are in this session; hosting a session means leaving it first.',
+        'Leave and host'
+      )
+      if not can_leave then
+        return
+      end
+      end_session()
+    end
+    address = normalise_server_address(address)
     remember_last_server(address)
     resolve_display_name(function(display_name)
       local process = ensure()
