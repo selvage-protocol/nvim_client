@@ -27,6 +27,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
+import { enumerateGrant } from '../companion/grant.ts';
 import { Companion, WIRE_VERSION_REFUSED, realWire2 } from '../companion/session.ts';
 import type { MetaReader } from '../companion/session.ts';
 import { ProtocolError, parseInvite } from '../vendor/engine/index.ts';
@@ -1811,6 +1812,47 @@ test('a change that leaves the listing as it was is not republished', async (t) 
     it.engine.grants,
     [['notes.txt']],
     'the listing was unchanged, so there was nothing to publish',
+  );
+});
+
+test('saving a file the listing already names walks nothing', async (t) => {
+  // While a guest types, the room's autosave writes the document about twice a second, and a
+  // walk of the tree per write kept a large host walking for the whole session. A write that
+  // leaves the file a listing names as one it still names cannot move the listing.
+  const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
+  let walks = 0;
+  const it = harness('host', [], [], {
+    enumerate: async (at) => {
+      walks += 1;
+      return enumerateGrant(at);
+    },
+  });
+  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await until('the first listing', () => it.engine.grants.length > 0, () => it.engine.grants);
+  const first = walks;
+
+  for (let index = 0; index < 5; index += 1) {
+    tree(root, 'notes.txt', `saved ${String(index)}\n`);
+    await delay(20);
+  }
+  await delay(QUIET_MS);
+  assert.equal(walks, first, 'a save of a listed file walked the folder');
+
+  // A change under a directory no listing names is not a change to the listing either.
+  mkdirSync(join(root, 'node_modules'));
+  await delay(QUIET_MS);
+  const settled = walks;
+  tree(root, 'node_modules/dep/index.js', 'module.exports = 1;\n');
+  await delay(QUIET_MS);
+  assert.equal(walks, settled, 'a write under node_modules walked the folder');
+
+  // A write that takes a listed file past the size a listing carries is one that moves it.
+  tree(root, 'notes.txt', 'x'.repeat(MAX_GRANT_FILE_BYTES + 1));
+  await until(
+    'the grown file to leave the listing',
+    () => it.engine.grants.at(-1)?.includes('notes.txt') === false,
+    () => it.engine.grants,
   );
 });
 

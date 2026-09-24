@@ -8,8 +8,15 @@
  */
 
 import { watch, type FSWatcher } from 'node:fs';
+import { lstat } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 
-import { SessionBridge } from '../vendor/bridge/index.ts';
+import {
+  MAX_GRANT_FILE_BYTES,
+  SessionBridge,
+  isBinaryNamedPath,
+  isGrantedPath,
+} from '../vendor/bridge/index.ts';
 import type { Engine, TextChange } from '../vendor/bridge/index.ts';
 import {
   SelvageEngine,
@@ -179,6 +186,9 @@ export class Companion {
   private grantRepublish?: NodeJS.Timeout;
   /** The listing last handed to the room, so a folder that has not changed publishes nothing. */
   private grantedListing?: string[];
+  /** `grantedListing` as a set, and the listing it was built from (`listedPaths`). */
+  private listedSetOf?: readonly string[];
+  private listedSet: ReadonlySet<string> = new Set();
   /**
    * How many readings of the shared folder have been started. A reading that is not the last one
    * started has nothing to say: it read the folder before a later one did.
@@ -797,13 +807,70 @@ export class Companion {
       this.reportWatchFailure(error);
       return;
     }
-    watcher.on('change', () => {
-      this.scheduleGrant(root);
+    watcher.on('change', (eventType, filename) => {
+      void this.folderChanged(root, eventType, filename).catch(() => {
+        // A change that cannot be judged is read as one that may move the listing.
+        this.scheduleGrant(root);
+      });
     });
     watcher.on('error', (error) => {
       this.reportWatchFailure(error);
     });
     this.grantWatcher = watcher;
+  }
+
+  /**
+   * One event from the folder's watcher, and whether it can move the listing at all.
+   *
+   * Most events cannot, and each walk the watcher schedules reads the whole tree — up to
+   * `MAX_GRANT_NODES` entries, measured at ~390 ms. While a guest types, the room's autosave
+   * writes the document about twice a second, and every one of those writes is an event: a host
+   * whose every save of a file the listing already names walked the tree spent its session walking
+   * it. So a path the grant's rules never publish — `.git/index` on every `git status`, anything
+   * under `node_modules/` — changes nothing a listing says and schedules nothing. A write to a file
+   * (`change`) moves the listing only when the file crosses the size bound a listing is held to, so
+   * it is compared with what the listing holds: one `lstat` in place of a walk. Anything else — a
+   * name created, removed or renamed, an event naming no file, a platform that says `rename` for
+   * everything — schedules the walk as before.
+   */
+  private async folderChanged(
+    root: string,
+    eventType: string,
+    filename: string | Buffer | null,
+  ): Promise<void> {
+    if (filename === null) {
+      this.scheduleGrant(root);
+      return;
+    }
+    const path = String(filename).split(sep).join('/');
+    if (!isGrantedPath(path)) {
+      return;
+    }
+    const listed = this.grantedListing;
+    if (eventType !== 'change' || listed === undefined) {
+      this.scheduleGrant(root);
+      return;
+    }
+    // The walk's own rule for a name it reached (`companion/grant.ts`): a plain file, under the
+    // size bound, whose name declares no format a room cannot carry.
+    const info = await lstat(join(root, path)).catch(() => undefined);
+    const shareable =
+      info !== undefined &&
+      info.isFile() &&
+      info.size <= MAX_GRANT_FILE_BYTES &&
+      !isBinaryNamedPath(path);
+    if (shareable !== this.listedPaths(listed).has(path)) {
+      this.scheduleGrant(root);
+    }
+  }
+
+  /** The listing last handed to the room, as a set, built once per listing. */
+  private listedPaths(listing: readonly string[]): ReadonlySet<string> {
+    if (this.listedSetOf !== listing) {
+      this.listedSetOf = listing;
+      this.listedSet = new Set(listing);
+    }
+    return this.listedSet;
   }
 
   /**
