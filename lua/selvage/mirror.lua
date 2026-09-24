@@ -400,18 +400,30 @@ end
 --- paths that have left it, and never throws away content that has already been fetched into the
 --- paths that stay.
 ---
+--- A path the companion flagged `unsafe` is one the grant's own rules would never let a host
+--- publish (`companion/grant.ts`, `grantReport`): `.git/config` is the example that matters. The
+--- listing is not trusted — at `selvage/1` it is the server's to hold, and no version checks it
+--- (`PROTOCOL.md` §12) — and a `.git/` materialised here is a repository every git-aware plugin
+--- runs `git` in, with whatever `core.fsmonitor` the room wrote into it. Such a path is refused the
+--- way an over-long one is: the room still lists it, and its document stays a `selvage://` buffer.
+---
 --- @param room string|nil the room id, as the status named it
 --- @param paths string[] the listing, in the order the room carries it
+--- @param unsafe string[]|nil the paths of the listing never to put on disk
 --- @return string|nil root, string[] blocked, boolean created
-function M.setup(room, paths)
+function M.setup(room, paths, unsafe)
   if type(room) ~= 'string' or room == '' then
     return nil, {}, false
+  end
+  local refused = {}
+  for _, path in ipairs(type(unsafe) == 'table' and unsafe or {}) do
+    refused[path] = true
   end
   local blocked = {}
   local wanted = {}
   local listed = {}
   for _, path in ipairs(paths or {}) do
-    if #wanted >= MAX_LISTED then
+    if #wanted >= MAX_LISTED or refused[path] then
       blocked[#blocked + 1] = tostring(path)
     elseif writable(path) then
       wanted[#wanted + 1] = path

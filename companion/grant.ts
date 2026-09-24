@@ -27,6 +27,27 @@ import {
 import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
 
 /**
+ * The room's grant as the front-end is told it: the listing itself, whole and in the room's order,
+ * and — only when there are any — the paths in it that the grant's own rules would never publish.
+ *
+ * `PROTOCOL.md` §6.3 has a receiver replace its view of the grant with `paths` and never merge or
+ * trim it, so the listing goes to the front-end as the room holds it. What a receiver does with a
+ * listed path is its own decision, and §12 leaves every path on the wire unvalidated: `..`, an
+ * absolute name and `.git/config` are all names a room will carry if a host — or, at `selvage/1`, the
+ * server the listing lives on — sends them. A guest turns the listing into real files, and a
+ * `.git/` materialised there is a repository every git-aware tool in the editor then runs `git` in,
+ * with whatever `core.fsmonitor` the room wrote into its config. `unsafe` is what the mirror refuses
+ * to put on disk: the same rule `isGrantedPath` holds a host's own enumeration to, so a conforming
+ * host's listing never has one and the member is absent for it.
+ */
+export function grantReport(
+  paths: readonly string[],
+): { kind: 'grant'; paths: readonly string[]; unsafe?: string[] } {
+  const unsafe = paths.filter((path) => !isGrantedPath(path));
+  return unsafe.length === 0 ? { kind: 'grant', paths } : { kind: 'grant', paths, unsafe };
+}
+
+/**
  * How many entries a walk will look at before it stops. The path count is the listing's own
  * bound; this is the one that keeps a directory tree with a hundred thousand entries in it from
  * costing a hundred thousand stats before the first path is ever published.

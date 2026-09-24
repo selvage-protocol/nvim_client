@@ -24,7 +24,7 @@ import type {
 } from '../vendor/bridge/index.ts';
 import { applyChange } from '../vendor/bridge/index.ts';
 
-import { readGrantedFile } from './grant.ts';
+import { grantReport, readGrantedFile } from './grant.ts';
 import type { Notification } from './ipc.ts';
 
 interface Document {
@@ -315,6 +315,7 @@ export class NvimEditorHost implements EditorHost {
   }
 
   report(report: Report): void {
-    this.emit({ type: 'report', report });
+    // The listing is annotated with what the guest's mirror must not materialise (`grantReport`).
+    this.emit({ type: 'report', report: report.kind === 'grant' ? grantReport(report.paths) : report });
   }
 }

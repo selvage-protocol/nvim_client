@@ -27,6 +27,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
+import { enumerateGrant } from '../companion/grant.ts';
 import { Companion, WIRE_VERSION_REFUSED, realWire2 } from '../companion/session.ts';
 import type { MetaReader } from '../companion/session.ts';
 import { ProtocolError, parseInvite } from '../vendor/engine/index.ts';
@@ -760,6 +761,40 @@ test("a joining client is told the room's grant the handshake carried", async ()
   });
 });
 
+test('a listing naming paths no host would publish says which, and is otherwise the room\'s', async () => {
+  // §6.3 has a receiver replace its grant with the room's `paths` whole, so the listing is not
+  // trimmed; §12 leaves every path on the wire unvalidated, so the ones the grant's own rules would
+  // never let a host publish are named beside it, for the mirror not to put on disk. A `.git/`
+  // materialised in a guest's mirror is a repository every git-aware plugin runs `git` in.
+  const listing = ['.git/config', '.git/HEAD', 'a/../b', 'src/main.rs'];
+  const it = harness('guest', [], [], { granted: listing });
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  const grant = (report: unknown): report is { kind: 'grant' } =>
+    (report as { kind: string }).kind === 'grant';
+  const reports = it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report)
+    .filter(grant);
+  assert.deepEqual(reports, [
+    { kind: 'grant', paths: listing, unsafe: ['.git/config', '.git/HEAD', 'a/../b'] },
+  ]);
+
+  // The bridge's own report of a later listing is annotated the same way.
+  it.engine.granted = ['.envrc', 'notes.txt'];
+  it.engine.emit({ type: 'grantChanged', paths: ['.envrc', 'notes.txt'] });
+  await settle();
+  const later = it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report)
+    .filter(grant);
+  assert.deepEqual(later.at(-1), {
+    kind: 'grant',
+    paths: ['.envrc', 'notes.txt'],
+    unsafe: ['.envrc'],
+  });
+});
+
 test('a guest join waits for the listing the handshake carried', async () => {
   const it = harness('guest');
   const joining = it.companion.handle({
@@ -1202,6 +1237,43 @@ test('the bound counts UTF-8 bytes, not code units', () => {
   assert.equal(drops.length, 1, 'the wide line was shed');
   assert.ok(drops[0] as number > MAX_IPC_LINE_BYTES, 'and told in bytes');
   assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
+});
+
+test('a line that arrives over many chunks is read whole, once', () => {
+  // A whole-document `open` is one line and arrives in pipe-sized pieces: each piece is searched
+  // for its newline once, and the pieces are joined once, when the newline comes — a reader that
+  // re-searched the whole line on every piece cost the square of the line's length.
+  const lines: string[] = [];
+  const reader = new LineReader((line) => lines.push(line));
+  const piece = `${'a'.repeat(64 * 1024 - 1)}€`;
+  for (let index = 0; index < 64; index += 1) {
+    reader.push(piece);
+  }
+  assert.deepEqual(lines, [], 'nothing is handed on before the newline');
+  reader.push('\n{"type":"leave"}\n{"type":"selectionCleared"}\n{"type":"clo');
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], piece.repeat(64), 'the long line arrived whole and in order');
+  assert.deepEqual(lines.slice(1), ['{"type":"leave"}', '{"type":"selectionCleared"}']);
+  reader.push('se","path":"a"}\n');
+  assert.equal(lines.at(-1), '{"type":"close","path":"a"}', 'and the tail carried over');
+});
+
+test('a line past the bound over many chunks is shed once, and the next line still arrives', () => {
+  const lines: string[] = [];
+  const drops: number[] = [];
+  const reader = new LineReader(
+    (line) => lines.push(line),
+    (bytes) => drops.push(bytes),
+  );
+  const piece = 'x'.repeat(1024 * 1024);
+  const pieces = Math.ceil(MAX_IPC_LINE_BYTES / piece.length) + 3;
+  for (let index = 0; index < pieces; index += 1) {
+    reader.push(piece);
+  }
+  reader.push('tail\n{"type":"leave"}\n');
+  assert.equal(drops.length, 1, 'the runaway line was said once');
+  assert.ok((drops[0] as number) > MAX_IPC_LINE_BYTES, 'in bytes past the bound');
+  assert.deepEqual(lines, ['{"type":"leave"}'], 'its tail was shed with it, and the next line arrived');
 });
 
 // -- the IPC mouth, both directions ----------------------------------------------------
@@ -1740,6 +1812,47 @@ test('a change that leaves the listing as it was is not republished', async (t) 
     it.engine.grants,
     [['notes.txt']],
     'the listing was unchanged, so there was nothing to publish',
+  );
+});
+
+test('saving a file the listing already names walks nothing', async (t) => {
+  // While a guest types, the room's autosave writes the document about twice a second, and a
+  // walk of the tree per write kept a large host walking for the whole session. A write that
+  // leaves the file a listing names as one it still names cannot move the listing.
+  const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
+  let walks = 0;
+  const it = harness('host', [], [], {
+    enumerate: async (at) => {
+      walks += 1;
+      return enumerateGrant(at);
+    },
+  });
+  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await until('the first listing', () => it.engine.grants.length > 0, () => it.engine.grants);
+  const first = walks;
+
+  for (let index = 0; index < 5; index += 1) {
+    tree(root, 'notes.txt', `saved ${String(index)}\n`);
+    await delay(20);
+  }
+  await delay(QUIET_MS);
+  assert.equal(walks, first, 'a save of a listed file walked the folder');
+
+  // A change under a directory no listing names is not a change to the listing either.
+  mkdirSync(join(root, 'node_modules'));
+  await delay(QUIET_MS);
+  const settled = walks;
+  tree(root, 'node_modules/dep/index.js', 'module.exports = 1;\n');
+  await delay(QUIET_MS);
+  assert.equal(walks, settled, 'a write under node_modules walked the folder');
+
+  // A write that takes a listed file past the size a listing carries is one that moves it.
+  tree(root, 'notes.txt', 'x'.repeat(MAX_GRANT_FILE_BYTES + 1));
+  await until(
+    'the grown file to leave the listing',
+    () => it.engine.grants.at(-1)?.includes('notes.txt') === false,
+    () => it.engine.grants,
   );
 });
 
