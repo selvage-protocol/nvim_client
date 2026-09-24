@@ -150,7 +150,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 
 | Plugin → companion | |
 |---|---|
-| `host {serverUrl, displayName?, autoSave?, root?, wire?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the host publishes its listing to the room, republishes it when the folder changes, and serves a path from it when a peer asks. `wire` is the version this host is pinned to, absent for a front-end that has pinned nothing. |
+| `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the room's listing is sealed from it when the room is minted, the host republishes it when the folder changes, and serves a path from it when a peer asks. |
 | `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
 | `leave {}` | End the session; the process stays up. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
@@ -165,7 +165,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `applyEdit {id, path, start, end, text, version}` | Replace `[start, end)` with `text`. Always the smallest range that gets there. |
 | `save {id, path}` | Write the document. |
-| `status {state, role?, wire?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `role` is the role the room's state assigns this connection (`§13.4`) as far as the session can read it at that moment, which at the seat is the `guest` a key no state has committed yet is read as. `wire` is `selvage/1` or `selvage/2`, the version the connection speaks, which the plugin needs for one thing: the two versions end a dropped connection differently (`§9.1`). `code` is the protocol's own code for a failure the server named, or one of the two refusals this process decides itself: `wire_version_refused` for the version a host asked for that the server's `/meta` does not seat, and `invite_refused` for an invite whose fragment it will not read — both made before it dials anything. It is absent for a failure nothing named. |
+| `status {state, role?, roomId?, invite?, message?, code?}` | `idle`, `connecting`, `hosting`, `joined` or `error`. `role` is the role the room's state assigns this connection (`§13.4`) as far as the session can read it at that moment, which at the seat is the `guest` a key no state has committed yet is read as. `code` is the protocol's own code for a failure the server named, or the one refusal this process decides itself: `invite_refused` for an invite whose fragment it will not read, made before it dials anything. It is absent for a failure nothing named. |
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about; the room named is the one still standing. |
 | `report {report}` | The bridge's own report: the room's documents, its grant (with `unsafe` naming the listed paths the grant's rules would never let a host publish, which a guest's mirror does not put on disk), peers, a divergence, a refusal, a dropped socket being retried (`reconnecting`), or a connection the engine gave up re-establishing — and one of this process's own, `role {role}`, sent when the room's state gives this connection a different role than the seat's status carried. |
 | `presence {cursors}` | The remote carets this replica can resolve. |
@@ -174,10 +174,10 @@ A `reconnecting` report is a dropped socket the engine is re-dialling (`§9.1`):
 while it lasts, and the re-seat's own documents and peers reports are what end it.
 
 A `disconnected` report is the end of the session. The engine reconnected on its own until it ran
-out of attempts — except for a `selvage/2` host, which this client never re-dials, because
-`§9.1`'s host return is a fresh room state signed by the host key and this client writes no host
-store — so the plugin says which of the two it was and lets the documents go. The companion
-process is left running, and the next `:SelvageHost` or `:SelvageJoin` reuses it.
+out of attempts — except for a host, which this client never re-dials, because `§9.1`'s host return
+is a fresh room state signed by the host key and this client writes no host store — so the plugin
+says which of the two it was and lets the documents go. The companion process is left running, and
+the next `:SelvageHost` or `:SelvageJoin` reuses it.
 
 `version` is the document version the range was computed against, counted on each side. A remote
 edit is computed against the companion's mirror of the buffer and applied to the buffer itself, and
@@ -193,7 +193,7 @@ room's text is what the buffer ends on.
 
 Setting `SELVAGE_COMPANION_LOG` to a path makes the companion append every message it sends and
 receives, with the time and the process id. The plugin and the companion are two processes, so one
-end's log cannot show the order the messages crossed in. A `selvage/2` invite's fragment is not in
+end's log cannot show the order the messages crossed in. An invite's fragment is not in
 the file: `§5.1` has the room key and the host key travel there, a client **MUST NOT** log them, and
 the invite is written without it — the address and the token stay, which is what the log is for.
 A line the companion refuses is said on stderr the same way: the warning names the member that was
@@ -297,44 +297,33 @@ scripts/sync-engine.sh [path-to-vscode_client]
 The script copies `src/engine` and `src/bridge`, removes anything the source has retired, and then
 diffs the result, so a run either brings `vendor/` into agreement or says what it could not.
 
-The copy carries `selvage/2`'s session layer with the rest of the engine — `vendor/engine/sealed.ts`
+The copy carries the session layer with the rest of the engine — `vendor/engine/sealed.ts`
 is `CANONICAL.md` §6.1's bytes, `vendor/engine/peer.ts` is `PROTOCOL.md` §13, `vendor/engine/host.ts`
 is §7.1's producer half, the room state the host key seals and the rule for each state that goes out,
 and `vendor/engine/crypto.ts` is the crypto seam a caller supplies, because a page has neither
 `node:crypto` nor a synchronous one.
 
-### Sessions at `selvage/2`
+### The companion's session
 
-This companion drives both versions. `companion/session.ts` picks one per request through the
-`EngineFactory` seam it already had; `companion/relay.ts` is the version-2 half, and it is small on
-purpose: the socket wiring lives in `vendor/engine/relay.ts`, the adapter's own vocabulary in
-`vendor/bridge/peer-engine.ts`, and what is left for this repository is its own socket (`ws`) and its
-own listing. The crypto seam is the engine's default, WebCrypto — Node 22.18 has it globally, so
-this repository carries no Node-only crypto of its own.
+`companion/relay.ts` is small on purpose: the socket wiring lives in `vendor/engine/relay.ts`, the
+adapter's own vocabulary in `vendor/bridge/peer-engine.ts`, and what is left for this repository is
+its own socket (`ws`) and its own listing. `companion/session.ts` drives it through the
+`EngineFactory` seam, and the crypto seam is the engine's default, WebCrypto — Node 22.18 has it
+globally, so this repository carries no Node-only crypto of its own.
 
 What a person does:
 
-- **Host.** Set `vim.g.selvage_wire_version` to pin the room's version, and leave it unset to let
-  the server decide. Unset — or anything no version spelling accepts, the `'auto'` the other client
-  names its default with included — pins nothing, and the companion reads the server's `/meta`
-  before it mints anything: a server that seats `selvage/2` gets a `selvage/2` room, one whose
-  `/meta` answers without it is refused with an explanation and no connection at all, and a `/meta`
-  that could not be read is no answer — the companion attempts `selvage/2` and lets the handshake
-  refuse out loud (`PROTOCOL.md` §2, §10). `selvage/1` (or `'1'`, or `'selvage/1'`) is the pin for a
-  room the server can read, `2` (or `'2'`, or `'selvage/2'`) for the encrypted one, and a pin the
-  server does not seat is refused rather than fallen back from. The address, the folder and the
-  invite are otherwise unchanged.
-- **Join.** Nothing, and the setting is not consulted: paste the link. A `selvage/2` invite carries
-  the room key and the host key on its fragment, and a client that cannot read them cannot join the
-  room at all, so the link is the version the join speaks. A link with no fragment is a
-  `selvage/1` join, as it always was.
-- **Copy the invite.** Unchanged, and it now carries the fragment: the page link this client hands
-  on is the same room, token and two keys as the connection's own wire invite.
+- **Host.** `:SelvageHost <address>` mints the room on that server, with the folder this window is
+  in as the room's listing. The address, the folder and the invite are otherwise unchanged.
+- **Join.** Paste the link. The invite carries the room key and the host key on its fragment, and a
+  room seats no connection that cannot read them, so the link is what a join is: a link without a
+  fragment is refused locally, before a socket is opened.
+- **Copy the invite.** Unchanged: the page link this client hands on is the same room, token and two
+  keys as the connection's own wire invite.
 - **Everything else** — `:SelvageOpen`, the mirror, `:SelvageFetch`, `:SelvagePeers`, follow,
-  cursors — is the same code over the same bridge, so it works in a version-2 room without being
-  told which version it is in.
+  cursors — is the same code over the same bridge.
 
-**A viewer's editor is read-only.** A `selvage/2` room's state assigns roles (`§13.4`), and a
+**A viewer's editor is read-only.** The room's state assigns roles (`§13.4`), and a
 connection seated as `viewer` gets the room's documents with `modifiable` off: `§13.9` has a viewer
 publish no content, so a buffer that accepted a keystroke would show text the room never receives.
 The role is read where it is used rather than remembered from the join — the state that commits this
@@ -344,7 +333,7 @@ is not refused. Leaving gives each buffer back the `modifiable` it had. This cli
 and is seated as `guest`: what a host does with the state is a later phase's, and a client that
 could ask to be a viewer would be inventing a request the protocol does not have.
 
-**What is not carried.** The listing a `selvage/2` host publishes is sealed into the room state by
+**What is not carried.** The listing a host publishes is sealed into the room state by
 its host key, so it is lost when the process ends; this client runs no resume (`§9.1`), so there is
 no returning host to continue the `issued` series from and no `HostStore` is written. §13.11's
 per-receiver caps are unimplemented, as they are in the reference client.
@@ -552,17 +541,16 @@ has to be filled, which is what `:SelvageFetch` does. The VS Code client has the
 ```
 npm run typecheck
 npm test                    # the companion, against a replica with no server behind it
-scripts/ci-local.sh all     # the workflow's commands, plus actionlint and both proofs below
+scripts/ci-local.sh all     # the workflow's commands, plus actionlint and the proof below
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim (not in `all`: see below)
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
-scripts/e2e/run-version-2.sh      # the same two instances over selvage/2, the host pinned there
 
 nix flake check             # the same three suites, plus the built package, in a sandbox
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
 `scripts/ci-local.sh checks` is what the workflow runs; `scripts/ci-local.sh all` adds actionlint
-and both end-to-end proofs, which need a real Neovim and a built `selvaged` and so cannot run on a
+and the end-to-end proof, which needs a real Neovim and a built `selvaged` and so cannot run on a
 runner. `scripts/test-lua.sh` is not in `all`: it needs a Neovim too, and `nix flake check` runs the
 same files in a sandbox. Run it by hand after changing `lua/` — it also reads the plugin the machine
 has installed, and says so rather than testing that one instead when the two are not the same.
@@ -625,21 +613,12 @@ go on its own, and reads the framing of what the companion writes off the same o
 arriving in pieces, and one past the bound being shed to the newline that ends it.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes, each
-loading the real plugin and starting its own real companion, one hosting and one joining over a
-real `selvaged`. It converges on the same document, and again after a real TCP-level blip cuts the
-guest's connection. It proves the grant as well: the host writes down a file it never opens, the
-guest opens that granted path and waits for the host's own text to arrive, and the host's file
-ends up holding the guest's marker. It is not part of `npm test` or CI, because it needs a `nvim`
-and a built `selvaged`; `SELVAGE_E2E_RECONNECT=0` runs the convergence half alone, and
-`SELVAGE_E2E_LAG_MS` (300 by default) is how long the relay holds the guest's bytes back.
-
-It also proves the mirror, which is what a tool outside this editor reads. The granted path exists
-in the guest's mirror and is empty before anything is fetched, and holds the room's text once the
-guest opens it, with `rg` finding it from outside Neovim. The document the guest was already
-editing when the listing arrived is a file in the mirror too, holding what the two windows
-converged on, and the guest's save in it reaches the host's own working copy. A file the host
-creates under the folder it shares reaches the guest's listing and mirror, and one it deletes,
-materialised since the join, leaves both.
+loading the real plugin and starting its own real companion, one minting a room on a real `selvaged`
+and the other joining the link it hands on. It proves what a session is: the page link carries
+`§5.1`'s fragment, the guest reads the room and its own role out of the state the host signed, an
+edit made in either window ends up in both, the host's working copy on disk holds the guest's own
+edit, and the companion's trace of that run holds the invite with its fragment redacted out. It is
+not part of `npm test` or CI, because it needs a `nvim` and a built `selvaged`.
 
 ## Licence
 
@@ -647,6 +626,12 @@ materialised since the join, leaves both.
 
 ## What is not here yet
 
+- Content for a path the room lists but the host has never opened: a peer that holds such a path is
+  asking the host to read its working copy, and the host's engine does not yet read it — a peer's
+  holds message renews its lease and raises no event the bridge acts on, so the host never learns
+  what to read. The guest's mirror holds the path and the window marks it `[not fetched]`; the text
+  arrives only once the host opens the file itself. Restoring the mirror, save and watch phases the
+  end-to-end proof used to cover is this gap's work, and it is `vendor/engine`'s.
 - Packaging and distribution beyond Nix and "clone it and `npm ci`": no nixpkgs entry, no release
   bundle.
 - An edit that lands on the same characters a peer's edit is landing on is superseded by the
