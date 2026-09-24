@@ -26,10 +26,6 @@ local state = {
   --- The link `hand_on_invite` last put in the unnamed register, so the session's end can take it
   --- back out before ShaDa writes it to disk (`forget_invite`).
   handed_invite = nil,
-  --- Which wire version the session speaks, as the companion's seat said. The two versions end a
-  --- dropped connection differently (§9.1): a `selvage/1` host reclaims its room and a
-  --- `selvage/2` host cannot, so the sentence that closes the session depends on it.
-  wire2 = false,
   --- Whether this session has said that the connection is a viewer, so it is said once rather than
   --- at every report of the role (§13.9, `note_role`).
   viewer_said = false,
@@ -927,8 +923,8 @@ end
 --- would show text the room never receives — a keystroke the person believes is shared, which is
 --- worse than a refusal. What the room sends is not refused (`PROTOCOL.md` §13.9), so the read-only
 --- flag is the document's own to take and to write through (`document.lua`), and a keystroke is the
---- one thing it stops. Only a `selvage/2` room can seat a viewer: the role is the room state's
---- (§13.4) and version 1's server seats nobody as anything.
+--- one thing it stops. The room state seats a viewer, and only the room state can: the role is
+--- its own word about this connection's key (§13.4).
 local function apply_read_only(document)
   if document == nil then
     return
@@ -949,7 +945,7 @@ end
 --- state gives this connection another one afterwards (§13.4).
 ---
 --- The sentence is said once, here, because this is where the role first reaches the editor — a
---- `selvage/2` state may seat the connection as a viewer only after the join, and a person who is
+--- room state may seat the connection as a viewer only after the join, and a person who is
 --- handed a read-only editor is owed the reason for it.
 local function note_role(role)
   if role == nil or role == state.role then
@@ -2742,10 +2738,9 @@ end
 --- The buffers a guest session put on screen, captured before its documents are forgotten: they
 --- are the room's only for as long as the session holds them. A host's buffers are its own
 --- files, which outlive the room, so there is nothing here for a host to land.
---- Whether this connection is a peer rather than the room's host: a guest, or — in a `selvage/2`
---- room — a viewer. The two differ in what the room accepts from them (§13.9 refuses a viewer's
---- content) and not in where the room's documents live, which is what most of these rules are
---- about.
+--- Whether this connection is a peer rather than the room's host: a guest, or a viewer. The two
+--- differ in what the room accepts from them (§13.9 refuses a viewer's content) and not in where
+--- the room's documents live, which is what most of these rules are about.
 local function is_peer()
   return state.role == 'guest' or state.role == 'viewer'
 end
@@ -2910,7 +2905,6 @@ local function reset(land, keep_mirror)
   state.pending_go_to = nil
   land_room_buffers(held)
   state.role = nil
-  state.wire2 = false
   state.viewer_said = false
   state.room = nil
   forget_invite(state.handed_invite, true)
@@ -2981,20 +2975,18 @@ local hand_on_invite
 --- `connect` names which of the two this was — `{ what = 'host', address = … }` or
 --- `{ what = 'join' }` — because the two say different sentences.
 ---
---- The two failures that are neither: a wire version the server's `/meta` does not seat, which
---- the companion refuses before it dials anything (`PROTOCOL.md` §2, §10), and a link whose
---- fragment it will not read (`PROTOCOL.md` §5.1). In both there is no connection to describe, and
---- the companion's message is already the whole sentence — the server, the version it does not
---- seat and what it offers instead; or what is wrong with the link — so each is said as it stands
---- rather than behind a sentence about a dial that never happened.
+--- The two failures that are neither: a link whose fragment it will not read (`PROTOCOL.md`
+--- §5.1). There is no connection to describe, and the companion's message is already the whole
+--- sentence — what is wrong with the link — so it is said as it stands rather than behind a
+--- sentence about a dial that never happened.
 ---
 --- @param connect table|nil `what` and, for a host, `address`
---- @param code string|nil the protocol's own code for a refusal — or the companion's own, for one of
---- the two local refusals above — absent for a socket
+--- @param code string|nil the protocol's own code for a refusal — or the companion's own, for the
+--- local refusal above — absent for a socket
 --- @param message string|nil the failure's own words
 --- @return string
 local function connect_failure(connect, code, message)
-  if code == 'wire_version_refused' or code == 'invite_refused' then
+  if code == 'invite_refused' then
     return tostring(message or '')
   end
   local what = connect and connect.what or 'join'
@@ -3009,10 +3001,6 @@ local function connect_failure(connect, code, message)
     why = 'The room is full — it seats no more people.'
   elseif code == 'room_gone' then
     why = 'That room is gone.'
-  elseif code == 'unsupported_version' then
-    why = ('This client and that server speak different versions (%s).'):format(
-      tostring(message or '')
-    )
   elseif tostring(message or ''):find('^server full') ~= nil then
     -- The server's own capacity policy, stated in the close reason rather than in a code:
     -- the room is up, so this is not a connection that failed to reach one.
@@ -3039,10 +3027,6 @@ local function on_status(message)
   -- `note_role` is where both reach the editor.
   note_role(message.role)
   state.room = message.roomId
-  -- The version is the seat's own, next to the role, and a status that carries none is from a
-  -- companion that cannot name it: the readable wire, which is what every version-1-era front-end
-  -- gets and the version whose drop sentence this one already said.
-  state.wire2 = message.wire == 'selvage/2'
   -- A status is this session's own word: whatever the connection was doing before it, the
   -- companion has just said where the session stands.
   state.reconnecting = false
@@ -3404,14 +3388,13 @@ local function on_report(report)
     -- is deliberately left running — `ensure` reuses it on the next host or join, and the engine on
     -- the other side of it has already finished.
     --
-    -- A `selvage/2` host is the one place no retry ran: `§9.1`'s host return is a fresh room state
-    -- signed by the host key, and this client writes no host store, so a hosting session on the
-    -- sealed wire is never re-dialled. The version said so at the seat, and the sentence says it
-    -- rather than implying an attempt that was never made; a `selvage/2` guest and any
-    -- `selvage/1` session reach here only after the bounded retry gave up.
-    if state.wire2 and state.role == 'host' then
+    -- A host is the one place no retry runs: `§9.1`'s host return is a fresh room state signed by
+    -- the host key, and this client writes no host store, so a hosting session is never re-dialled.
+    -- A guest reaches here only after the bounded retry gave up, which is why the two say different
+    -- sentences.
+    if state.role == 'host' then
       notify(
-        'the connection ended and the session is over; this wire cannot resume a hosting session yet, so it will not reconnect.',
+        'the connection ended and the session is over; this client cannot resume a hosting session, so it will not reconnect.',
         vim.log.levels.ERROR
       )
     else
@@ -3790,28 +3773,6 @@ end
 --- Whether a document the room changes is written. Nothing is sent when the plugin's global says
 --- nothing, so the companion's own default — write it — stands, as the other client's setting
 --- defaults to on.
----
---- The version a host is pinned to: `vim.g.selvage_wire_version`, which is `1` (or `'1'`, or
---- `'selvage/1'`) for the readable wire and `2` (or `'2'`, or `'selvage/2'`) for the encrypted one.
---- Anything else — including unset, and the `'auto'` the other client spells its default with —
---- pins nothing, and the server's `/meta` decides: a client that can speak `selvage/2` mints it
---- where the server seats it, and is refused rather than fallen back to `selvage/1` where it does
---- not, so a room the server can read is asked for deliberately or not at all.
----
---- It is a host's setting and not a guest's. A join speaks the version the *link* names, because
---- the `selvage/2` invite's fragment is the room key and the host key: a client that cannot read
---- them cannot join the room at all, and one that can has been told which version to speak.
-local function pinned_wire_version()
-  local configured = vim.g.selvage_wire_version
-  if configured == 2 or configured == '2' or configured == 'selvage/2' then
-    return 'selvage/2'
-  end
-  if configured == 1 or configured == '1' or configured == 'selvage/1' then
-    return 'selvage/1'
-  end
-  return nil
-end
-
 local function auto_save()
   local configured = vim.g.selvage_auto_save
   if type(configured) == 'boolean' then
@@ -3902,9 +3863,9 @@ local function query_parts(query, fragment)
   if found.room == nil or found.room == '' or found.token == nil or found.token == '' then
     return nil
   end
-  -- §5.1's fragment is not a parameter and never a parameter's value: it is the two keys a
-  -- `selvage/2` invite carries, opaque to everything that only joins a room. It is kept as it
-  -- arrived, because handing the link on has to hand it on whole.
+  -- §5.1's fragment is not a parameter and never a parameter's value: it is the two keys an
+  -- invite carries, opaque to everything that only joins a room. It is kept as it arrived,
+  -- because handing the link on has to hand it on whole.
   found.fragment = fragment or ''
   return found
 end
@@ -4158,7 +4119,6 @@ function M.host(url)
           displayName = display_name,
           autoSave = auto_save(),
           root = state.root,
-          wire = pinned_wire_version(),
         })
       end
     end)
