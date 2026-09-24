@@ -1642,9 +1642,11 @@ local function open_room_path(path)
   end
   -- Measured against the resolved grant root, never the working directory: an absolute
   -- path, a `..` climber and a link pointing outside all read as outside the grant.
+  -- Lua patterns have no alternation, so the `..` segment is looked for with the path framed in
+  -- separators rather than with a `(^|/)` that would only ever match those three characters.
   local outside = path:sub(1, 1) == '/'
     or path:match('^%a:/') ~= nil
-    or path:match('(^|/)%.%.(/|$)') ~= nil
+    or ('/' .. path .. '/'):find('/../', 1, true) ~= nil
   local file = root .. '/' .. path
   if outside or vim.fn.resolve(file):sub(1, #root + 1) ~= root .. '/' then
     return false, 'the path is not one this window shares'
