@@ -33,8 +33,8 @@ import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
  * `PROTOCOL.md` §6.3 has a receiver replace its view of the grant with `paths` and never merge or
  * trim it, so the listing goes to the front-end as the room holds it. What a receiver does with a
  * listed path is its own decision, and §12 leaves every path on the wire unvalidated: `..`, an
- * absolute name and `.git/config` are all names a room will carry if a host — or, at `selvage/1`, the
- * server the listing lives on — sends them. A guest turns the listing into real files, and a
+ * absolute name and `.git/config` are all names a room's listing will carry if the connection that
+ * sent it puts them there. A guest turns the listing into real files, and a
  * `.git/` materialised there is a repository every git-aware tool in the editor then runs `git` in,
  * with whatever `core.fsmonitor` the room wrote into its config. `unsafe` is what the mirror refuses
  * to put on disk: the same rule `isGrantedPath` holds a host's own enumeration to, so a conforming
