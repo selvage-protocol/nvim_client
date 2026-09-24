@@ -626,12 +626,12 @@ not part of `npm test` or CI, because it needs a `nvim` and a built `selvaged`.
 
 ## What is not here yet
 
-- Content for a path the room lists but the host has never opened: a peer that holds such a path is
-  asking the host to read its working copy, and the host's engine does not yet read it — a peer's
-  holds message renews its lease and raises no event the bridge acts on, so the host never learns
-  what to read. The guest's mirror holds the path and the window marks it `[not fetched]`; the text
-  arrives only once the host opens the file itself. Restoring the mirror, save and watch phases the
-  end-to-end proof used to cover is this gap's work, and it is `vendor/engine`'s.
+- Content for a path the room lists but the host has never opened: a peer that holds such a path
+  is asking the host to read its working copy, and the host's engine does not read it. The guest's
+  buffer for the path stays empty and its mirror keeps the file, marked `[not fetched]`, until the
+  host opens it itself. `§13.7`'s holds path is where this lives: an accepted holds message is
+  applied, and the bridge reports the room's open set changing, and no read of the host's disk
+  follows either.
 - Packaging and distribution beyond Nix and "clone it and `npm ci`": no nixpkgs entry, no release
   bundle.
 - An edit that lands on the same characters a peer's edit is landing on is superseded by the
