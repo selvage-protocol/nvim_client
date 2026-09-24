@@ -22,7 +22,7 @@ import type { Notification, Request } from './ipc.ts';
  * applies to a file this creates; one that is already there keeps the mode it has, and a trace a
  * person kept from an earlier session is theirs to leave as it is.
  *
- * A `selvage/2` invite carries more than the token. `§5.1`'s fragment is the room key every frame
+ * An invite carries more than the token. `§5.1`'s fragment is the room key every frame
  * of the room is sealed under and the host's public key, and a client **MUST NOT** log it: a trace
  * outlives the room, and a file holding the key decrypts whatever the operator kept beside it. The
  * keys are no part of what a trace is for — the order the messages crossed in needs the types, the

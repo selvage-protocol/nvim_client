@@ -18,38 +18,14 @@ import {
   isGrantedPath,
 } from '../vendor/bridge/index.ts';
 import type { Engine, TextChange } from '../vendor/bridge/index.ts';
-import {
-  SelvageEngine,
-  code as errCode,
-  fetchMeta,
-  hostVersion,
-  isProtocolError,
-} from '../vendor/engine/index.ts';
-import type { HostDecision, Meta, WireVersion } from '../vendor/engine/index.ts';
+import { code as errCode, isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant, grantReport } from './grant.ts';
 import { isRequest } from './ipc.ts';
-import {
-  UnreadableInvite,
-  WIRE_VERSION_2,
-  hostVersion2,
-  joinVersion2,
-  wireVersionOf,
-} from './relay.ts';
+import { UnreadableInvite, hostRoom, joinRoom } from './relay.ts';
 import type { ListingSource } from './relay.ts';
 import type { Notification, Request } from './ipc.ts';
-
-/** The readable wire, the version a room the server can read is minted at. */
-const WIRE_VERSION_1: WireVersion = 'selvage/1';
-
-/**
- * The code a version refusal carries. It is not the protocol's: no server said it, and there is no
- * server in it — the refusal is this process's own decision, taken before anything was dialled — so
- * a front-end reads it as such and shows the sentence that comes with it rather than one about a
- * connection.
- */
-export const WIRE_VERSION_REFUSED = 'wire_version_refused';
 
 /**
  * How long a burst of file-system events is gathered for before the shared folder is read again.
@@ -90,27 +66,18 @@ export interface CompanionEngine extends Engine {
   grantedPaths(): string[];
 }
 
-/** How a session is opened. A test supplies its own; the default opens a real one. */
-export interface EngineFactory {
-  host(serverUrl: string, displayName: string): Promise<CompanionEngine>;
-  join(invite: string, displayName: string): Promise<CompanionEngine>;
-}
-
 /**
- * The `selvage/2` half, kept apart from the version-1 factory because it is handed one thing
- * more: a host's listing, which `§7.1` seals into the room state rather than the server keeping.
+ * How a session is opened. A test supplies its own; the default opens a real one.
+ *
+ * A host is handed one thing a join is not: its listing, which `§7.1` seals into the room state
+ * rather than the server keeping.
  */
-export interface Wire2Factory {
+export interface EngineFactory {
   host(serverUrl: string, displayName: string, listing: ListingSource): Promise<CompanionEngine>;
   join(invite: string, displayName: string): Promise<CompanionEngine>;
 }
 
-export const realEngines: EngineFactory = {
-  host: (serverUrl, displayName) => SelvageEngine.host(serverUrl, displayName),
-  join: (invite, displayName) => SelvageEngine.join(invite, displayName),
-};
-
-export const realWire2: Wire2Factory = { host: hostVersion2, join: joinVersion2 };
+export const realEngines: EngineFactory = { host: hostRoom, join: joinRoom };
 
 /**
  * A document the front-end has opened whose text the room has not sent yet: the text it was
@@ -128,12 +95,11 @@ export interface CompanionOptions {
    * supplies one that records what the bridge asks of it.
    */
   editor?: NvimEditorHost;
-  engines?: EngineFactory;
   /**
-   * The `selvage/2` factories. A test supplies its own for the same reason it supplies an
-   * `engines`: the room behind them is real, and what a test is about is what this process does.
+   * The session factories. A test supplies its own: the room behind them is real, and what a test
+   * is about is what this process does with it.
    */
-  wire2?: Wire2Factory;
+  engines?: EngineFactory;
   /**
    * How the shared folder is read. `enumerateGrant` in a real session; a test supplies one whose
    * completion it decides, because a walk that outlasts the window a burst is gathered in is the
@@ -147,27 +113,15 @@ export interface CompanionOptions {
    * what that leaves for a front-end that says nothing.
    */
   autoSave?: boolean;
-  /**
-   * Reads the server's `/meta` before a host, or `undefined` for one that could not be read. The
-   * default is the real endpoint, best effort; a test supplies its own for the same reason it
-   * supplies an `engines`: what it is about is what this process does with the answer, and a
-   * process in a test should not dial one.
-   */
-  meta?: MetaReader;
 }
-
-/** How a server's `/meta` is read: the body, or `undefined` when it could not be read at all. */
-export type MetaReader = (baseUrl: string) => Promise<Meta | undefined>;
 
 export class Companion {
   private readonly send: (notification: Notification) => void;
   private readonly engines: EngineFactory;
-  private readonly wire2: Wire2Factory;
   private readonly enumerate: (root: string) => Promise<string[]>;
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
   private readonly autoSave: boolean;
-  private readonly readMeta: MetaReader;
   private engine?: CompanionEngine;
   private bridge?: SessionBridge;
   /** Documents the front-end has opened whose text the room has not sent yet — see `open`. */
@@ -212,11 +166,9 @@ export class Companion {
     this.send = options.send;
     this.editor = options.editor ?? new NvimEditorHost({ send: this.send });
     this.engines = options.engines ?? realEngines;
-    this.wire2 = options.wire2 ?? realWire2;
     this.enumerate = options.enumerate ?? enumerateGrant;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
-    this.readMeta = options.meta ?? readMetaBestEffort;
   }
 
   /**
@@ -232,50 +184,24 @@ export class Companion {
     }
     switch (request.type) {
       case 'host': {
-        // Which version a new room is minted at is the server's to say and the front-end's to pin
-        // (`PROTOCOL.md` §2): a client that can speak `selvage/2` mints it where `/meta` seats it,
-        // refuses locally rather than falling back where the list is reachable and holds nothing
-        // at that major, and attempts it where `/meta` could not be read. A pin outranks the list
-        // both ways, and a pin the server does not seat is refused rather than fallen back from.
-        if (this.refuseWhileLive('host')) {
-          break;
-        }
-        const decided = hostVersion(await this.readMeta(request.serverUrl), request.wire);
-        if (decided.outcome === 'refuse') {
-          this.refuseVersion(request.serverUrl, decided);
-          break;
-        }
-        const version = decided.version;
         await this.connect(
           'host',
           () =>
-            version === WIRE_VERSION_2
-              ? this.hosting2(
-                  request.serverUrl,
-                  request.displayName ?? this.defaultName,
-                  request.root,
-                )
-              : this.engines.host(request.serverUrl, request.displayName ?? this.defaultName),
+            this.hosting(
+              request.serverUrl,
+              request.displayName ?? this.defaultName,
+              request.root,
+            ),
           request.autoSave,
           request.root,
-          version,
         );
         break;
       }
       case 'join': {
-        // Which version a join speaks is the link's to say and not a setting's: `§5.1`'s
-        // fragment carries the room key and the host key, and a room pinned to `selvage/2` seats
-        // no connection that cannot read them.
-        const version = wireVersionOf(request.invite);
         await this.connect(
           'join',
-          () =>
-            version === WIRE_VERSION_2
-              ? this.wire2.join(request.invite, request.displayName ?? this.defaultName)
-              : this.engines.join(request.invite, request.displayName ?? this.defaultName),
+          () => this.engines.join(request.invite, request.displayName ?? this.defaultName),
           request.autoSave,
-          undefined,
-          version,
         );
         break;
       }
@@ -391,7 +317,7 @@ export class Companion {
     const engine = this.engine;
     // The bridge holds a guest document back by the same rule; this deferral is here too because
     // the count an edit is offered against is the mirror's, and the mirror is `arrive`'s to make.
-    // A peer, not the room's host: a `selvage/2` room seats a `viewer` too, and a viewer is
+    // A peer, not the room's host: the room seats a `viewer` too, and a viewer is
     // handed the room's documents exactly as a guest is — it differs in what it may publish
     // (`§13.9`), not in what it holds, which is the same rule the front-end's `is_peer` reads.
     if (engine !== undefined && engine.session().role !== 'host' && !engine.has(path)) {
@@ -537,23 +463,6 @@ export class Companion {
   }
 
   /**
-   * Says a local refusal of the version a host asked for, in the front-end's own words. It is a
-   * failure of the session rather than of a connection — this process never dialled anything — so
-   * it is a `status` the front-end shows and not a report of a room that was joined.
-   */
-  private refuseVersion(
-    address: string,
-    refusal: Extract<HostDecision, { outcome: 'refuse' }>,
-  ): void {
-    this.send({
-      type: 'status',
-      state: 'error',
-      code: WIRE_VERSION_REFUSED,
-      message: hostVersionRefusal(address, refusal),
-    });
-  }
-
-  /**
    * Opens a session, unless one is live.
    */
   private async connect(
@@ -561,7 +470,6 @@ export class Companion {
     open: () => Promise<CompanionEngine>,
     autoSave?: boolean,
     root?: string,
-    version: WireVersion = WIRE_VERSION_1,
   ): Promise<void> {
     if (this.refuseWhileLive(what)) {
       return;
@@ -574,9 +482,9 @@ export class Companion {
       // A refusal the protocol named carries its code as well as its words: the server's
       // message answers with values the person never chose to see — `no such room: <id>` —
       // and the code is the same fact without them, for a front-end that says it its own way.
-      // A refusal this process decided carries its code for the mirror-image reason: a local
-      // refusal's sentence is already the whole of what there is to say, and a front-end handed
-      // it with no code reads it as a connection that failed (`§5.1`'s link, `§2`'s version).
+      // A link refused locally carries its code for the mirror-image reason: its sentence is
+      // already the whole of what there is to say, and a front-end handed it with no code reads
+      // it as a connection that failed (`§5.1`'s link).
       const code = isProtocolError(error)
         ? error.code
         : error instanceof UnreadableInvite
@@ -651,7 +559,6 @@ export class Companion {
       type: 'status',
       state: session.role === 'host' ? 'hosting' : 'joined',
       role: session.role,
-      wire: version,
       roomId: session.roomId,
       ...(invite === undefined ? {} : { invite }),
     });
@@ -694,34 +601,27 @@ export class Companion {
     this.grantRoot = session.role === 'host' ? root : undefined;
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
-      // A `selvage/2` host published the listing before this point — the state it sealed at mint
-      // carries it — so its first reading is the one already in the room, and the watcher starts
-      // from it rather than publishing the same tree again. A `selvage/1` host publishes here,
-      // because a version-1 room's grant is the server's to hold and this is the frame that puts
-      // it there.
-      if (version !== WIRE_VERSION_2) {
-        this.publishGrant(root);
-      }
+      // The host published the listing before this point — the state it sealed at mint carries
+      // it — so its first reading is the one already in the room, and the watcher starts from it
+      // rather than publishing the same tree again.
       this.watchGrant(root);
     }
   }
 
   /**
-   * Opens a `selvage/2` room as its host, with the shared folder's own reading as its first
-   * listing.
+   * Opens a room as its host, with the shared folder's own reading as its first listing.
    *
    * `§7.1` seals a state from the listing rather than the server holding one, so the walk has to
    * come before the mint: a host that minted first would put an empty tree in front of its first
    * guest, and a room that grants nothing is a different room from one whose listing is late.
    *
    * The walk is held in this attempt's own scope until the room that seals it exists. A mint can
-   * throw — a dead address, a server that refuses the version-2 hello — and a listing written into
-   * the session's own field before that would outlive the attempt: `publishGrant` compares against
-   * what it holds, so the next `selvage/1` host of the same folder would find it unchanged and
-   * send no `doc.grant` at all. A room the mint sealed a state from holds the walk; one that never
-   * minted holds nothing.
+   * throw — a dead address, a server that refuses the hello — and a listing written into the
+   * session's own field before that would outlive the attempt: `publishGrant` compares against what
+   * it holds, so the next host of the same folder would find it unchanged and send no `doc.grant` at
+   * all. A room the mint sealed a state from holds the walk; one that never minted holds nothing.
    */
-  private async hosting2(
+  private async hosting(
     serverUrl: string,
     displayName: string,
     root?: string,
@@ -750,7 +650,7 @@ export class Companion {
         });
       }
     }
-    const engine = await this.wire2.host(serverUrl, displayName, listing);
+    const engine = await this.engines.host(serverUrl, displayName, listing);
     // The state the mint sealed carries this listing, so the room has been handed it: from here
     // it is what `publishGrant` compares a fresh walk against.
     this.grantedListing = [...walked];
@@ -998,40 +898,6 @@ export class Companion {
 /** Whether two listings name the same paths, in the same order. */
 function sameListing(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((path, index) => path === right[index]);
-}
-
-/**
- * What the server's `/meta` answers, or `undefined` when it could not be read at all —
- * unreachable, not JSON, no fetch. Best effort by design: the endpoint is advisory and the
- * handshake reports the truth, so a body that could not be read decides nothing (`PROTOCOL.md`
- * §10).
- */
-async function readMetaBestEffort(baseUrl: string): Promise<Meta | undefined> {
-  try {
-    return await fetchMeta(baseUrl);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * What a local refusal says: the server it names, the version that server does not seat, and what
- * it seats instead, in `/meta`'s own words. It is the sentence the other client shows, without the
- * `Selvage: ` wrapper each editor adds in its own spelling — the two clients say one sentence, and
- * where the version a room is minted at comes from is not a thing to learn twice.
- */
-function hostVersionRefusal(
-  address: string,
-  refusal: Extract<HostDecision, { outcome: 'refuse' }>,
-): string {
-  // A `/meta` that named no version at all cannot happen here — a body with no versions is not an
-  // answer, and `hostVersion` reads it as one that decides nothing — but a front-end told "its
-  // /meta offers " with nothing after it reads as a truncated message.
-  const offered = refusal.offered.length === 0 ? 'nothing' : refusal.offered.join(', ');
-  if (refusal.reason === 'pin-not-seated') {
-    return `the wire version is pinned to ${refusal.pin}, and ${address} does not seat it — its /meta offers ${offered} — so hosting there is refused rather than fallen back from.`;
-  }
-  return `${address} does not seat selvage/2, the encrypted wire — its /meta offers ${offered} — so a room hosted there would be one the server can read.`;
 }
 
 /** A failure as a sentence: the message of an Error, or whatever was thrown instead. */
