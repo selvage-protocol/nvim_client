@@ -110,6 +110,21 @@ function M.text()
   return require('selvage').text(M.seed_path)
 end
 
+--- The text the plugin holds for a path other than the seed document.
+function M.text_of(path)
+  return require('selvage').text(path)
+end
+
+--- Where the plugin put a room path: the mirrored file when this session has a mirror, the
+--- `selvage://` scheme when it does not.
+function M.buffer_name(path)
+  local root = require('selvage').session().mirror
+  if root == nil then
+    return 'selvage://' .. path
+  end
+  return root .. '/' .. path
+end
+
 --- A file's bytes, or nil when there is no file at all. Unlike `read_file`, an empty file reads as
 --- an empty string, and a file that is one newline reads as one byte, which a line-wise read
 --- cannot say.

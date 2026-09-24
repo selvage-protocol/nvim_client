@@ -617,8 +617,11 @@ loading the real plugin and starting its own real companion, one minting a room 
 and the other joining the link it hands on. It proves what a session is: the page link carries
 `§5.1`'s fragment, the guest reads the room and its own role out of the state the host signed, an
 edit made in either window ends up in both, the host's working copy on disk holds the guest's own
-edit, and the companion's trace of that run holds the invite with its fragment redacted out. It is
-not part of `npm test` or CI, because it needs a `nvim` and a built `selvaged`.
+edit, and the companion's trace of that run holds the invite with its fragment redacted out. It also
+opens a granted path the host's own window never opened, so the text can only be the host's working
+copy read on the guest's hold, and — unless `SELVAGE_E2E_RECONNECT=0` — cuts the guest's socket and
+checks that both windows re-converge once it has re-established. It is not part of `npm test` or CI,
+because it needs a `nvim` and a built `selvaged`.
 
 ## Licence
 
@@ -626,12 +629,6 @@ not part of `npm test` or CI, because it needs a `nvim` and a built `selvaged`.
 
 ## What is not here yet
 
-- Content for a path the room lists but the host has never opened: a peer that holds such a path
-  is asking the host to read its working copy, and the host's engine does not read it. The guest's
-  buffer for the path stays empty and its mirror keeps the file, marked `[not fetched]`, until the
-  host opens it itself. `§13.7`'s holds path is where this lives: an accepted holds message is
-  applied, and the bridge reports the room's open set changing, and no read of the host's disk
-  follows either.
 - Packaging and distribution beyond Nix and "clone it and `npm ci`": no nixpkgs entry, no release
   bundle.
 - An edit that lands on the same characters a peer's edit is landing on is superseded by the

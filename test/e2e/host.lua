@@ -16,7 +16,18 @@ harness.seed_path = assert(vim.env.SELVAGE_E2E_SEED_PATH)
 harness.markers = {
   host = assert(vim.env.SELVAGE_E2E_MARKER_HOST),
   guest = assert(vim.env.SELVAGE_E2E_MARKER_GUEST),
+  host2 = assert(vim.env.SELVAGE_E2E_MARKER_HOST_2),
+  guest2 = assert(vim.env.SELVAGE_E2E_MARKER_GUEST_2),
+  granted = assert(vim.env.SELVAGE_E2E_MARKER_GRANTED),
 }
+--- The path the orchestrator wrote into this window's own folder before the session started and
+--- nothing here opens until the guest has read it: a name in the listing and never content until
+--- somebody asks, which is the whole of what this phase is about.
+harness.granted_path = assert(vim.env.SELVAGE_E2E_GRANTED_PATH)
+harness.reconnect_deadline_ms = tonumber(vim.env.SELVAGE_E2E_RECONNECT_DEADLINE_MS or '60000')
+--- Written by the orchestrator once the network blip is over; the reconnect phase runs only
+--- when this run has a relay to cut.
+harness.control_file = vim.env.SELVAGE_E2E_CONTROL_FILE
 harness.outcome = { role = 'host' }
 
 local selvage = harness.load_plugin()
@@ -76,4 +87,62 @@ harness.record('edit', harness.text(), {
   link = link,
   role = selvage.session().role,
 })
+
+-- -- a file this window never opened -------------------------------------------------------
+--
+-- `granted/never-opened.txt` is in the folder this session shares and in no buffer of this
+-- window: the guest opens it, which is a hold the room carries, and the path is a name and
+-- nothing else until this side reads it. That read is the bridge's own (`seedRequested`), and
+-- what it finds in the guest's copy can only be this file's bytes.
+harness.wait_for_file(
+  'the guest to read the path this window never opened',
+  harness.deadline_ms + 20000,
+  vim.env.SELVAGE_E2E_GRANTED_DONE_FILE
+)
+local held_before = vim.tbl_contains(selvage.documents(), harness.granted_path)
+harness.log('the granted path was open in this window before now:', held_before)
+vim.cmd('edit ' .. vim.fn.fnameescape(harness.granted_path))
+harness.wait('the guest marker to arrive in the granted path', harness.deadline_ms, function()
+  local text = harness.text_of(harness.granted_path)
+  return text ~= nil and text:find(harness.markers.granted, 1, true) ~= nil
+end, function()
+  return vim.inspect(harness.text_of(harness.granted_path))
+end)
+harness.record('granted', harness.text_of(harness.granted_path), { heldBeforeGuest = held_before })
+harness.write_file(vim.env.SELVAGE_E2E_GRANTED_ACK_FILE, 'seen')
+harness.log('the granted path reads', vim.inspect(harness.text_of(harness.granted_path)))
+
+-- -- the guest's socket is cut and comes back ------------------------------------------------
+--
+-- The blip is a real TCP close on the guest's own socket, through the relay the orchestrator
+-- put in its path; this window's connection and the room are untouched. The guest is the side
+-- that has to re-establish, and what is proved here is that both windows end on the same text
+-- after it does — the room's own handshake is what makes the second edit possible at all.
+if harness.control_file ~= nil then
+  harness.wait_for_file(
+    'the orchestrator to signal the network blip is over',
+    harness.reconnect_deadline_ms,
+    harness.control_file
+  )
+  vim.api.nvim_buf_set_lines(bufnr, 0, 0, true, { harness.markers.host2 })
+  harness.log('made the second host edit')
+  harness.wait('the guest edit made after the blip', harness.reconnect_deadline_ms, function()
+    return harness.contains(harness.markers.guest2)
+  end, harness.observe)
+  harness.record('phase2', harness.text())
+  harness.write_file(vim.env.SELVAGE_E2E_PHASE2_ACK_FILE, 'seen')
+  harness.log('phase 2 converged:', vim.inspect(harness.text()))
+end
+
+-- The guest's side of every phase above is a message on its way to the room until this window
+-- has it, and a process that exits takes its unsent frame with it. The guest says it is done
+-- before it goes, so that its leave is the last thing that happens here.
+harness.wait_for_file(
+  'the guest to say it is done',
+  harness.deadline_ms + 20000,
+  vim.env.SELVAGE_E2E_GUEST_DONE_FILE
+)
+
+selvage.leave()
+vim.wait(500)
 harness.done()
