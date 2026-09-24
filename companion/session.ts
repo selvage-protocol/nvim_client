@@ -21,7 +21,7 @@ import {
 import type { HostDecision, Meta, WireVersion } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
-import { enumerateGrant } from './grant.ts';
+import { enumerateGrant, grantReport } from './grant.ts';
 import { isRequest } from './ipc.ts';
 import {
   UnreadableInvite,
@@ -666,7 +666,7 @@ export class Companion {
       await this.settleGrant(engine);
     }
     if (!this.grantReported) {
-      this.send({ type: 'report', report: { kind: 'grant', paths: engine.grantedPaths() } });
+      this.send({ type: 'report', report: grantReport(engine.grantedPaths()) });
     }
     // The room's open-document set at the moment of joining arrives in the handshake rather
     // than as an event, so a guest would otherwise hear about the room's documents only if

@@ -402,6 +402,48 @@ check(
 )
 selvage.leave()
 
+-- A path the grant's own rules would never let a host publish is flagged by the companion as
+-- `unsafe`, and the mirror refuses it the way it refuses an over-long one. The listing is the
+-- room's to say and not checked by anyone (`PROTOCOL.md` §12): a `.git/` put on disk here is a
+-- repository every git-aware plugin runs `git` in, with whatever `core.fsmonitor` the room wrote.
+-- The room still lists the path (§6.3); its document is simply never a file.
+before = #notices
+selvage.join('ws://127.0.0.1:1/session?room=r-unsafe&token=t')
+handle({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-unsafe' })
+handle({
+  type = 'report',
+  report = {
+    kind = 'grant',
+    paths = { '.git/HEAD', '.git/config', 'src/main.rs' },
+    unsafe = { '.git/HEAD', '.git/config' },
+  },
+})
+handle({ type = 'report', report = { kind = 'documents', documents = {} } })
+handle({ type = 'report', report = { kind = 'peers', peers = {} } })
+root = selvage.session().mirror
+check('a path flagged unsafe is not materialised', vim.fn.isdirectory(root .. '/.git'), 0)
+check('  and the mirror does not hold it', mirror.granted('.git/config'), false)
+check('  and its buffer would not be a file', mirror.buffer_name('.git/config'), 'selvage://.git/config')
+check('  and the path beside it is materialised', vim.fn.filereadable(root .. '/src/main.rs'), 1)
+check(
+  '  and the person is told',
+  said_since(before, "2 of the room's files could not be mirrored, starting with .git/HEAD") ~= nil,
+  true
+)
+check('  and it is not offered to fetch', vim.tbl_contains(selvage.fetchable(), '.git/config'), false)
+local sent_before = #sent
+before = #notices
+selvage.fetch('.git/config')
+check(
+  '  and a fetch naming it opens nothing',
+  #vim.tbl_filter(function(message)
+    return message.type == 'open'
+  end, vim.list_slice(sent, sent_before + 1)),
+  0
+)
+check('  and says the listing has no such file', said_since(before, 'no file the room lists matches') ~= nil, true)
+selvage.leave()
+
 -- A name that would leave the root is refused rather than written: the listing comes from a
 -- peer, and `..` in it would put a file outside the mirror, where the person keeps their work.
 --
@@ -1205,6 +1247,7 @@ check('  and the one where a link was planted', vim.fn.isdirectory(CACHE .. '/r-
 check('  and the one whose listing lost everything', vim.fn.isdirectory(CACHE .. '/r-shrunk-to-nothing'), 0)
 check('  and the one whose path was too long', vim.fn.isdirectory(CACHE .. '/r-bounded'), 0)
 check('  and the one with a listing past the bound', vim.fn.isdirectory(CACHE .. '/r-many'), 0)
+check('  and the one whose listing named a repository', vim.fn.isdirectory(CACHE .. '/r-unsafe'), 0)
 
 vim.notify = notify
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))

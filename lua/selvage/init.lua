@@ -204,9 +204,14 @@ end
 --- The listing rather than everything the room offers: a document the room holds open that its
 --- listing does not name has no file in the mirror, so there is nothing to fetch for it.
 function M.fetchable()
+  -- Where there is a mirror, what it holds a file for, as `fetch_targets` reads it: a listed path
+  -- it refused has nowhere for a fetch to write. A host has no mirror and keeps its whole listing.
+  local mirrored = mirror.root() ~= nil
   local paths = {}
   for _, path in ipairs(state.grant) do
-    paths[#paths + 1] = path
+    if not mirrored or mirror.granted(path) then
+      paths[#paths + 1] = path
+    end
   end
   table.sort(paths)
   return paths
@@ -1326,9 +1331,14 @@ end
 --- @param wanted string
 --- @return string[]|nil targets, string[]|nil candidates
 local function fetch_targets(wanted)
+  -- What the mirror has a file for: a fetch is a write into it, and a listed path the mirror
+  -- refused — one no host would publish, or one past its bounds — has nowhere to be written, so a
+  -- fetch that waited for it would only run out its time.
   local paths = {}
   for _, path in ipairs(state.grant) do
-    paths[#paths + 1] = path
+    if mirror.granted(path) then
+      paths[#paths + 1] = path
+    end
   end
   if wanted == '' then
     return paths
@@ -3138,7 +3148,7 @@ local function on_report(report)
     end
     state.grant = report.paths or {}
     if is_peer() then
-      local root, blocked, created = mirror.setup(state.room, state.grant)
+      local root, blocked, created = mirror.setup(state.room, state.grant, report.unsafe)
       if root ~= nil then
         if created then
           watch_mirror()
