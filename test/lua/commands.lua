@@ -1073,5 +1073,49 @@ vim.fn.confirm = builtin_confirm
 vim.fn.getreg = real_getreg
 vim.fn.setreg = real_setreg
 
+-- An invite is the room's permission, and a `selvage/2` one carries the room key: a client
+-- **SHOULD NOT** put one anywhere it would not put the code (`PROTOCOL.md` §12), and ShaDa writes
+-- the histories and the unnamed register to a file that outlives the room. With the real registers
+-- and histories: the link a join read leaves the histories, and the one a copy put in the unnamed
+-- register (and in `0`, which `setreg('"')` fills too) leaves when the session ends.
+local LINK = 'ws://127.0.0.1:1/session?room=r-shada&token=t'
+local function in_history(needle)
+  for _, kind in ipairs({ ':', '@' }) do
+    for index = 1, vim.fn.histnr(kind) do
+      if vim.fn.histget(kind, index):find(needle, 1, true) ~= nil then
+        return true
+      end
+    end
+  end
+  return false
+end
+selvage.leave()
+vim.fn.histadd(':', 'SelvageJoin ' .. LINK)
+vim.fn.histadd(':', 'echo "kept"')
+vim.fn.histadd('@', LINK)
+selvage.join(LINK)
+check('a join takes the link it read out of the histories', in_history('r-shada'), false)
+check('  and leaves the rest of them alone', in_history('echo "kept"'), true)
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-shada' })
+selvage.copy_invite()
+check('a copied invite is in the unnamed register while the session stands', vim.fn.getreg('"'), LINK)
+selvage.leave()
+check('  and is taken out of it when the session ends', vim.fn.getreg('"'), '')
+check('  and out of register 0', vim.fn.getreg('0'), '')
+
+selvage.join(LINK)
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-shada' })
+selvage.copy_invite()
+vim.fn.setreg('"', 'yanked since')
+selvage.leave()
+check('a register the person has since written is theirs', vim.fn.getreg('"'), 'yanked since')
+
+selvage.join(LINK)
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-shada' })
+selvage.copy_invite()
+vim.api.nvim_exec_autocmds('VimLeavePre', {})
+check('quitting with the session open takes the copied link back too', vim.fn.getreg('"'), '')
+selvage.leave()
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

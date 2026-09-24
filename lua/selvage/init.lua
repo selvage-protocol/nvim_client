@@ -23,6 +23,9 @@ local state = {
   --- replica nobody hears.
   reconnecting = false,
   role = nil,
+  --- The link `hand_on_invite` last put in the unnamed register, so the session's end can take it
+  --- back out before ShaDa writes it to disk (`forget_invite`).
+  handed_invite = nil,
   --- Which wire version the session speaks, as the companion's seat said. The two versions end a
   --- dropped connection differently (§9.1): a `selvage/1` host reclaims its room and a
   --- `selvage/2` host cannot, so the sentence that closes the session depends on it.
@@ -2819,6 +2822,49 @@ end
 --- @param land boolean|nil
 --- @param keep_mirror boolean|nil
 --- @return string|nil the kept mirror's path, when one was kept
+--- Takes an invite back out of what this Neovim keeps on disk.
+---
+--- An invite is the room's permission, and a `selvage/2` one carries the room key in its fragment
+--- (`PROTOCOL.md` §5.1, §12): a client **SHOULD NOT** put one anywhere it would not put the code,
+--- and ShaDa writes the command-line and input histories and the unnamed register (with register
+--- `0`, which `setreg('"')` fills too) to a file that outlives the room. So a link typed into
+--- `:SelvageJoin` or its prompt leaves the histories once it has been read, and the one a copy put in
+--- the registers leaves them when the session ends — unless something else has been yanked since,
+--- which is the person's and is left alone. The system clipboard is not ShaDa's and is the handing
+--- on the person asked for, so it is not touched.
+---
+--- @param link string|nil the invite, as it was typed or copied
+--- @param registers boolean|nil whether the registers are scrubbed as well as the histories
+local function forget_invite(link, registers)
+  if type(link) ~= 'string' or link == '' then
+    return
+  end
+  for _, kind in ipairs({ ':', '@' }) do
+    local last = vim.fn.histnr(kind)
+    for index = last, math.max(1, last - vim.o.history), -1 do
+      if vim.fn.histget(kind, index):find(link, 1, true) ~= nil then
+        vim.fn.histdel(kind, index)
+      end
+    end
+  end
+  if registers then
+    for _, name in ipairs({ '"', '0' }) do
+      if vim.fn.getreg(name) == link then
+        vim.fn.setreg(name, '')
+      end
+    end
+  end
+end
+
+-- Quitting Neovim with a session still open reaches no `reset`, and `VimLeavePre` is the last
+-- moment before ShaDa is written, so the copied link is taken back there too.
+api.nvim_create_autocmd('VimLeavePre', {
+  group = api.nvim_create_augroup('SelvageInvite', { clear = true }),
+  callback = function()
+    forget_invite(state.handed_invite, true)
+  end,
+})
+
 local function reset(land, keep_mirror)
   local held = land and room_buffers() or nil
   local kept = keep_mirror and mirror.root() or nil
@@ -2865,6 +2911,8 @@ local function reset(land, keep_mirror)
   state.wire2 = false
   state.viewer_said = false
   state.room = nil
+  forget_invite(state.handed_invite, true)
+  state.handed_invite = nil
   state.invite = nil
   state.auto_open = false
   state.join_said = false
@@ -4036,6 +4084,7 @@ hand_on_invite = function()
     link = build_page_link(wire.room, wire.token, wire.base, wire.fragment)
   end
   vim.fn.setreg('"', link)
+  state.handed_invite = link
   -- The system clipboard is not this editor's to command: a Neovim with no clipboard provider
   -- takes the link into the unnamed register and nowhere else on the machine, so a sentence
   -- saying the clipboard has it would claim what the code cannot do. The unnamed register is
@@ -4159,6 +4208,9 @@ function M.join(invite)
     end_session()
   end
   local function with_invite(link)
+    -- The link has been read, so the command line or the prompt it was typed into has no more use
+    -- for it, and ShaDa would keep it past the room (`forget_invite`).
+    forget_invite(link)
     resolve_display_name(function(display_name)
       local process = ensure()
       if process ~= nil then
