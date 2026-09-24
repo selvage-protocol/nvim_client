@@ -169,6 +169,11 @@ test("a peer's caret is drawn once the room's text lands in the buffer", async (
   );
 
   it.engine.remote('notes.txt', 'base\n');
+  assert.equal(
+    it.presences.length,
+    0,
+    'a caret was drawn while the room text was still on its way into the buffer',
+  );
   await it.front.drain();
 
   assert.equal(it.host.text('notes.txt'), 'base\n');
