@@ -353,6 +353,8 @@ remembered one — the host on its own is enough, and it means the published sha
 completed to `wss://<host>`, because the room is dialled over TLS. The `/session` path every
 Selvage server answers belongs to the engine, which adds it to whatever base it is given:
 `wss://host` and `wss://host/session` both reach `wss://host/session`, and any other path is kept.
+An invite link is not a server address: its query and fragment are the room, its token and its
+key, so a link given wherever an address is asked for is refused and nothing is remembered.
 
 | | |
 |---|---|

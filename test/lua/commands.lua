@@ -314,6 +314,63 @@ check(
   'wss://selvage.example'
 )
 
+-- -- an invite link is not a server address ------------------------------------------
+--
+-- The address that reproduces the defect is the page invite a host copies —
+-- `https://selvage.example:8443/?room=r&token=t#k=KEY&h=HOSTKEY` — whose query is the room and
+-- its token and whose fragment the room key. `normalise_server_address` keeps both, so the whole
+-- link used to be written to the file beside the mirrors under `stdpath`: the room's key on disk
+-- for a host that never opened a room. Everywhere an address is taken — the argument, the box's
+-- answer and both writes `:SelvageChangeServer` performs — it is refused now, in the words the
+-- other client uses, and nothing is written.
+
+local invite = 'https://selvage.example:8443/?room=r&token=t#k=KEY&h=HOSTKEY'
+local kept = 'wss://selvage.example'
+local hosted = count_type('host')
+
+before = #notices
+vim.cmd('SelvageHost ' .. invite)
+check(
+  'an invite link given to :SelvageHost is refused',
+  said_since(before, 'that is an invite link, not a server address.') ~= nil,
+  true
+)
+check('  and nothing is dialled for it', count_type('host'), hosted)
+check(
+  '  and the remembered address is untouched',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  kept
+)
+
+before = #notices
+vim.cmd('SelvageChangeServer ' .. invite)
+check(
+  'an invite link given to :SelvageChangeServer is refused',
+  said_since(before, 'that is an invite link, not a server address.') ~= nil,
+  true
+)
+check('  and is not confirmed', said_since(before, 'will host on') == nil, true)
+check(
+  '  and is not written down',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  kept
+)
+
+before = #notices
+answer_with(invite)
+vim.cmd('SelvageChangeServer')
+check(
+  'an invite link answered into the box is refused',
+  said_since(before, 'that is an invite link, not a server address.') ~= nil,
+  true
+)
+check('  and is not confirmed either', said_since(before, 'will host on') == nil, true)
+check(
+  '  and is not written down',
+  table.concat(vim.fn.readfile(remembered_file), '\n'),
+  kept
+)
+
 -- -- :SelvageChangeServer reports the address in force and offers to change it ----------
 --
 -- The palette-reachable answer to "how do I change which server I am using", without hosting
