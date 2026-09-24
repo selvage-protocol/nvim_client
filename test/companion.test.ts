@@ -760,6 +760,40 @@ test("a joining client is told the room's grant the handshake carried", async ()
   });
 });
 
+test('a listing naming paths no host would publish says which, and is otherwise the room\'s', async () => {
+  // §6.3 has a receiver replace its grant with the room's `paths` whole, so the listing is not
+  // trimmed; §12 leaves every path on the wire unvalidated, so the ones the grant's own rules would
+  // never let a host publish are named beside it, for the mirror not to put on disk. A `.git/`
+  // materialised in a guest's mirror is a repository every git-aware plugin runs `git` in.
+  const listing = ['.git/config', '.git/HEAD', 'a/../b', 'src/main.rs'];
+  const it = harness('guest', [], [], { granted: listing });
+  await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+
+  const grant = (report: unknown): report is { kind: 'grant' } =>
+    (report as { kind: string }).kind === 'grant';
+  const reports = it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report)
+    .filter(grant);
+  assert.deepEqual(reports, [
+    { kind: 'grant', paths: listing, unsafe: ['.git/config', '.git/HEAD', 'a/../b'] },
+  ]);
+
+  // The bridge's own report of a later listing is annotated the same way.
+  it.engine.granted = ['.envrc', 'notes.txt'];
+  it.engine.emit({ type: 'grantChanged', paths: ['.envrc', 'notes.txt'] });
+  await settle();
+  const later = it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report)
+    .filter(grant);
+  assert.deepEqual(later.at(-1), {
+    kind: 'grant',
+    paths: ['.envrc', 'notes.txt'],
+    unsafe: ['.envrc'],
+  });
+});
+
 test('a guest join waits for the listing the handshake carried', async () => {
   const it = harness('guest');
   const joining = it.companion.handle({
