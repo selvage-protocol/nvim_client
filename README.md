@@ -343,7 +343,9 @@ per-receiver caps are unimplemented, as they are in the reference client.
 Hosting starts outside the editor: start `selvaged`, note the address it prints, and give that
 address to `:SelvageHost`, or set `vim.g.selvage_server_url` to always use it. The address is asked
 for once and remembered across restarts, so later bare `:SelvageHost` calls reuse it without asking.
-With none of the three, the one question starts from the demo server `ws://100.64.0.3:8080`.
+With none of the three, the one question starts from the demo server
+`selvage-demo.dontblameme.dev` — a domain on its own, which the completion below reads as
+`wss://selvage-demo.dontblameme.dev`.
 `:SelvageChangeServer` reports or changes the address without hosting first.
 
 Everywhere a *server* address is typed — the argument, the question's answer, the setting, a
@@ -354,7 +356,7 @@ Selvage server answers belongs to the engine, which adds it to whatever base it 
 
 | | |
 |---|---|
-| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach says why, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too (a buffer whose file's bytes are not text is refused rather than transliterated, once per path), and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `ws://100.64.0.3:8080` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
+| `:SelvageHost [serverUrl]` | Mint a room on that server and share the current buffer. Opening the room puts the page invite on the clipboard and says so; `:SelvageCopyInvite` is for later copies, and a clipboard this Neovim cannot reach says why, with the link left in the unnamed register. A bare hostname in `serverUrl` is completed as everywhere else. The folder the session was started in is its root: its files are published to the room as the grant, every file buffer opened under it joins the room too (a buffer whose file's bytes are not text is refused rather than transliterated, once per path), and a path a peer asks for is read from it. With no argument the remembered address is reused without asking (the demo default `selvage-demo.dontblameme.dev` until one is used), and `vim.g.selvage_server_url` answers it without asking. |
 | `:SelvageChangeServer [serverUrl]` | Report the server the next host uses, and set it, without hosting first. With no argument it reports the address in force and, where there is somebody to ask, opens the same box `:SelvageHost`'s first question does, prefilled with it. While `vim.g.selvage_server_url` is set that global outranks the remembered address, so the command says so and changes nothing. Either way the write reaches the next host only, never a room already open. |
 | `:SelvageJoin [invite]` | Join the room the invite link names. The first of the room's documents opens in the current window, in the mirror's copy of it; any others become buffers reachable with `:SelvageOpen`. With no argument the invite is asked for, starting from the clipboard when it holds a link that names a room. Accepts the page link the host copies, whose origin is the server the room lives on; a `ws://` link joins as it stands, which is how a room whose server serves no page is handed on. A value that is not an invite link, typed or pasted, is refused at once. |
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
@@ -395,9 +397,10 @@ a document the room changed by default, while a guest's mirror is not refreshed 
 save in it is refused and the file keeps what it last held. `vim.g.selvage_open_on_join` and this
 are read when a session starts, so a change to either applies to the next host or join.
 `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, completed the
-same way an argument is, so a bare host there means `wss://<host>`. The page a copied invite links
-to is the room's own server, over the scheme a browser speaks (`wss://` as `https://`, `ws://` as
-`http://`). A server started with `--page <dir>` serves the guest page from its own origin.
+same way an argument is, so a domain on its own there is enough and means `wss://<host>`. The page
+a copied invite links to is the room's own server, over the scheme a browser speaks (`wss://` as
+`https://`, `ws://` as `http://`). A server started with `--page <dir>` serves the guest page from
+its own origin.
 `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
 ### Pickers

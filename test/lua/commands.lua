@@ -180,7 +180,7 @@ answer_with('ws://127.0.0.1:7777')
 vim.cmd('SelvageHost')
 check('a bare :SelvageHost asks for an address', prompted ~= nil, true)
 check('  in the plugin\u{2019}s words', prompted and prompted.prompt:find('Selvage server to host on', 1, true) ~= nil, true)
-check('  starting from the demo default', prompted and prompted.default, 'ws://100.64.0.3:8080')
+check('  starting from the demo default', prompted and prompted.default, 'selvage-demo.dontblameme.dev')
 check('  and hosts on the answer', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
 
 -- The answer is remembered, so the next bare host proceeds on it with no question.
@@ -377,7 +377,13 @@ check(
   said_since(before, 'no server is remembered yet; the next host asks.') ~= nil,
   true
 )
-check('  and the box starts from the demo default', prompted and prompted.default, 'ws://100.64.0.3:8080')
+-- The default is the demo's domain on its own, and this box shows what that names: the same
+-- constant completed the way an argument is, which is what a host would dial.
+check(
+  '  and the box starts from the demo default, completed to what it dials',
+  prompted and prompted.default,
+  'wss://selvage-demo.dontblameme.dev'
+)
 
 -- An explicit argument sets the address directly: no box is opened.
 before = #notices

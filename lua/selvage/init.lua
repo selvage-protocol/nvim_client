@@ -3687,11 +3687,14 @@ local function resolve_display_name(callback)
   ask()
 end
 
---- The server a bare `:SelvageHost` asks about when nothing was configured and nothing
---- was remembered: the Pi demo from `ai_notes/docs/runbook-pi-demo.md`. An overridable
---- default, never a commitment — the answer is remembered, and an explicit argument and
+--- The server a bare `:SelvageHost` asks about when nothing was configured and nothing was
+--- remembered: the public demo, whose live state is `ai_notes/docs/runbook-prod-demo.md`. The
+--- value is a domain on its own on purpose — it is what a person would type — and
+--- `normalise_server_address` is what makes it a connection: a bare domain means the secure
+--- server, `wss://selvage-demo.dontblameme.dev`, on the port TLS uses. An overridable default,
+--- never a commitment — the answer is remembered, and an explicit argument and
 --- `vim.g.selvage_server_url` always win — so moving the demo is this one line.
-local DEFAULT_SERVER_URL = 'ws://100.64.0.3:8080'
+local DEFAULT_SERVER_URL = 'selvage-demo.dontblameme.dev'
 
 --- A scheme at the start of a typed value: `ws`, `wss`, `http`, `https`. Its presence is what
 --- separates a URL from an address someone typed out of their head, and the bare form is the
