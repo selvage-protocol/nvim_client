@@ -133,7 +133,10 @@ export type Notification =
    */
   | { type: 'refused'; what: 'host' | 'join'; roomId: string }
   /**
-   * A report, `kind` saying which. The bridge's own are passed through unchanged; `role` is this
+   * A report, `kind` saying which. The bridge's own are passed through unchanged but for one
+   * member: a `grant` whose listing names paths the grant's own rules would never let a host
+   * publish carries them again as `unsafe`, for a guest's mirror not to put on disk (`grantReport`
+   * in `grant.ts`); `paths` is still the room's whole listing (`PROTOCOL.md` §6.3). `role` is this
    * process's own, and says that the room's state has given this connection a different role than
    * the status it was told at the seat (`PROTOCOL.md` §13.4).
    */
