@@ -154,11 +154,15 @@ export const MAX_IPC_LINE_BYTES = 32 * 1024 * 1024;
 
 /** Reads newline-delimited JSON off a byte stream. */
 export class LineReader {
-  private buffer = '';
-  // The buffer in UTF-8 bytes, not code units: stdin is decoded as UTF-8, so a CJK line
-  // is three times what `String.length` says, and the bound has to hold for it too. Counted
-  // as chunks land and lines leave, never re-scanned whole.
-  private bufferBytes = 0;
+  // The chunks of the line being collected, none of which holds a newline, joined once when the
+  // newline that ends the line arrives. Appending each chunk to one string and searching that
+  // string again on every chunk made a whole-document line cost the square of its length: a
+  // 16 MiB line in 64 KiB chunks took seconds. Each chunk is now searched once, on arrival.
+  private pending: string[] = [];
+  // The line in UTF-8 bytes, not code units: stdin is decoded as UTF-8, so a CJK line is three
+  // times what `String.length` says, and the bound has to hold for it too. Counted as chunks
+  // land, never re-scanned whole.
+  private pendingBytes = 0;
   private readonly onLine: (line: string) => void;
   private readonly onDrop: (bytes: number) => void;
   /** Whether the reader is shedding an overlong line, to its newline. */
@@ -174,37 +178,53 @@ export class LineReader {
    * multi-byte character in half, so the text is accumulated and only whole lines handed on.
    */
   push(chunk: string): void {
-    this.buffer += chunk;
-    // Past the bound with no newline in sight, the line is shed rather than kept, said the
-    // first time it sheds; a shed tail that runs past it again goes in silence.
-    this.bufferBytes += Buffer.byteLength(chunk, 'utf8');
-    if (this.bufferBytes > MAX_IPC_LINE_BYTES && !this.buffer.includes('\n')) {
-      if (!this.dropping) {
-        this.dropping = true;
-        this.onDrop(this.bufferBytes);
-      }
-      this.buffer = '';
-      this.bufferBytes = 0;
+    let from = 0;
+    let newline = chunk.indexOf('\n');
+    while (newline !== -1) {
+      this.finish(chunk.slice(from, newline));
+      from = newline + 1;
+      newline = chunk.indexOf('\n', from);
+    }
+    this.collect(from === 0 ? chunk : chunk.slice(from));
+  }
+
+  /**
+   * A piece of the line still being collected. Past the bound with no newline in sight, the line
+   * is shed rather than kept, said the first time it sheds; the rest of a shed line is not kept at
+   * all, because nothing will read it.
+   */
+  private collect(piece: string): void {
+    if (piece === '' || this.dropping) {
       return;
     }
-    let newline = this.buffer.indexOf('\n');
-    while (newline !== -1) {
-      const line = this.buffer.slice(0, newline);
-      this.buffer = this.buffer.slice(newline + 1);
-      // The newline is ASCII, so a line and its terminator leave together.
-      const lineBytes = Buffer.byteLength(line, 'utf8');
-      this.bufferBytes -= lineBytes + 1;
-      if (this.dropping) {
-        // The newline the shed line ended at: shedding ends with it, and the tail with it.
-        this.dropping = false;
-      } else if (lineBytes > MAX_IPC_LINE_BYTES) {
-        // A whole line past the bound, delivered in fewer chunks than it takes to shed:
-        // nothing this process answers is that long, so it goes the way a shed one does.
-        this.onDrop(lineBytes);
-      } else if (line.trim() !== '') {
-        this.onLine(line);
-      }
-      newline = this.buffer.indexOf('\n');
+    this.pending.push(piece);
+    this.pendingBytes += Buffer.byteLength(piece, 'utf8');
+    if (this.pendingBytes > MAX_IPC_LINE_BYTES) {
+      this.dropping = true;
+      this.onDrop(this.pendingBytes);
+      this.pending = [];
+      this.pendingBytes = 0;
+    }
+  }
+
+  /** The last piece of a line, whose newline has arrived. */
+  private finish(piece: string): void {
+    if (this.dropping) {
+      // The newline the shed line ended at: shedding ends with it, and the tail with it.
+      this.dropping = false;
+      return;
+    }
+    const lineBytes = this.pendingBytes + Buffer.byteLength(piece, 'utf8');
+    this.pending.push(piece);
+    const line = this.pending.join('');
+    this.pending = [];
+    this.pendingBytes = 0;
+    if (lineBytes > MAX_IPC_LINE_BYTES) {
+      // A whole line past the bound, delivered in fewer chunks than it takes to shed: nothing
+      // this process answers is that long, so it goes the way a shed one does.
+      this.onDrop(lineBytes);
+    } else if (line.trim() !== '') {
+      this.onLine(line);
     }
   }
 }

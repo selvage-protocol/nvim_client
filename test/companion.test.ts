@@ -1238,6 +1238,43 @@ test('the bound counts UTF-8 bytes, not code units', () => {
   assert.deepEqual(lines, ['{"type":"leave"}'], 'and the line after it arrived');
 });
 
+test('a line that arrives over many chunks is read whole, once', () => {
+  // A whole-document `open` is one line and arrives in pipe-sized pieces: each piece is searched
+  // for its newline once, and the pieces are joined once, when the newline comes — a reader that
+  // re-searched the whole line on every piece cost the square of the line's length.
+  const lines: string[] = [];
+  const reader = new LineReader((line) => lines.push(line));
+  const piece = `${'a'.repeat(64 * 1024 - 1)}€`;
+  for (let index = 0; index < 64; index += 1) {
+    reader.push(piece);
+  }
+  assert.deepEqual(lines, [], 'nothing is handed on before the newline');
+  reader.push('\n{"type":"leave"}\n{"type":"selectionCleared"}\n{"type":"clo');
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], piece.repeat(64), 'the long line arrived whole and in order');
+  assert.deepEqual(lines.slice(1), ['{"type":"leave"}', '{"type":"selectionCleared"}']);
+  reader.push('se","path":"a"}\n');
+  assert.equal(lines.at(-1), '{"type":"close","path":"a"}', 'and the tail carried over');
+});
+
+test('a line past the bound over many chunks is shed once, and the next line still arrives', () => {
+  const lines: string[] = [];
+  const drops: number[] = [];
+  const reader = new LineReader(
+    (line) => lines.push(line),
+    (bytes) => drops.push(bytes),
+  );
+  const piece = 'x'.repeat(1024 * 1024);
+  const pieces = Math.ceil(MAX_IPC_LINE_BYTES / piece.length) + 3;
+  for (let index = 0; index < pieces; index += 1) {
+    reader.push(piece);
+  }
+  reader.push('tail\n{"type":"leave"}\n');
+  assert.equal(drops.length, 1, 'the runaway line was said once');
+  assert.ok((drops[0] as number) > MAX_IPC_LINE_BYTES, 'in bytes past the bound');
+  assert.deepEqual(lines, ['{"type":"leave"}'], 'its tail was shed with it, and the next line arrived');
+});
+
 // -- the IPC mouth, both directions ----------------------------------------------------
 //
 // A misshapen message answered blindly is a crash down the line, where the failure names
