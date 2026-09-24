@@ -22,7 +22,7 @@
 
 import WebSocket from 'ws';
 
-import { CLIENT_CAPABILITIES, DEFAULT_KEEPALIVE, event as eventName, isTerminalCode, numberField, parseServerMessage } from './envelope.ts';
+import { CLIENT_CAPABILITIES, DEFAULT_KEEPALIVE, WIRE_VERSION, event as eventName, isTerminalCode, numberField, parseServerMessage } from './envelope.ts';
 import type { Keepalive } from './envelope.ts';
 import { endingReason, parseInvite, PeerSession, unrefTimer } from './peer.ts';
 import type { Ending, PeerInvite, PeerOptions } from './peer.ts';
@@ -40,9 +40,6 @@ import { sessionBase, parseSessionUrl, sessionUrl } from './urls.ts';
 import type { SessionBase } from './urls.ts';
 import type { AwarenessState, OffsetSelection, Presence, Selection } from './presence.ts';
 import type { PeerInfo, Role } from './envelope.ts';
-
-/** The version this module speaks. `selvage/1` is the engine's, and stays where it is. */
-export const WIRE_VERSION_V2 = 'selvage/2';
 
 /** How long the upgrade and the handshake may take together before the connection is abandoned. */
 const HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -94,6 +91,12 @@ export type RelayEvent =
    * in the peer set — so the application is said rather than left for the next frame to imply.
    */
   | { type: 'state' }
+  /**
+   * A peer's held set was applied (`§13.7`). The holds are what a room's open-document set is
+   * read from, and they carry no text of their own, so the set moving is its own event rather
+   * than something the next content frame implies.
+   */
+  | { type: 'holds' }
   | { type: 'ended'; ending: RelayEnding }
   /** A fault the server reported: its code (§11) is the caller's to read, not only its words. */
   | { type: 'failed'; code: string; reason: string };
@@ -112,7 +115,7 @@ export interface RelayOptions {
   /**
    * §9.1's bounded reconnect for a guest whose socket drops. `false` turns it off; the fields
    * override the defaults, and the attempt budget is raised from the room's advertised grace
-   * (see {@link RelayOptions.fetchImpl}) exactly as the version-1 engine raises its own.
+   * (see {@link RelayOptions.fetchImpl}).
    */
   reconnect?: false | Partial<ReconnectPolicy>;
   /** `GET /meta`, over which the room's grace is read; a seam for a caller with its own fetch. */
@@ -329,8 +332,8 @@ export class RelaySession {
       throw new Error('the invite does not address a session endpoint');
     }
     this.invitePair = { roomId: invite.room, roomKey: invite.roomKey, hostKey: invite.hostKey };
-    // §9.1: the room's own grace is what the retry budget has to span, read the way the
-    // version-1 engine reads it. Best effort — an unreachable `/meta` decides nothing — and it
+    // §9.1: the room's own grace is what the retry budget has to span. Best effort — an
+    // unreachable `/meta` decides nothing — and it
     // is awaited so a drop immediately after the join still finds the budget in place.
     await this.applyGrace(parsed.base, options);
     const info = await this.dial(options, parsed.base, invite.socketUrl, options.displayName);
@@ -352,7 +355,7 @@ export class RelaySession {
    * room that was still joinable.
    */
   private async applyGrace(base: SessionBase, options: RelayOptions): Promise<void> {
-    // An explicit budget is the caller's, exactly as the version-1 engine reads it.
+    // An explicit budget is the caller's to choose.
     if (!this.reconnect.enabled || this.maxAttemptsGiven) {
       return;
     }
@@ -569,6 +572,14 @@ export class RelaySession {
     return this.session?.text(path) ?? '';
   }
 
+  /**
+   * The paths whose text changed since the last call, or `undefined` when no session is seated
+   * to say, in which case a reader treats every path as changed.
+   */
+  takeTouched(): string[] | undefined {
+    return this.session?.takeTouched();
+  }
+
   heldPaths(): string[] {
     return this.session?.heldPaths() ?? [];
   }
@@ -753,7 +764,7 @@ export class RelaySession {
     this.requestId += 1;
     socket.sendText(
       JSON.stringify({
-        v: WIRE_VERSION_V2,
+        v: WIRE_VERSION,
         id: this.requestId,
         method: 'session.rename',
         params: { display_name: displayName },
@@ -836,8 +847,8 @@ export class RelaySession {
 
   /**
    * A `session.error` event as the refusal it is. `§6.3` carries the code and the sentence in
-   * the event's `params` — `src/engine/engine.ts` reads them from there for `selvage/1`, and the
-   * server's own frame is `{"event":"session.error","params":{"code":…,"message":…}}`.
+   * the event's `params`, and the server's own frame is
+   * `{"event":"session.error","params":{"code":…,"message":…}}`.
    * `ServerMessage.error` is the shape of a refused *request*, so reading it here turned every
    * handshake refusal and every mid-session fault into one generic sentence with its code lost,
    * which is what left `§11`'s terminal codes unreadable to a caller.
@@ -1068,6 +1079,8 @@ export class RelaySession {
         this.emit({ type: 'text' });
       } else if (outcome.status === 'applied' && outcome.kind === 1) {
         this.emit({ type: 'state' });
+      } else if (outcome.status === 'applied' && outcome.kind === 3) {
+        this.emit({ type: 'holds' });
       }
       return;
     }
@@ -1279,7 +1292,7 @@ function helloEnvelope(
   awarenessId: number,
 ): Record<string, unknown> {
   return {
-    v: WIRE_VERSION_V2,
+    v: WIRE_VERSION,
     id: 1,
     method: 'session.hello',
     params: {

@@ -233,19 +233,6 @@ check(
   true
 )
 
-local before_version = #notices
-handlers().on_message({
-  type = 'status',
-  state = 'error',
-  code = 'unsupported_version',
-  message = 'unsupported wire version 2',
-})
-check(
-  'a server that speaks another version names what differs',
-  said_since(before_version, 'speak different versions (unsupported wire version 2)') ~= nil,
-  true
-)
-
 local before_full = #notices
 handlers().on_message({
   type = 'status',
@@ -261,40 +248,12 @@ check(
 check('  and still not its code', said_since(before_full, 'x.room_full') == nil, true)
 selvage.leave()
 
--- The companion's own refusal of a wire version: it is decided before anything is dialled, so
--- there is no connection to describe. The sentence the companion sends names the server and the
--- version it does not seat, and it is the whole of what a person reads — wrapping it in `could
--- not host on <address>.` would be a sentence about a dial that never happened.
-selvage.host('ws://127.0.0.1:1')
-local before_refused_version = #notices
-handlers().on_message({
-  type = 'status',
-  state = 'error',
-  code = 'wire_version_refused',
-  message = 'ws://127.0.0.1:1 does not seat selvage/2, the encrypted wire — its /meta offers selvage/1 — so a room hosted there would be one the server can read.',
-})
-check(
-  'a version the server does not seat is said as the companion wrote it',
-  said_since(
-    before_refused_version,
-    'selvage: ws://127.0.0.1:1 does not seat selvage/2, the encrypted wire — its /meta offers selvage/1 — so a room hosted there would be one the server can read.'
-  ) ~= nil,
-  true
-)
-check(
-  '  and not behind a sentence about a connection that was never made',
-  said_since(before_refused_version, 'could not host on') == nil,
-  true
-)
-check('  at error level', notices[#notices].level, vim.log.levels.ERROR)
-selvage.leave()
-
 -- And the companion's own refusal of a link it will not read: `§5.1`'s fragment is where a
--- version-2 room's two keys travel, and a link whose keys are missing or misspelled is refused
--- locally, before a socket is opened. The engine's sentence says what is wrong with the link, and
--- it is the whole of what a person reads: the failure carries no code of the protocol's, so a
--- front-end that treated it as a connection that failed would replace it with a sentence about a
--- server that never answered.
+-- room's two keys travel, and a link whose keys are missing or misspelled is refused locally,
+-- before a socket is opened. The engine's sentence says what is wrong with the link, and it is the
+-- whole of what a person reads: the failure carries no code of the protocol's, so a front-end that
+-- treated it as a connection that failed would replace it with a sentence about a server that
+-- never answered.
 selvage.join('ws://127.0.0.1:1/session?room=r-refused&token=t#k=short&h=short')
 local before_refused_invite = #notices
 handlers().on_message({
@@ -1349,11 +1308,11 @@ check(
 
 -- -- which ending a give-up is ----------------------------------------------------------
 --
--- A `selvage/2` host is the one session no retry ran for: §9.1's host return is a fresh room state
--- signed by the host key and this client writes no host store, so a hosting session on the sealed
--- wire ends at the first drop. The companion says the version at the seat, and the sentence has to
--- say it rather than implying an attempt that was never made — the words the VS Code client's
--- adapter uses at the same moment.
+-- A hosting session is the one session no retry ran for: §9.1's host return is a fresh room state
+-- signed by the host key and this client writes no host store, so a hosting session ends at the
+-- first drop and the sentence says so rather than implying an attempt that was never made. A
+-- guest's session does run the engine's bounded retry, so its sentence is said only once the
+-- attempts are spent. Both are the words the VS Code client's adapter uses at the same moment.
 
 local function drop_ending(name, status)
   selvage.leave()
@@ -1368,27 +1327,22 @@ end
 --- The two sentences a drop can end with, as the front-end says them.
 local ENDING = {
   guest = 'it could not be re-established.',
-  host = 'this wire cannot resume a hosting session yet, so it will not reconnect.',
+  host = 'this client cannot resume a hosting session, so it will not reconnect.',
 }
 
 check(
-  'a selvage/2 host is told its wire cannot resume a hosting session',
-  drop_ending(ENDING.host, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/2', roomId = 'r-v2' }),
+  'a host is told its session cannot be resumed',
+  drop_ending(ENDING.host, { type = 'status', state = 'hosting', role = 'host', roomId = 'r-host' }),
   true
 )
 check(
   '  and is not told the guest sentence',
-  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/2', roomId = 'r-v2' }),
+  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', roomId = 'r-host' }),
   false
 )
 check(
-  'a selvage/1 host keeps the retried sentence its engine does run',
-  drop_ending(ENDING.guest, { type = 'status', state = 'hosting', role = 'host', wire = 'selvage/1', roomId = 'r-v1' }),
-  true
-)
-check(
-  'a selvage/2 guest that gave up keeps the retried sentence',
-  drop_ending(ENDING.guest, { type = 'status', state = 'joined', role = 'guest', wire = 'selvage/2', roomId = 'r-v2g' }),
+  'a guest that gave up keeps the retried sentence',
+  drop_ending(ENDING.guest, { type = 'status', state = 'joined', role = 'guest', roomId = 'r-guest' }),
   true
 )
 
@@ -2401,11 +2355,11 @@ check('  naming its type', received[1] and received[1].type, 'leave')
 
 -- -- a viewer's documents are read-only -----------------------------------------
 --
--- `selvage/2` is the only version that seats a role other than host or guest: the room state
--- assigns it (§13.4) and §13.9 has a viewer keep its own edit and publish none of it. A buffer
--- that accepted a keystroke would show text the room never receives — worse than a refusal — while
--- what the room applies is not the viewer's keystroke at all: both are the room's own text, and the
--- second has to land. One flag does both, which is what `document.lua`'s `set_read_only` is for.
+-- The room state seats a role other than host or guest: it assigns `viewer` (§13.4) and §13.9
+-- has a viewer keep its own edit and publish none of it. A buffer that accepted a keystroke would
+-- show text the room never receives — worse than a refusal — while what the room applies is not the
+-- viewer's keystroke at all: both are the room's own text, and the second has to land. One flag
+-- does both, which is what `document.lua`'s `set_read_only` is for.
 --
 -- The role arrives as a report after the join, not with the seat: no applied state can commit this
 -- connection's key at the moment the seat is announced (§13.4), so a viewer that read the role once,

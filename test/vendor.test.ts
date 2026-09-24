@@ -27,9 +27,11 @@ function sources(dir: string): string[] {
 }
 
 test('the vendored engine and bridge are there', () => {
+  // The two entry points this repository imports from, and not a module behind them: what the
+  // copy has to be is the seam, and which files the seam is made of is the source's business.
   const files = sources(root).map((path) => path.slice(root.length + 1));
-  assert.ok(files.includes(join('engine', 'engine.ts')), files.join(', '));
-  assert.ok(files.includes(join('bridge', 'bridge.ts')), files.join(', '));
+  assert.ok(files.includes(join('engine', 'index.ts')), files.join(', '));
+  assert.ok(files.includes(join('bridge', 'index.ts')), files.join(', '));
 });
 
 test('nothing under vendor/ imports an editor', () => {

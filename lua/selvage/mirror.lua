@@ -402,8 +402,8 @@ end
 ---
 --- A path the companion flagged `unsafe` is one the grant's own rules would never let a host
 --- publish (`companion/grant.ts`, `grantReport`): `.git/config` is the example that matters. The
---- listing is not trusted — at `selvage/1` it is the server's to hold, and no version checks it
---- (`PROTOCOL.md` §12) — and a `.git/` materialised here is a repository every git-aware plugin
+--- listing is the room's and is not trusted — nothing on the wire checks it (`PROTOCOL.md` §12) —
+--- and a `.git/` materialised here is a repository every git-aware plugin
 --- runs `git` in, with whatever `core.fsmonitor` the room wrote into it. Such a path is refused the
 --- way an over-long one is: the room still lists it, and its document stays a `selvage://` buffer.
 ---

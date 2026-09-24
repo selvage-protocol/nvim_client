@@ -3,10 +3,9 @@
  * to the room, what the room asks a front-end to do, and the one race the local IPC has of
  * its own — a remote edit and a local one crossing in the pipe.
  *
- * Every `host` here pins `selvage/1`, which is the deliberate way to the readable wire and the
- * room these tests were written as. An unpinned host takes its version from what the server's
- * `/meta` seats, and reaching a real server is not something this file does — the section below
- * on the version decision is where that rule is driven, with the answer supplied.
+ * Every `host` here reaches the replica through the factory the harness supplies: the room
+ * behind a real companion is real, and what these tests are about is what this process does
+ * with one.
  */
 
 import assert from 'node:assert/strict';
@@ -28,14 +27,13 @@ import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { enumerateGrant } from '../companion/grant.ts';
-import { Companion, WIRE_VERSION_REFUSED, realWire2 } from '../companion/session.ts';
-import type { MetaReader } from '../companion/session.ts';
-import { ProtocolError, parseInvite } from '../vendor/engine/index.ts';
+import { Companion, realEngines } from '../companion/session.ts';
+import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/index.ts';
 
 import { MAX_GRANT_FILE_BYTES } from '../vendor/bridge/index.ts';
 import type { GrantedRead } from '../vendor/bridge/index.ts';
-import { INVITE_REFUSED, wireVersionOf } from '../companion/relay.ts';
+import { INVITE_REFUSED } from '../companion/relay.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
 
@@ -71,15 +69,8 @@ interface Harness {
   sent: Notification[];
   /** Every server a `host` was asked for, in order: a second entry is a second room. */
   hosts: string[];
-  /** The same, on the encrypted wire: which of the two factories a host went through is what
-   * the version decision amounts to. */
-  hosts2: string[];
   /** Every invite a `join` was asked for, in the same order. */
   joins: string[];
-  /** The same, on the encrypted wire. A join's version is the link's to say, so which factory
-   * an invite reached is the routing decision itself, and one shared array could not tell them
-   * apart. */
-  joins2: string[];
   /** The `applyEdit`s asked for so far. */
   applies: Array<Extract<Notification, { type: 'applyEdit' }>>;
 }
@@ -94,17 +85,11 @@ function harness(
     grantError?: Error;
     enumerate?: (root: string) => Promise<string[]>;
     /**
-     * What the server's `/meta` answers. The default is a body that could not be read: this
-     * process is the one that dials it, and a process in a test should not reach the network — a
-     * test about what this companion does with an answer supplies the answer.
-     */
-    meta?: MetaReader;
-    /**
-     * When set, every `selvage/2` mint this harness is asked for throws it, the way a dead
-     * address or a server that refuses the version-2 hello reaches the session. No engine is
+     * When set, the next mint this harness is asked for throws it, the way a dead address or a
+     * server that refuses the hello reaches the session, and the ones after it do not. No engine is
      * built for a mint that did not happen.
      */
-    wire2MintFails?: Error;
+    mintFails?: Error;
     /**
      * Whether the replica echoes a published listing back the way a real server's `doc.granted`
      * does. Off by default: a test that is not about the grant report should not be handed one.
@@ -117,9 +102,7 @@ function harness(
     sent.push(notification);
   };
   const hosts: string[] = [];
-  const hosts2: string[] = [];
   const joins: string[] = [];
-  const joins2: string[] = [];
   const engines: FakeEngine[] = [];
   const open = (): FakeEngine => {
     const engine = new FakeEngine(role, documents, peers);
@@ -135,29 +118,23 @@ function harness(
     editor,
     autoSave: options.defaultAutoSave ?? false,
     enumerate: options.enumerate,
-    meta: options.meta ?? (() => Promise.resolve(undefined)),
     engines: {
-      host: (serverUrl) => {
+      host: (serverUrl, _displayName, listing) => {
         hosts.push(serverUrl);
-        return Promise.resolve(open());
+        const failure = options.mintFails;
+        if (failure !== undefined) {
+          options.mintFails = undefined;
+          return Promise.reject(failure);
+        }
+        const engine = open();
+        // `§7.1`: the state the host mints is sealed from its listing, so the room holds it
+        // from the first moment and no `doc.grant` goes out for it. The fake engine is handed
+        // the same fact the real one's room state carries.
+        engine.granted = [...listing.current()];
+        return Promise.resolve(engine);
       },
       join: (invite) => {
         joins.push(invite);
-        return Promise.resolve(open());
-      },
-    },
-    // The version-2 half of the same seam. It records which factory was reached rather than the
-    // arguments alone, because that is the whole of what a host's version decision amounts to.
-    wire2: {
-      host: (serverUrl) => {
-        hosts2.push(serverUrl);
-        if (options.wire2MintFails !== undefined) {
-          return Promise.reject(options.wire2MintFails);
-        }
-        return Promise.resolve(open());
-      },
-      join: (invite) => {
-        joins2.push(invite);
         return Promise.resolve(open());
       },
     },
@@ -167,9 +144,7 @@ function harness(
     editor,
     sent,
     hosts,
-    hosts2,
     joins,
-    joins2,
     get engine(): FakeEngine {
       const engine = engines.at(-1);
       assert.ok(engine !== undefined, 'no session was opened');
@@ -203,6 +178,14 @@ async function settle(): Promise<void> {
   for (let turn = 0; turn < 8; turn += 1) {
     await Promise.resolve();
   }
+}
+
+/** The statuses this companion sent, in the order it sent them. */
+function statuses(it: Harness): Array<Extract<Notification, { type: 'status' }>> {
+  return it.sent.filter(
+    (notification): notification is Extract<Notification, { type: 'status' }> =>
+      notification.type === 'status',
+  );
 }
 
 /** A change as the text it names would take it. */
@@ -284,7 +267,7 @@ class FrontEnd {
 
 test('hosting reports the invite and the room', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   const status = it.sent.filter((notification) => notification.type === 'status');
   // A `host` opens a session; it does not end one first. Which session is given up is the
   // front-end's to ask about — see "a second host is refused".
@@ -296,158 +279,19 @@ test('hosting reports the invite and the room', async () => {
   assert.match(status[1]?.invite ?? '', /room=r-test&token=t-test/);
 });
 
-// -- which version a host mints ---------------------------------------------------------
-//
-// `PROTOCOL.md` §2: a client that can speak `selvage/2` mints it where the server seats it, and
-// where `/meta` answered without it the client refuses before it dials anything — falling back to
-// `selvage/1` would mint a room whose contents the server reads, which is the room the version
-// exists to make impossible. A `/meta` that could not be read is no answer at all: the handshake
-// is where that one is refused, and loudly. A pin is the deliberate way to the readable wire, and
-// one the server does not seat is refused rather than fallen back from. A join is none of this —
-// it speaks the version its invite names (§5.1).
-
-/** A `/meta` body as a server writes it, as the reader this companion is handed. */
-function metaOffers(...versions: string[]): MetaReader {
-  return () => Promise.resolve({ wire_versions: versions });
-}
-
-/** A `/meta` that could not be read: unreachable, not JSON, or no fetch at all. */
-const noMeta: MetaReader = () => Promise.resolve(undefined);
-
-/** The statuses this companion sent, in the order it sent them. */
-function statuses(it: Harness): Array<Extract<Notification, { type: 'status' }>> {
-  return it.sent.filter(
-    (notification): notification is Extract<Notification, { type: 'status' }> =>
-      notification.type === 'status',
-  );
-}
-
-function refusalStatus(it: Harness): Extract<Notification, { type: 'status' }> {
-  const heard = statuses(it);
-  assert.deepEqual(
-    heard.map((entry) => entry.state),
-    ['error'],
-    'a refused host never said it was connecting, because it never dialled',
-  );
-  const refusal = heard[0];
-  assert.notEqual(refusal, undefined, 'no status at all');
-  return refusal as Extract<Notification, { type: 'status' }>;
-}
-
-test('an unpinned host mints the version the server seats', async () => {
-  const it = harness('host', [], [], { meta: metaOffers('selvage/1', 'selvage/2') });
-  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
-
-  assert.deepEqual(it.hosts, [], 'a server seating both does not move a host off the encrypted wire');
-  assert.deepEqual(it.hosts2, ['ws://127.0.0.1:0'], 'it mints the encrypted one');
-  assert.deepEqual(
-    statuses(it).map((entry) => entry.state),
-    ['connecting', 'hosting'],
-  );
-});
-
-// Two versions end a dropped connection differently (`§9.1`): a `selvage/1` host reclaims its
-// room and a `selvage/2` host cannot, because the host return is a fresh room state signed by the
-// host key and this client writes no host store. The front-end is the one that says it, so the
-// seat has to carry which version it is.
-test('the seat tells the front-end which wire version it speaks', async () => {
-  const sealed = harness('host', [], [], { meta: metaOffers('selvage/1', 'selvage/2') });
-  await sealed.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
-  assert.equal(statuses(sealed).at(-1)?.wire, 'selvage/2');
-
-  const readable = harness('host');
-  await readable.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
-  assert.equal(statuses(readable).at(-1)?.wire, 'selvage/1');
-
-  const guest = harness('guest');
-  await guest.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
-  assert.equal(statuses(guest).at(-1)?.wire, 'selvage/1', 'a link with no fragment is the readable wire');
-});
-
-test('a server that does not seat selvage/2 is refused before anything is dialled', async () => {
-  const it = harness('host', [], [], { meta: metaOffers('selvage/1') });
-  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
-
-  assert.deepEqual(it.hosts, [], 'no room was minted');
-  assert.deepEqual(it.hosts2, [], 'and none on the encrypted wire either');
-  const refusal = refusalStatus(it);
-  assert.equal(refusal.code, WIRE_VERSION_REFUSED);
-  assert.equal(
-    refusal.message,
-    'ws://127.0.0.1:0 does not seat selvage/2, the encrypted wire — its /meta offers selvage/1 — so a room hosted there would be one the server can read.',
-  );
-});
-
-test('a /meta that could not be read is no answer, so the host attempts selvage/2', async () => {
-  const it = harness('host', [], [], { meta: noMeta });
-  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
-
-  // The endpoint is advisory: a server that seats no `selvage/2` refuses the hello with
-  // `unsupported_version`, which is loud, and refusing to try would be a client inventing an
-  // answer out of an unreachable endpoint.
-  assert.deepEqual(it.hosts, []);
-  assert.deepEqual(it.hosts2, ['ws://127.0.0.1:0']);
-});
-
-test('a pin decides the version, and a server seating both does not move it', async () => {
-  const it = harness('host', [], [], { meta: metaOffers('selvage/1', 'selvage/2') });
-  await it.companion.handle({
-    type: 'host',
-    wire: 'selvage/1',
-    serverUrl: 'ws://127.0.0.1:0',
-  });
-
-  assert.deepEqual(it.hosts, ['ws://127.0.0.1:0'], 'the deliberate way to a room the server can read');
-  assert.deepEqual(it.hosts2, []);
-});
-
-test('a pin the server does not seat is refused rather than fallen back from', async () => {
-  // Both directions, because the guard is one membership test either way and a test that seeded
-  // only one of them would not know which half of it ran.
-  const wants2 = harness('host', [], [], { meta: metaOffers('selvage/1') });
-  await wants2.companion.handle({
-    type: 'host',
-    wire: 'selvage/2',
-    serverUrl: 'ws://127.0.0.1:0',
-  });
-  assert.deepEqual(wants2.hosts, [], 'the readable wire is not a fall back from a pin');
-  assert.deepEqual(wants2.hosts2, []);
-  const refused2 = refusalStatus(wants2);
-  assert.equal(refused2.code, WIRE_VERSION_REFUSED);
-  assert.equal(
-    refused2.message,
-    'the wire version is pinned to selvage/2, and ws://127.0.0.1:0 does not seat it — its /meta offers selvage/1 — so hosting there is refused rather than fallen back from.',
-  );
-
-  const wants1 = harness('host', [], [], { meta: metaOffers('selvage/2') });
-  await wants1.companion.handle({
-    type: 'host',
-    wire: 'selvage/1',
-    serverUrl: 'ws://127.0.0.1:0',
-  });
-  assert.deepEqual(wants1.hosts, []);
-  assert.deepEqual(wants1.hosts2, []);
-  const refused1 = refusalStatus(wants1);
-  assert.equal(refused1.code, WIRE_VERSION_REFUSED);
-  assert.equal(
-    refused1.message,
-    'the wire version is pinned to selvage/1, and ws://127.0.0.1:0 does not seat it — its /meta offers selvage/2 — so hosting there is refused rather than fallen back from.',
-  );
-});
-
 test('a link the client will not read is refused with the engine\'s own sentence', async () => {
-  // The real version-2 factories: a link whose fragment does not read is refused before anything is
+  // The real factories: a link whose fragment does not read is refused before anything is
   // dialled, so this test opens no socket and needs no server — which is the property being
   // pinned. The failure carries no code of the protocol's, and a front-end handed it as a
   // connection that failed would replace the engine's sentence with one about a server.
   const sent: Notification[] = [];
   const companion = new Companion({
     send: (notification) => sent.push(notification),
-    wire2: realWire2,
+    engines: realEngines,
   });
 
   for (const invite of [
-    // Both names, a value that is not a key: the link asks for `selvage/2` and cannot be joined.
+    // Both names, a value that is not a key: the link carries both keys and cannot be joined.
     'ws://127.0.0.1:1/session?room=r&token=t#k=short&h=short',
     // The same fragment on the page form a host hands on, which the engine resolves first.
     'https://127.0.0.1:1/?room=r&token=t#k=short&h=short',
@@ -470,53 +314,6 @@ test('a link the client will not read is refused with the engine\'s own sentence
       `and the engine's own sentence for it: ${invite}`,
     );
   }
-});
-
-test('a join consults neither the setting nor the server: the link is the version', async () => {
-  // A reader that fails the test rather than answering one: a join has nothing to ask, so a join
-  // that asked would be the defect.
-  const unread: MetaReader = () => {
-    throw new Error('a join read /meta');
-  };
-  const sealed =
-    'ws://127.0.0.1:0/session?room=r&token=t#k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&h=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-
-  const bySealedLink = harness('guest', [], [], { meta: unread });
-  await bySealedLink.companion.handle({ type: 'join', invite: sealed });
-  assert.deepEqual(bySealedLink.joins, [], 'a sealed link never reaches the readable factory');
-  assert.deepEqual(bySealedLink.joins2, [sealed], 'it joins on the encrypted wire');
-
-  const plain = 'ws://127.0.0.1:0/session?room=r&token=t';
-  const byPlainLink = harness('guest', [], [], { meta: unread });
-  await byPlainLink.companion.handle({ type: 'join', invite: plain });
-  assert.deepEqual(byPlainLink.joins, [plain], 'and a link with no fragment on the readable one');
-  assert.deepEqual(byPlainLink.joins2, [], 'never on the encrypted one');
-});
-
-test('a fragment is read with §5.1\'s decoding, as the engine reads it', async () => {
-  // A name written `%6b` is `k`: the engine's fragment reader percent-decodes a name before it
-  // looks for one, so a chooser reading the raw spelling would send the link to the readable wire
-  // and the room it names would not be there. The two readers are asked the same question here,
-  // and a link with only one of the two names is still a version-1 link, as it always was.
-  // A key is 32 bytes in `§5.1`'s base64url, and 43 `A`s is one: 43 `a`s is not, because the final
-  // character's padding bits are not zero, so the value would be refused for the wrong reason.
-  const key = 'A'.repeat(43);
-  const encoded = `ws://127.0.0.1:1/session?room=r&token=t#%6b=${key}&h=${key}`;
-  assert.equal(
-    parseInvite(encoded).ok,
-    true,
-    'the engine reads a percent-encoded room key, which is what the chooser has to agree with',
-  );
-  assert.equal(wireVersionOf(encoded), 'selvage/2');
-  assert.equal(wireVersionOf(`ws://h/session?room=r&token=t#k=${key}&h=${key}`), 'selvage/2');
-  assert.equal(wireVersionOf(`ws://h/session?room=r&token=t#k=${key}`), 'selvage/1');
-  assert.equal(wireVersionOf('ws://h/session?room=r&token=t'), 'selvage/1');
-  assert.equal(wireVersionOf('ws://h/session?room=r&token=t#%zz=x&h=y'), 'selvage/1');
-
-  const it = harness('guest');
-  await it.companion.handle({ type: 'join', invite: encoded });
-  assert.deepEqual(it.joins2, [encoded], 'the link reached the encrypted wire');
-  assert.deepEqual(it.joins, [], 'and never the readable one');
 });
 
 test('a role the state gives this connection after the seat reaches the front-end', async () => {
@@ -549,11 +346,11 @@ test('a role the state gives this connection after the seat reaches the front-en
 
 test('a second host is refused rather than minting a second room', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   const before = it.sent.length;
 
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:elsewhere' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:elsewhere' });
 
   assert.deepEqual(it.hosts, ['ws://127.0.0.1:0'], 'the room in hand is the only one opened');
   assert.equal(it.engine.disconnected, false, 'and it is still open');
@@ -567,13 +364,12 @@ test('a second host is refused rather than minting a second room', async () => {
 
 test('a join while a session is live is refused the same way', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   const before = it.sent.length;
 
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
 
   assert.deepEqual(it.joins, []);
-  assert.deepEqual(it.joins2, []);
   assert.equal(it.engine.disconnected, false);
   assert.deepEqual(it.sent.slice(before), [
     { type: 'refused', what: 'join', roomId: 'r-test' },
@@ -599,7 +395,7 @@ test("a joining client is told the room's peers the handshake carried", async ()
 
 test('a remote change is written when the front-end asks for it', async () => {
   const it = harness('host', [], [], { defaultAutoSave: true });
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
 
   it.engine.remote('notes.txt', 'hello, world\n');
@@ -611,7 +407,7 @@ test('a remote change is written when the front-end asks for it', async () => {
 
 test('a remote change is not written when the front-end says not to', async () => {
   const it = harness('host', [], [], { defaultAutoSave: true });
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', autoSave: false });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', autoSave: false });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
 
   it.engine.remote('notes.txt', 'hello, world\n');
@@ -629,7 +425,7 @@ test('a remote change is not written when the front-end says not to', async () =
 
 test('a room that is gone ends the session', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   const before = it.sent.length;
 
@@ -665,7 +461,7 @@ test('a refused connect carries the code, a dead socket carries no code', async 
     },
   });
 
-  await companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
 
   assert.deepEqual(
@@ -687,7 +483,7 @@ test('a refused connect carries the code, a dead socket carries no code', async 
     ],
     'a refusal the protocol named carries its code; nothing named a dead socket',
   );
-  await companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   assert.equal(
     sent.some((notification) => notification.type === 'refused'),
     false,
@@ -697,14 +493,14 @@ test('a refused connect carries the code, a dead socket carries no code', async 
 
 test('a connection the engine gave up on leaves the next session free', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
 
   it.engine.emit({ type: 'disconnected' });
 
   await until('the session to be given up', () =>
     it.sent.some((notification) => notification.type === 'status' && notification.state === 'idle'),
   );
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   assert.deepEqual(it.hosts.length, 2, 'a session the engine ended is not one to refuse the next for');
 });
 
@@ -820,7 +616,7 @@ test('a guest join waits for the listing the handshake carried', async () => {
 
 test('a host seeds the buffer it opens, and only once', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   assert.equal(it.engine.text('notes.txt'), 'hello\n');
   assert.deepEqual(it.engine.opened, ['notes.txt']);
@@ -954,7 +750,7 @@ test("a guest's edit before the room's text arrives keeps the two counts togethe
 
 test('a local change reaches the replica as the smallest edit', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   await it.companion.handle({
     type: 'change',
@@ -968,7 +764,7 @@ test('a local change reaches the replica as the smallest edit', async () => {
 
 test('a remote change is asked for as a range, not a whole document', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   it.engine.remote('notes.txt', 'hello, world\n');
   await settle();
@@ -984,7 +780,7 @@ test('a remote change is asked for as a range, not a whole document', async () =
 
 test('an astral edit reaches the front-end as whole characters it can decode', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'a\u{1F601}b\n' });
 
   // A peer replaces one emoji with another. The two share a high surrogate, and a diff that
@@ -1019,7 +815,7 @@ test('an astral edit reaches the front-end as whole characters it can decode', a
 
 test('an edit the front-end refused is offered again where its buffer has it', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
 
   // A peer's edit: the companion asks for it against version 0 ...
@@ -1056,7 +852,7 @@ test('an edit the front-end refused is offered again where its buffer has it', a
 
 test('a refusal the buffer has no room for is worked out again from the mirror', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
 
   it.engine.remote('notes.txt', 'hello, world\n');
@@ -1080,7 +876,7 @@ test('a refusal the buffer has no room for is worked out again from the mirror',
 
 test('an unmatched edit is reported rather than retried for ever', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   it.engine.remote('notes.txt', 'hello, world\n');
   await settle();
@@ -1097,7 +893,7 @@ test('an unmatched edit is reported rather than retried for ever', async () => {
 
 test('a selection is published in the replica offsets', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   await it.companion.handle({ type: 'selection', path: 'notes.txt', anchor: 1, head: 3 });
   assert.deepEqual(it.engine.selections, [
@@ -1107,7 +903,7 @@ test('a selection is published in the replica offsets', async () => {
 
 test('a document opened after a peer moved draws the peer', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   // The peer's awareness and the caret it resolves to are both already here; only the
   // document is missing, so `cursors()` skips the peer until it opens.
   it.engine.presences = [
@@ -1130,7 +926,7 @@ test('a document opened after a peer moved draws the peer', async () => {
 
 test('a mid-session rename reaches the engine and moves no document', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   const opened = [...it.engine.opened];
 
@@ -1151,7 +947,7 @@ test('a mid-session rename reaches the engine and moves no document', async () =
 
 test('a refused rename is reported and leaves the session running', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   const refused = 'x'.repeat(33);
   it.engine.renameError = new ProtocolError(
     'bad_params',
@@ -1184,7 +980,7 @@ test('a refused rename is reported and leaves the session running', async () => 
 
 test('leaving disconnects and forgets the documents', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   await it.companion.handle({ type: 'leave' });
   assert.equal(it.engine.disconnected, true);
@@ -1378,7 +1174,7 @@ test('a path the room asks for is read off the folder and put into the replica',
   const root = folder(t);
   tree(root, 'never-opened.txt', 'the host never opened this\n');
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
 
   // A peer opened it: the room's document set moves, and the host is what supplies content.
   it.engine.emit({ type: 'documentsChanged', documents: ['never-opened.txt'] });
@@ -1397,7 +1193,7 @@ test('a path the room asks for is read once, however often the room asks', async
   tree(root, 'never-opened.txt', 'the host never opened this\n');
   tree(root, 'asked-again.txt', 'the room asked for this one too\n');
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
 
   it.engine.emit({ type: 'documentsChanged', documents: ['never-opened.txt'] });
   await until(
@@ -1449,7 +1245,7 @@ test('a path outside the folder is dropped silently, never read and never report
   tree(walled, 'wall.txt', 'ordinary\n');
 
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root: walled });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: walled });
 
   // A path the grant would never publish — `..`, an excluded name, an over-long one — is
   // not something a peer can talk the room into: it is dropped before any read, so a
@@ -1476,7 +1272,7 @@ test('a path through a directory link is refused and reported', async (t) => {
   symlinkSync(outside, join(shared, 'escape'));
 
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root: shared });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: shared });
   it.engine.emit({ type: 'documentsChanged', documents: ['escape/secret.txt'] });
   await until(
     'the refusal to be reported',
@@ -1502,7 +1298,7 @@ test('a binary file the room asks for is refused as binary, not as deleted', asy
   );
 
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   it.engine.emit({ type: 'documentsChanged', documents: ['logs_96234608913.zip'] });
   await until(
     'the refusal to be reported',
@@ -1522,7 +1318,7 @@ test('one bogus listing is one dialog, never one per path', async (t) => {
   mkdirSync(walled, { recursive: true });
 
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root: walled });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: walled });
 
   it.engine.emit({
     type: 'documentsChanged',
@@ -1557,7 +1353,7 @@ test('one bogus listing is one dialog, never one per path', async (t) => {
 
 test('a locally opened file the grant excludes is refused once, not seeded', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: '.env', text: 'SECRET=1\n' });
 
   // A file the user opened is still one the room has to carry: the grant's own rule gates
@@ -1576,7 +1372,7 @@ test('a locally opened file the grant excludes is refused once, not seeded', asy
 
 test('a locally opened file over the size a session carries is refused', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   const big = `${'x'.repeat(MAX_GRANT_FILE_BYTES + 1)}\n`;
   await it.companion.handle({ type: 'open', path: 'big.log', text: big });
 
@@ -1586,7 +1382,7 @@ test('a locally opened file over the size a session carries is refused', async (
   assert.match(refusals(it)[0] ?? '', /nothing was shared for it/);
   assert.equal(it.engine.has('big.log'), false, 'an oversized file entered the replica');
 });
-test('a host publishes the listing of the folder the session started in', async (t) => {
+test('a host seals the listing of the folder the session started in', async (t) => {
   const root = folder(t);
   tree(root, 'notes.txt', 'a note\n');
   tree(root, 'src/main.rs', 'fn main() {}\n');
@@ -1594,19 +1390,25 @@ test('a host publishes the listing of the folder the session started in', async 
   tree(root, 'node_modules/left-pad/index.js', 'module.exports = 1;\n');
 
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
-  await until(
-    'the listing to reach the engine',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
-  );
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await settle();
 
-  assert.deepEqual(it.engine.grants, [['notes.txt', 'src/main.rs']]);
+  assert.deepEqual(
+    it.engine.grantedPaths(),
+    ['notes.txt', 'src/main.rs'],
+    'the room holds the listing the mint sealed',
+  );
+  assert.deepEqual(grantReports(it), [['notes.txt', 'src/main.rs']], 'and the front-end was handed it');
+  assert.deepEqual(
+    it.engine.grants,
+    [],
+    'nothing was published: the state the mint sealed already carries the listing',
+  );
 });
 
 test('a host with no folder publishes nothing at all', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await settle();
 
   // A listing is a reading of a folder, and this session never named one: the host is pointed at a
@@ -1614,40 +1416,44 @@ test('a host with no folder publishes nothing at all', async () => {
   // The replica's own listing cannot say that much — nothing arriving is also what a reading that
   // has not landed yet looks like — so the host's folder is what settles it.
   assert.deepEqual(it.editor.folders, [], 'a front-end that named no folder pointed the host at none');
-  assert.deepEqual(it.engine.grants, [], 'a front-end that named no folder has no listing');
+  assert.deepEqual(it.engine.grantedPaths(), [], 'and the room holds no listing');
+  assert.deepEqual(it.engine.grants, [], 'a front-end that named no folder has no listing to publish');
   assert.deepEqual(refusals(it), [], 'and nothing to say about one');
 });
 
 test('a server that does not know doc.grant is a room with no grant, not a fault', async (t) => {
   const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
   const it = harness('host', [], [], {
     grantError: new ProtocolError('unknown_method', 'doc.grant is not a method here'),
   });
 
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  tree(root, 'created.txt', 'made while hosting\n');
   await until(
-    'the listing to reach the engine',
+    'the changed listing to reach the engine',
     () => it.engine.grants.length > 0,
     () => it.engine.grants,
   );
 
-  assert.equal(it.engine.grants.length, 1, 'the listing was sent');
+  assert.equal(it.engine.grants.length, 1, 'the changed listing was sent');
   assert.deepEqual(refusals(it), [], 'and the answer ended there');
   assert.equal(it.engine.disconnected, false, 'the session goes on');
 });
 
 test('a refused listing is reported and changes nothing', async (t) => {
   const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
   const it = harness('host', [], [], {
     grantError: new ProtocolError('bad_params', 'the listing is too long'),
   });
 
   await it.companion.handle({
     type: 'host',
-    wire: 'selvage/1',
     serverUrl: 'ws://127.0.0.1:0',
     root,
   });
+  tree(root, 'created.txt', 'made while hosting\n');
   await until(
     'the refusal to be reported',
     () => refusals(it).length > 0,
@@ -1674,7 +1480,7 @@ const SETTLE_MS = 250;
 /** How long a test waits to say that nothing is owed: longer than any burst could schedule. */
 const QUIET_MS = 3 * SETTLE_MS;
 
-/** A host with a folder of its own, waiting until the initial listing has reached the engine. */
+/** A host with a folder of its own, waiting until the room holds the listing the mint sealed. */
 async function hosting(
   t: { after: (fn: () => void) => void },
   files: Record<string, string> = { 'notes.txt': 'a note\n' },
@@ -1685,17 +1491,18 @@ async function hosting(
     tree(root, path, body);
   }
   const it = harness('host', [], [], options);
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
-    'the folder to be published as the session starts',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
+    'the folder the mint sealed to reach the room',
+    () => it.engine.grantedPaths().length > 0,
+    () => it.engine.grantedPaths(),
   );
   return { root, it };
 }
 
 test('a file created under the host root is republished', async (t) => {
   const { root, it } = await hosting(t);
+  assert.deepEqual(it.engine.grantedPaths(), ['notes.txt'], 'the room holds the listing from the mint');
 
   tree(root, 'created.txt', 'made while hosting\n');
 
@@ -1704,7 +1511,7 @@ test('a file created under the host root is republished', async (t) => {
     () => it.engine.grants.at(-1)?.includes('created.txt') === true,
     () => it.engine.grants,
   );
-  assert.deepEqual(it.engine.grants, [['notes.txt'], ['created.txt', 'notes.txt']]);
+  assert.deepEqual(it.engine.grants, [['created.txt', 'notes.txt']]);
 });
 
 test('a file created in a subdirectory is republished', async (t) => {
@@ -1712,7 +1519,7 @@ test('a file created in a subdirectory is republished', async (t) => {
   // root alone never fires for anything under a subdirectory, so the room's listing would go
   // stale for the whole tree below it.
   const { root, it } = await hosting(t, { 'notes.txt': 'a note\n', 'src/main.rs': 'fn main() {}\n' });
-  assert.deepEqual(it.engine.grants, [['notes.txt', 'src/main.rs']]);
+  assert.deepEqual(it.engine.grantedPaths(), ['notes.txt', 'src/main.rs']);
 
   tree(root, 'src/created.rs', 'made while hosting\n');
 
@@ -1721,10 +1528,7 @@ test('a file created in a subdirectory is republished', async (t) => {
     () => it.engine.grants.at(-1)?.includes('src/created.rs') === true,
     () => it.engine.grants,
   );
-  assert.deepEqual(it.engine.grants, [
-    ['notes.txt', 'src/main.rs'],
-    ['notes.txt', 'src/created.rs', 'src/main.rs'],
-  ]);
+  assert.deepEqual(it.engine.grants, [['notes.txt', 'src/created.rs', 'src/main.rs']]);
 });
 
 test('a directory created while hosting is watched', async (t) => {
@@ -1735,7 +1539,7 @@ test('a directory created while hosting is watched', async (t) => {
 
   mkdirSync(join(root, 'later'));
   await delay(QUIET_MS);
-  assert.deepEqual(it.engine.grants, [['notes.txt']], 'an empty directory names no paths');
+  assert.deepEqual(it.engine.grants, [], 'an empty directory names no paths');
 
   tree(root, 'later/inside.rs', 'made after the directory\n');
 
@@ -1744,21 +1548,21 @@ test('a directory created while hosting is watched', async (t) => {
     () => it.engine.grants.at(-1)?.includes('later/inside.rs') === true,
     () => it.engine.grants,
   );
-  assert.deepEqual(it.engine.grants, [['notes.txt'], ['later/inside.rs', 'notes.txt']]);
+  assert.deepEqual(it.engine.grants, [['later/inside.rs', 'notes.txt']]);
 });
 
 test('a file deleted under the host root is republished', async (t) => {
   const { root, it } = await hosting(t, { 'notes.txt': 'a note\n', 'gone.txt': 'to be deleted\n' });
-  assert.deepEqual(it.engine.grants, [['gone.txt', 'notes.txt']]);
+  assert.deepEqual(it.engine.grantedPaths(), ['gone.txt', 'notes.txt']);
 
   rmSync(join(root, 'gone.txt'));
 
   await until(
     'the deleted path to leave the listing',
-    () => it.engine.grants.length > 1 && it.engine.grants.at(-1)?.includes('gone.txt') === false,
+    () => it.engine.grants.at(-1)?.includes('gone.txt') === false,
     () => it.engine.grants,
   );
-  assert.deepEqual(it.engine.grants, [['gone.txt', 'notes.txt'], ['notes.txt']]);
+  assert.deepEqual(it.engine.grants, [['notes.txt']]);
 });
 
 test('a burst of changes is one republish', async (t) => {
@@ -1778,8 +1582,8 @@ test('a burst of changes is one republish', async (t) => {
     () => it.engine.grants.at(-1)?.includes('burst-19.txt') === true,
     () => it.engine.grants.length,
   );
-  assert.equal(it.engine.grants.length, 2, 'the burst was gathered into one listing');
-  assert.equal(it.engine.grants[1]?.length, burst + 1, 'and that listing holds every created path');
+  assert.equal(it.engine.grants.length, 1, 'the burst was gathered into one listing');
+  assert.equal(it.engine.grants[0]?.length, burst + 1, 'and that listing holds every created path');
 });
 
 test('an unchanged folder is republished to no one', async (t) => {
@@ -1789,12 +1593,12 @@ test('an unchanged folder is republished to no one', async (t) => {
   // window a burst could schedule a republish in has certainly passed, so the change below is
   // what keeps this from passing because the watcher never worked at all.
   await delay(QUIET_MS);
-  assert.deepEqual(it.engine.grants, [['notes.txt']], 'a folder that did not change published once');
+  assert.deepEqual(it.engine.grants, [], 'a folder that did not change published nothing');
 
   tree(root, 'after.txt');
   await until(
     'the watcher to still be alive after the quiet window',
-    () => it.engine.grants.length === 2,
+    () => it.engine.grants.length === 1,
     () => it.engine.grants,
   );
 });
@@ -1810,7 +1614,7 @@ test('a change that leaves the listing as it was is not republished', async (t) 
   await delay(QUIET_MS);
   assert.deepEqual(
     it.engine.grants,
-    [['notes.txt']],
+    [],
     'the listing was unchanged, so there was nothing to publish',
   );
 });
@@ -1828,8 +1632,12 @@ test('saving a file the listing already names walks nothing', async (t) => {
       return enumerateGrant(at);
     },
   });
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
-  await until('the first listing', () => it.engine.grants.length > 0, () => it.engine.grants);
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the first listing',
+    () => it.engine.grantedPaths().length > 0,
+    () => it.engine.grantedPaths(),
+  );
   const first = walks;
 
   for (let index = 0; index < 5; index += 1) {
@@ -1856,7 +1664,7 @@ test('saving a file the listing already names walks nothing', async (t) => {
   );
 });
 
-test('the folder is published again by the next session', async (t) => {
+test('the folder is minted again by the next session', async (t) => {
   const { root, it } = await hosting(t);
   const first = it.engine;
 
@@ -1867,94 +1675,94 @@ test('the folder is published again by the next session', async (t) => {
   // change to a folder nobody is sharing, and publishing it would offer the room a listing the
   // session that left had no business reading.
   await delay(QUIET_MS);
-  assert.deepEqual(first.grants, [['notes.txt']], 'a session that ended published nothing further');
+  assert.deepEqual(first.grants, [], 'a session that ended published nothing further');
 
-  // And a session that starts after it publishes the folder rather than comparing it with the
-  // listing the one before it sent: the folder is back to exactly what it was.
+  // And a session that starts after it mints a room that holds the folder as it stands now, rather
+  // than comparing it with any listing the session before it sent.
   rmSync(join(root, 'after-leave.txt'));
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
-    'the next session to publish the folder',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
+    'the next session to hold the folder',
+    () => it.engine.grantedPaths().length > 0,
+    () => it.engine.grantedPaths(),
   );
   assert.notEqual(it.engine, first, 'a second session is a second room');
-  assert.deepEqual(it.engine.grants, [['notes.txt']]);
+  assert.deepEqual(it.engine.grantedPaths(), ['notes.txt'], 'the mint sealed the folder as it stands');
+  assert.deepEqual(it.engine.grants, [], 'and nothing had to be published for it');
 });
 
-test('a version-2 mint that failed leaves no listing behind for the next host', async (t) => {
+test('a mint that failed leaves no listing behind for the next host', async (t) => {
   const root = folder(t);
   tree(root, 'one.txt', 'one\n');
   tree(root, 'two.txt', 'two\n');
 
   // The first attempt walks the folder and then dies at the mint — a dead address, or a server
-  // that refuses the version-2 hello. It never opened a room, so the walk is not a listing
-  // anything holds.
+  // that refuses the hello. It never opened a room, so the walk is not a listing anything holds.
   const failed = harness('host', [], [], {
-    wire2MintFails: new Error('the WebSocket reported an error'),
+    mintFails: new Error('the WebSocket reported an error'),
     echoGrants: true,
   });
-  await failed.companion.handle({ type: 'host', wire: 'selvage/2', serverUrl: 'ws://127.0.0.1:1', root });
-  assert.deepEqual(failed.hosts2, ['ws://127.0.0.1:1'], 'the version-2 attempt reached the mint');
+  await failed.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:1', root });
+  assert.deepEqual(failed.hosts, ['ws://127.0.0.1:1'], 'the attempt reached the mint');
   assert.deepEqual(
     statuses(failed).map((status) => status.state),
     ['connecting', 'error'],
     'a mint that threw is reported and leaves nothing standing',
   );
 
-  // The recovery a person follows: pin version 1 and host the same folder again. The room is
-  // minted, so it has to be told what it shares — and the listing the room echoes back is what
-  // the guest sees.
-  await failed.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  // The recovery a person follows: host the same folder again. The room is minted, so it has to
+  // be told what it shares — and the listing the room echoes back is what the guest sees.
+  await failed.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
     'the folder this host shares to reach the room',
-    () => failed.engine.grants.length > 0,
-    () => ({ listed: failed.engine.grants, reported: grantReports(failed) }),
+    () => failed.engine.grantedPaths().length > 0,
+    () => ({ listed: failed.engine.grantedPaths(), reported: grantReports(failed) }),
   );
-  assert.deepEqual(failed.engine.grants, [['one.txt', 'two.txt']], 'the room was told nothing');
-  // The first report is the handshake's own, before the listing was published; the second is the
-  // listing the room echoed back, which is what a guest's front-end is handed. A host that sent no
-  // `doc.grant` leaves the guest looking at an empty room and the front-end with the first alone.
+  assert.deepEqual(
+    failed.engine.grantedPaths(),
+    ['one.txt', 'two.txt'],
+    'the room was told nothing',
+  );
+  // The single report is the listing the mint's state carries, which is what the front-end is
+  // handed. A host that sent it nothing leaves the front-end looking at an empty room.
   assert.deepEqual(
     grantReports(failed),
-    [[], ['one.txt', 'two.txt']],
+    [['one.txt', 'two.txt']],
     'and the front-end was handed no listing either',
   );
 
-  // The control: the same single version-1 host with no failed attempt before it publishes the
-  // same listing, so the assertions above are about the failed mint and not about the harness.
+  // The control: a host with no failed attempt before it holds the same listing, so the
+  // assertions above are about the failed mint and not about the harness.
   const control = harness('host', [], [], { echoGrants: true });
-  await control.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await control.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
-    'the control host to publish the folder',
-    () => control.engine.grants.length > 0,
-    () => control.engine.grants,
+    'the control host to hold the folder',
+    () => control.engine.grantedPaths().length > 0,
+    () => control.engine.grantedPaths(),
   );
-  assert.deepEqual(control.engine.grants, [['one.txt', 'two.txt']]);
-  assert.deepEqual(grantReports(control), [[], ['one.txt', 'two.txt']]);
+  assert.deepEqual(control.engine.grantedPaths(), ['one.txt', 'two.txt']);
+  assert.deepEqual(grantReports(control), [['one.txt', 'two.txt']]);
 });
 
 test('a folder a session has left is not published by the next one', async (t) => {
   const shared = folder(t);
   tree(shared, 'a.txt');
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root: shared });
-  await until('the first folder to be published', () => it.engine.grants.length > 0, () => it.engine.grants);
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: shared });
 
   await it.companion.handle({ type: 'leave' });
 
   const second = folder(t);
   tree(second, 'b.txt');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root: second });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root: second });
   const session = it.engine;
-  await until('the second folder to be published', () => session.grants.length > 0, () => session.grants);
-  assert.deepEqual(session.grants, [['b.txt']]);
+  assert.deepEqual(session.grantedPaths(), ['b.txt'], 'the second room holds the second folder');
 
   // The folder the first session shared changes, and nobody is sharing it anymore. A watcher that
   // outlived its session would read it and publish it into the room the second session is hosting.
   tree(shared, 'later.txt');
   await delay(QUIET_MS);
-  assert.deepEqual(session.grants, [['b.txt']], 'a folder a session has left was published');
+  assert.deepEqual(session.grants, [], 'a folder a session has left was published');
 });
 
 test('a reading that finishes after a later one does not publish', async (t) => {
@@ -1972,28 +1780,34 @@ test('a reading that finishes after a later one does not publish', async (t) => 
       }),
   });
 
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
-  await until('the first reading of the folder to start', () => readings.length === 1, () => readings.length);
+  // The mint's own walk, which the harness holds open like any other: the room that state seals
+  // has to carry a listing, so the walk comes before the mint.
+  const opening = it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until('the mint to read the folder', () => readings.length === 1, () => readings.length);
+  readings[0]?.(['notes.txt']);
+  await opening;
 
-  // A change while that reading is in flight: the window passes, the timer fires, and the reading
+  // Two changes while no reading is in flight: the window passes, the timer fires, and the reading
   // it starts is the one that finishes first — the folder as it is now.
   tree(root, 'created.txt', 'made while hosting\n');
-  await until('a second reading to start', () => readings.length === 2, () => readings.length);
-  readings[1]?.(['created.txt', 'notes.txt']);
+  await until('the first republish reading to start', () => readings.length === 2, () => readings.length);
+  tree(root, 'created-too.txt', 'made while hosting\n');
+  await until('a second reading to start', () => readings.length === 3, () => readings.length);
+  readings[2]?.(['created-too.txt', 'created.txt', 'notes.txt']);
   await until(
     'the later reading to reach the room',
     () => it.engine.grants.length === 1,
     () => it.engine.grants,
   );
 
-  // The reading that started first now finishes, with the folder as it was before the change. It
-  // is older than the one the room was given, and nothing would put the room right until the
+  // The reading that started first now finishes, with the folder as it was before the last change.
+  // It is older than the one the room was given, and nothing would put the room right until the
   // folder changed again.
-  readings[0]?.(['notes.txt']);
+  readings[1]?.(['created.txt', 'notes.txt']);
   await delay(QUIET_MS);
   assert.deepEqual(
     it.engine.grants,
-    [['created.txt', 'notes.txt']],
+    [['created-too.txt', 'created.txt', 'notes.txt']],
     'the reading that started first published the folder as it was',
   );
 });
@@ -2012,13 +1826,13 @@ test('a host that reseats after a drop publishes its current listing', async (t)
   const it = harness('host', [], [], {
     enumerate: async () => [...listing],
   });
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
-    'the starting listing to be published',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
+    'the starting listing to reach the room',
+    () => it.engine.grantedPaths().length > 0,
+    () => it.engine.grantedPaths(),
   );
-  assert.deepEqual(it.engine.grants, [['old.txt']]);
+  assert.deepEqual(it.engine.grantedPaths(), ['old.txt']);
 
   // The folder moves while the room still names the old listing — the shape a reclaim meets
   // when the working copy changed under a dead socket.
@@ -2028,10 +1842,10 @@ test('a host that reseats after a drop publishes its current listing', async (t)
 
   await until(
     'the current listing to be published after the reseat',
-    () => it.engine.grants.length > 1,
+    () => it.engine.grants.length > 0,
     () => it.engine.grants,
   );
-  assert.deepEqual(it.engine.grants, [['old.txt'], ['new.txt']]);
+  assert.deepEqual(it.engine.grants, [['new.txt']]);
 });
 
 test('later room news under the same peer id publishes nothing again', async (t) => {
@@ -2040,11 +1854,11 @@ test('later room news under the same peer id publishes nothing again', async (t)
   const it = harness('host', [], [], {
     enumerate: async () => [...listing],
   });
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
-    'the starting listing to be published',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
+    'the starting listing to reach the room',
+    () => it.engine.grantedPaths().length > 0,
+    () => it.engine.grantedPaths(),
   );
 
   listing = ['new.txt'];
@@ -2052,7 +1866,7 @@ test('later room news under the same peer id publishes nothing again', async (t)
   it.engine.emit({ type: 'documentsChanged', documents: [] });
   await until(
     'the current listing to be published after the reseat',
-    () => it.engine.grants.length > 1,
+    () => it.engine.grants.length > 0,
     () => it.engine.grants,
   );
 
@@ -2061,7 +1875,7 @@ test('later room news under the same peer id publishes nothing again', async (t)
   it.engine.emit({ type: 'documentsChanged', documents: ['new.txt'] });
   it.engine.emit({ type: 'peersChanged', peers: [] });
   await delay(QUIET_MS);
-  assert.deepEqual(it.engine.grants, [['old.txt'], ['new.txt']]);
+  assert.deepEqual(it.engine.grants, [['new.txt']]);
 });
 
 test('a guest that reseats after a drop publishes nothing and keeps its role', async () => {
@@ -2090,7 +1904,7 @@ test('a guest that reseats after a drop publishes nothing and keeps its role', a
 
 test('a dropped connection is reported as a retry, and does not end the session', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await settle();
 
   const before = it.sent.length;
@@ -2124,7 +1938,7 @@ test('a folder that cannot be watched is reported and the session goes on', asyn
   const root = `${folder(t)}/unwatchable\u0000name`;
   const it = harness('host');
 
-  await it.companion.handle({ type: 'host', wire: 'selvage/1', serverUrl: 'ws://127.0.0.1:0', root });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until('the refusal to be reported', () => refusals(it).length > 0, () => refusals(it));
 
   assert.match(
@@ -2191,7 +2005,7 @@ test(
   "the trace never holds an invite's fragment",
   { timeout: 30_000 },
   async () => {
-    // `§5.1`: a `selvage/2` invite's fragment carries the room key and the host's public key, and a
+    // `§5.1`: an invite's fragment carries the room key and the host's public key, and a
     // client **MUST NOT** log it. The invite crosses this pipe twice — the front-end's `join` and
     // the host's own `status` — and both are written through the same redaction, keyed on the
     // member a link travels in, so a real link sent in is the whole of what this pins.
@@ -2243,8 +2057,8 @@ test(
 // -- a warning about a refused line ----------------------------------------------------
 //
 // A line that is JSON but not a request is refused with a word, and what that word is for is
-// naming which member or type was wrong — not recording what the line held. A `selvage/2`
-// invite's fragment is the room's key (§5.1) and a client **MUST NOT** log it, so the warning
+// naming which member or type was wrong — not recording what the line held. An invite's fragment
+// is the room's key (§5.1) and a client **MUST NOT** log it, so the warning
 // prints the parsed value through the same member-keyed redaction the trace uses.
 // `withoutFragment` reads only the first `#`, so a member before `invite` that carries one of
 // its own left the fragment standing.
