@@ -3721,6 +3721,85 @@ local function normalise_server_address(text)
   return (addressed:gsub('/session$', ''))
 end
 
+--- The host `authority` names, or nil when it names none.
+---
+--- The engine parses the address as a URL, and a URL reads no host out of what it refuses: a port
+--- on its own (`:8080`), an empty or unclosed bracketed address (`[]`, `[::1`), a port that is
+--- not a number or is past 65535, credentials, and whitespace anywhere in the authority.
+local function authority_host(authority)
+  if authority:find('[%s@]') ~= nil then
+    return nil
+  end
+  local host, port = authority, ''
+  local bracketed, after = authority:match('^(%[[^%]]*%])(.*)$')
+  if bracketed ~= nil then
+    host, port = bracketed, after
+  else
+    host, port = authority:match('^([^:]*)(.*)$')
+  end
+  if host == nil or host == '' or host == '[]' then
+    return nil
+  end
+  if port ~= '' and port ~= ':' then
+    local digits = port:match('^:(%d+)$')
+    if digits == nil or tonumber(digits) > 65535 then
+      return nil
+    end
+  end
+  return host
+end
+
+--- Whether `text` is a server address the companion's engine can dial.
+---
+--- The engine owns that reading (`sessionBase` in the vendored engine): a `ws`, `wss`, `http` or
+--- `https` scheme, a host, and none of the parts a server address never carries — credentials, a
+--- query or a fragment, the last two being a link's room, token and key.
+local function is_server_address(text)
+  local scheme, rest = text:match('^(%a[%w+.-]*)://(.*)$')
+  if scheme == nil then
+    return false
+  end
+  scheme = scheme:lower()
+  if scheme ~= 'ws' and scheme ~= 'wss' and scheme ~= 'http' and scheme ~= 'https' then
+    return false
+  end
+  local authority, remainder = rest:match('^([^/?#]*)(.*)$')
+  if authority == nil or remainder:find('[?#]') ~= nil then
+    return false
+  end
+  return authority_host(authority) ~= nil
+end
+
+--- Refuses `address` when it is not a server address, saying so in the reader's own words, and
+--- answers whether it did.
+---
+--- The argument, the setting, the box's answer and the remembered address all take a server
+--- address, never an invite link: a link's query carries the room and its token and its fragment
+--- the room key, so accepting one would write the key beside the mirrors under `stdpath` and hand
+--- it to the next host as the address to dial. Nothing but an address is written.
+local function refuse_server_address(address)
+  if is_server_address(normalise_server_address(address)) then
+    return false
+  end
+  local text = vim.trim(address or '')
+  if text:find('[?#]') ~= nil then
+    -- An invite pasted into a server-address position is an invite: its query is the room and its
+    -- token and its fragment the key, and ShaDa writes the histories to disk, so it is taken out
+    -- of them here exactly as one typed into `:SelvageJoin` is (`forget_invite`).
+    forget_invite(text)
+    notify(
+      'that is an invite link, not a server address. Paste the address the server printed when it started, not the link you send to your guest.',
+      vim.log.levels.ERROR
+    )
+  else
+    notify(
+      'that does not look like a server address. Paste the address the server printed when it started, e.g. selvage.example or ws://127.0.0.1:8080.',
+      vim.log.levels.ERROR
+    )
+  end
+  return true
+end
+
 --- The page a server's room is linked at: the server's own origin, over the scheme a browser
 --- speaks. One address decides the whole invite — the page the guest opens and the socket they
 --- join on are the same host — so a room cannot be linked at a page that dials another server,
@@ -3771,6 +3850,19 @@ local function remember_last_server(address)
   local file = last_server_file()
   pcall(vim.fn.mkdir, vim.fs.dirname(file), 'p')
   pcall(vim.fn.writefile, { address }, file)
+end
+
+--- Writes the address the next host reuses: completed, refused when it is not a server address,
+--- remembered in this Neovim and in the file, and confirmed. Only the next host, never a live
+--- room.
+local function write_server(address)
+  if refuse_server_address(address) then
+    return false
+  end
+  address = normalise_server_address(address)
+  remember_last_server(address)
+  notify(('will host on %s next. Leave this session and host again to move there.'):format(address))
+  return true
 end
 
 --- Whether a document the room changes is written. Nothing is sent when the plugin's global says
@@ -4095,20 +4187,25 @@ function M.host(url)
     notify('a session is already being opened.', vim.log.levels.WARN)
     return
   end
-  if in_session() then
-    local can_leave = confirm_leave(
-      'you are in this session; hosting a session means leaving it first.',
-      'Leave and host'
-    )
-    if not can_leave then
-      return
-    end
-    end_session()
-  end
   local function with_url(address)
     -- Whatever was typed — an argument, an answer to the first-run question, a remembered one — is
-    -- completed here, so one place decides what a bare host means and the command that reports
-    -- an address reports the address a host would dial.
+    -- refused and completed here, so one place decides what a bare host means and the command that
+    -- reports an address reports the address a host would dial.
+    if refuse_server_address(address) then
+      return
+    end
+    -- A session is given up only for an address that passed: an invite link pasted into this
+    -- command or its box is refused before the question, so it costs no room.
+    if in_session() then
+      local can_leave = confirm_leave(
+        'you are in this session; hosting a session means leaving it first.',
+        'Leave and host'
+      )
+      if not can_leave then
+        return
+      end
+      end_session()
+    end
     address = normalise_server_address(address)
     remember_last_server(address)
     resolve_display_name(function(display_name)
@@ -4316,9 +4413,7 @@ function M.change_server(url)
     return
   end
   if wanted ~= '' then
-    local address = normalise_server_address(wanted)
-    remember_last_server(address)
-    notify(('will host on %s next. Leave this session and host again to move there.'):format(address))
+    write_server(wanted)
     return
   end
   local current = last_server or read_last_server()
@@ -4334,12 +4429,12 @@ function M.change_server(url)
   -- reports is the address the next host dials, bare host or not.
   local base = normalise_server_address(current or DEFAULT_SERVER_URL)
   ask_server_url(base, function(address)
-    address = normalise_server_address(address)
-    if address == base then
+    -- Answering with the address already in force changes nothing, and anything else is written
+    -- the way an argument is — refused in the same words when it is not a server address.
+    if normalise_server_address(address) == base then
       return
     end
-    remember_last_server(address)
-    notify(('will host on %s next. Leave this session and host again to move there.'):format(address))
+    write_server(address)
   end)
 end
 

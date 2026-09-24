@@ -173,6 +173,8 @@ local MESSAGES = {
   { 'INFO', 'the next host uses %s.' },
   { 'INFO', 'will host on %s next. Leave this session and host again to move there.' },
   { 'INFO', 'the "vim.g.selvage_server_url" setting fixes the server at %s; change it in your config to use a different one.' },
+  { 'ERROR', 'that is an invite link, not a server address. Paste the address the server printed when it started, not the link you send to your guest.' },
+  { 'ERROR', 'that does not look like a server address. Paste the address the server printed when it started, e.g. selvage.example or ws://127.0.0.1:8080.' },
   -- The list of participants.
   { 'WARN', 'no other participants yet.' },
   -- The role the room's state gives this connection (§13.4): a viewer's documents are the
