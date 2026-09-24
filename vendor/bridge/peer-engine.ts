@@ -362,6 +362,12 @@ export class PeerEngine implements Engine {
         this.refresh();
         return;
       }
+      case 'holds': {
+        // §13.7: a peer's held set is part of the room's open-document set, so the set moving is
+        // a `documentsChanged` this facade owes its adapter.
+        this.refresh();
+        return;
+      }
       case 'failed': {
         this.emit({ type: 'sessionError', code: event.code, message: event.reason });
         return;

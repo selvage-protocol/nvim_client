@@ -91,6 +91,12 @@ export type RelayEvent =
    * in the peer set — so the application is said rather than left for the next frame to imply.
    */
   | { type: 'state' }
+  /**
+   * A peer's held set was applied (`§13.7`). The holds are what a room's open-document set is
+   * read from, and they carry no text of their own, so the set moving is its own event rather
+   * than something the next content frame implies.
+   */
+  | { type: 'holds' }
   | { type: 'ended'; ending: RelayEnding }
   /** A fault the server reported: its code (§11) is the caller's to read, not only its words. */
   | { type: 'failed'; code: string; reason: string };
@@ -1065,6 +1071,8 @@ export class RelaySession {
         this.emit({ type: 'text' });
       } else if (outcome.status === 'applied' && outcome.kind === 1) {
         this.emit({ type: 'state' });
+      } else if (outcome.status === 'applied' && outcome.kind === 3) {
+        this.emit({ type: 'holds' });
       }
       return;
     }
