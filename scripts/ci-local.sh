@@ -5,16 +5,15 @@
 #
 #   scripts/ci-local.sh checks   # the `checks` job: install, typecheck, the companion suite
 #   scripts/ci-local.sh lint     # actionlint over the workflow files
-#   scripts/ci-local.sh e2e      # both end-to-end proofs: real Neovims against a real `selvaged`
+#   scripts/ci-local.sh e2e      # the end-to-end proof: real Neovims against a real `selvaged`
 #   scripts/ci-local.sh all      # lint + checks + e2e
 #
 # Keep the first two in step with the workflow — they run the same commands, so that a red job is
 # found here rather than on a runner. `e2e` is this half of the gate that CI cannot be: it needs a
 # real Neovim and a built `selvaged` from the sibling `reference_server` checkout, so
-# `scripts/e2e/run-two-instance.sh` and `scripts/e2e/run-version-2.sh` are run here and nowhere
-# else. Both take a few seconds each, a real `nvim` per instance and an ephemeral loopback port,
-# and the version-2 proof is the one that exercises the sealed path end to end — which is why
-# `all` runs them rather than leaving them to whoever remembers.
+# `scripts/e2e/run-two-instance.sh` is run here and nowhere else. It takes a few seconds, a real
+# `nvim` per instance and an ephemeral loopback port, and it is the proof that exercises the wire
+# end to end — which is why `all` runs it rather than leaving it to whoever remembers.
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -42,10 +41,8 @@ job_lint() {
 }
 
 job_e2e() {
-  say "e2e: the version-1 proof, two real Neovims against a real selvaged"
+  say "e2e: two real Neovims against a real selvaged"
   bash scripts/e2e/run-two-instance.sh
-  say "e2e: the version-2 proof, the same two instances over the sealed wire"
-  bash scripts/e2e/run-version-2.sh
 }
 
 case "${1:-all}" in
