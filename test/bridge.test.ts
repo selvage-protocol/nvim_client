@@ -82,6 +82,8 @@ interface Harness {
   front: FrontEnd;
   /** The `applyEdit`s asked for so far. */
   readonly applies: Array<Extract<Notification, { type: 'applyEdit' }>>;
+  /** The `presence` draws asked for so far, which is where a remote caret lands. */
+  readonly presences: Array<Extract<Notification, { type: 'presence' }>>;
 }
 
 function harness(role: 'host' | 'guest'): Harness {
@@ -98,6 +100,12 @@ function harness(role: 'host' | 'guest'): Harness {
       return sent.filter(
         (notification): notification is Extract<Notification, { type: 'applyEdit' }> =>
           notification.type === 'applyEdit',
+      );
+    },
+    get presences() {
+      return sent.filter(
+        (notification): notification is Extract<Notification, { type: 'presence' }> =>
+          notification.type === 'presence',
       );
     },
   };
@@ -129,5 +137,50 @@ test("a guest's own buffer is held back until the room's text arrives", async ()
     it.engine.text('notes.txt'),
     'from the room\n',
     'the room ended up holding the text twice',
+  );
+});
+
+/**
+ * A peer caret the room names before this window holds the text it anchors into.
+ *
+ * A mirror placeholder is opened empty, so the room's text arrives as an apply and the presence
+ * naming the caret is already past: the frame that brings the document is what repaints it, and
+ * that draw waits for the apply to land because the offsets are converted against the buffer.
+ */
+test("a peer's caret is drawn once the room's text lands in the buffer", async () => {
+  const it = harness('guest');
+  it.engine.presences = [
+    {
+      clientId: 2,
+      peer: { peer_id: 'p-ada', display_name: 'Ada', role: 'host' },
+      state: { path: 'notes.txt', selection: { anchor: { assoc: 0 }, head: { assoc: 0 } } },
+    },
+  ];
+  it.engine.resolved.set('notes.txt', { anchor: 4, head: 4 });
+
+  // The empty buffer a guest's window opens for a room document whose text has not crossed yet.
+  it.front.open('notes.txt', '');
+  it.bridge.documentOpened('notes.txt');
+  await it.front.drain();
+  assert.equal(
+    it.presences.length,
+    0,
+    'a caret was drawn against a buffer with no text in it',
+  );
+
+  it.engine.remote('notes.txt', 'base\n');
+  assert.equal(
+    it.presences.length,
+    0,
+    'a caret was drawn while the room text was still on its way into the buffer',
+  );
+  await it.front.drain();
+
+  assert.equal(it.host.text('notes.txt'), 'base\n');
+  const drawn = it.presences.at(-1);
+  assert.deepEqual(
+    drawn?.cursors.map((cursor) => [cursor.path, cursor.head]),
+    [['notes.txt', 4]],
+    'the frame that made the caret resolvable did not draw it',
   );
 });
