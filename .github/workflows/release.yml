@@ -21,7 +21,7 @@ on:
       version:
         description: "Release version, without the leading v (must match package.json; the tag v<version> is created)"
         required: true
-        default: "0.4.2"
+        default: "0.4.3"
       dry_run:
         description: "Assert the version and run the companion suite without tagging or releasing"
         required: false
