@@ -201,11 +201,9 @@ vim.ui.select = builtin_select
 -- -- the listing is replaced wholesale, and belongs to the session --------------------
 
 selvage.leave()
-join({ 'kept.txt' }, { 'kept.txt' })
--- Held with text, so leaving the listing is the badge case rather than a fresh open gone
--- without an answer: the buffer stays and nothing is said (see `test/lua/mirror.lua` for the
--- empty one, which names the host no longer having it).
-vim.api.nvim_buf_set_lines(vim.fn.bufnr(mirrored('kept.txt')), 0, -1, false, { 'kept' })
+-- Held and never listed, so the union keeps it whatever the listing says: a held path a listing
+-- leaves is a file the host deleted, and is taken away (`test/lua/mirror.lua`).
+join({ 'kept.txt' }, { 'listed.txt' })
 before = #notices
 handlers().on_message({
   type = 'report',

@@ -372,13 +372,11 @@ end
 
 --- Gives a file name inside this mirror the directory it has to be written into.
 ---
---- A path that leaves the room's listing loses its file, and the directories that became empty
---- with it (`unmaterialise`). A buffer the person already has open on it keeps the file's name —
---- the room still holds the document, and the listing and the room's open-document set are two
---- facts — so the save that follows would run against a directory that is not there: Neovim
---- answers `E212`, and the person is left with an error and a modified buffer over a file that is
---- only this session's cache of the room, whose text the room already has. The save puts the
---- directory back, exactly as the listing put it there.
+--- A directory removed under a file this session holds — by hand, or by a tool — would leave the
+--- save to run against a directory that is not there: Neovim answers `E212`, and the person is
+--- left with an error and a modified buffer over a file that is only this session's cache of the
+--- room, whose text the room already has. The save puts the directory back, exactly as the listing
+--- put it there.
 ---
 --- A name outside the mirror, or any name when this session has no mirror, is the editor's own
 --- and is left alone.
@@ -456,9 +454,8 @@ function M.setup(room, paths, unsafe)
   -- A path the room still names past `MAX_LISTED` is one this client makes no file for, so the file
   -- it had while the path was inside the bound goes with the rest; a conforming room never reaches
   -- that, because the host enumerator stops at the same number of paths. A file a tool created in
-  -- the mirror was never the room's and is left where it is. The room's open-document set is a
-  -- different fact (`PROTOCOL.md` §5, §6), and an already-open buffer is not this module's to
-  -- close.
+  -- the mirror was never the room's and is left where it is. An already-open buffer is not this
+  -- module's to close; the front-end's grant handler takes it away (`drop_documents`).
   for path in pairs(state.listed) do
     if listed[path] == nil then
       unmaterialise(state.root, path)

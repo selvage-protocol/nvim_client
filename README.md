@@ -485,16 +485,16 @@ devicons or mini.icons, as they do in their own project. A listing that arrives 
 already named a document moves that document's buffer to the file the listing names for it; its
 text comes with it.
 
-A path that leaves the listing loses its mirror file too, and a buffer already open on it is
-not taken away: the listing and the room's open-document set are two facts (`PROTOCOL.md` §5, §6),
-so the document stays open in the same buffer, with the same text and the same name. A save in it
-writes the file back, and makes the file's directory again when the removal took it with the file:
-the room already has the text, because a guest's edits travel as they are typed, and the file is
-only this session's cache of it, so a `:w` is a save and not `E212` over a buffer left modified.
-The file that comes back is not in the room's listing. While the session still holds the document,
-entering its name again routes to the buffer that already holds it and nothing is said. If the
-buffer was wiped or the session is over, a fresh buffer for the path is refused like any other file
-in the mirror the room does not list, once per path.
+A path that leaves the listing is a file the host no longer has, and it loses its mirror file too.
+A buffer open on it is taken away: the window moves to an empty buffer, the buffer is wiped, the room is told
+this client no longer holds the document, and the plugin says
+`<path> is no longer in the room, so it was closed.` A deleted directory does the same for every
+buffer under it. A buffer holding your own unsaved changes stays where it is, with its text, and
+stops being shared: `<path> is no longer in the room; your unsaved copy is kept but no longer
+shared.` Nothing in it reaches the room after that, and neither the room's autosave nor a `:w` writes
+it back into the mirror; save it outside the mirror to keep it. Either way the path is not offered,
+and another peer still holding it does not make it open here again, until a listing names it again.
+A host keeps its own buffer: the file is its own, on its own disk.
 
 The directory is a cache of the room and never a source of truth. It lives under
 `stdpath('cache')/selvage/<room>/`, never a temporary directory (`/tmp` is RAM-backed on some
