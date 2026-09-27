@@ -48,8 +48,9 @@ local state = {
   unlisted = {},
   --- The mirror paths a file mutation was refused for, so the refusal is said once per path.
   unmutated = {},
-  --- The held paths a fresh open never received, which a listing leaving them named once per path.
-  gone = {},
+  --- The paths the listing took away from under this session's buffers: not offered, and not shared
+  --- again from the room's open-document set, until a listing names them again.
+  dropped = {},
   --- The granted paths this session already said are empty until fetched, so the sentence is
   --- for the open and not for every visit: entering an empty mirror file is ordinary reading.
   unfetched = {},
@@ -1162,23 +1163,6 @@ local function refuse_mutation(path)
   end
   state.unmutated[path] = true
   notify('the room carries no file mutations yet.', vim.log.levels.WARN)
-end
-
---- Says, once per path, that a freshly opened document never arrived because the listing left
---- it: the host no longer has the file, so the empty buffer is not content still loading.
---- The buffer stays — an open buffer is never taken away — and a document holding text is not
---- this: content that arrived, or the person's own keystrokes, is still the room's to keep.
----
---- @param path string the room path
-local function notice_gone(path)
-  if state.gone[path] ~= nil then
-    return
-  end
-  state.gone[path] = true
-  notify(
-    ('%s is no longer in the room; the host no longer has it.'):format(path),
-    vim.log.levels.WARN
-  )
 end
 
 --- Says, once per path, that a mirror file opened empty holds nothing yet because its content
@@ -2538,14 +2522,26 @@ function M.statusline()
 end
 
 
---- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
---- here. Without this the room keeps the document for the life of the session, offering
---- edits to a `Document` that answers every one of them `ok = false`, and the companion
---- retries until it reports a refusal about a buffer the user closed.
+--- Stops holding a document while the session goes on: the buffer stops reporting and the room
+--- is told, which is what releases the hold.
 ---
 --- The send belongs here rather than in `Document:on_detach`, which also fires when the
 --- session ends: every `:SelvageLeave` would put a `close` on the wire for each document it
 --- is letting go of, and the companion would hear about a room it is already leaving.
+---
+--- @param document table
+local function let_go(document)
+  document:detach()
+  if state.process ~= nil then
+    state.process:send({ type = 'close', path = document.path })
+  end
+  state.documents[document.path] = nil
+end
+
+--- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
+--- here. Without this the room keeps the document for the life of the session, offering
+--- edits to a `Document` that answers every one of them `ok = false`, and the companion
+--- retries until it reports a refusal about a buffer the user closed.
 ---
 --- @param event table
 local function document_wiped(event)
@@ -2553,11 +2549,7 @@ local function document_wiped(event)
   if document == nil then
     return
   end
-  document:detach()
-  if state.process ~= nil then
-    state.process:send({ type = 'close', path = document.path })
-  end
-  state.documents[document.path] = nil
+  let_go(document)
 end
 
 --- Re-opens the documents this session holds whose room path the mirror now has a file for.
@@ -2619,8 +2611,7 @@ end
 --- Reading one is how a person or a plugin opens the room's file, and it goes through the same
 --- share `:SelvageOpen` uses: the room is what has the content, and the host reads its working
 --- copy when this client asks for it. A name under the mirror that is neither in the room's listing
---- nor a document this session holds is a file on this disk and nothing else, and is said so once:
---- a path that left the listing while its buffer stayed open is still the room's document.
+--- nor a document this session holds is a file on this disk and nothing else, and is said so once.
 ---
 --- Saving one is the session's to route, not the editor's. `BufWriteCmd` suppresses the write the
 --- editor would have made, and the document's own save gives the file the text this client holds
@@ -2803,6 +2794,22 @@ local function room_buffers()
   return held
 end
 
+--- Points every window showing one of `bufnrs` at one new empty buffer, so that wiping them
+--- closes no window and leaves nothing of the room on screen.
+---
+--- @param bufnrs integer[]
+local function land_windows(bufnrs)
+  local landing = nil
+  for _, win in ipairs(api.nvim_list_wins()) do
+    if vim.tbl_contains(bufnrs, api.nvim_win_get_buf(win)) then
+      if landing == nil then
+        landing = api.nvim_create_buf(true, false)
+      end
+      pcall(api.nvim_win_set_buf, win, landing)
+    end
+  end
+end
+
 --- A room that dies under a person leaves no window showing it.
 ---
 --- The room's buffers are the room's, and when the room is gone they are nobody's: a window still
@@ -2815,23 +2822,7 @@ local function land_room_buffers(held)
   if held == nil or #held == 0 then
     return
   end
-  local landing = nil
-  for _, win in ipairs(api.nvim_list_wins()) do
-    local showing = api.nvim_win_get_buf(win)
-    local room = false
-    for _, bufnr in ipairs(held) do
-      if showing == bufnr then
-        room = true
-        break
-      end
-    end
-    if room then
-      if landing == nil then
-        landing = api.nvim_create_buf(true, false)
-      end
-      pcall(api.nvim_win_set_buf, win, landing)
-    end
-  end
+  land_windows(held)
   local kept = 0
   for _, bufnr in ipairs(held) do
     if api.nvim_buf_is_valid(bufnr) then
@@ -2848,6 +2839,43 @@ local function land_room_buffers(held)
       vim.log.levels.WARN
     )
   end
+end
+
+--- Takes away the documents whose paths the listing left: the host no longer has the file, and a
+--- buffer left standing on it would go on sharing a document no folder holds, its autosave writing
+--- the file back into the mirror (`PROTOCOL.md` §13.3 lets a client keep holding it, and says it
+--- may not offer it).
+---
+--- A buffer is wiped the way a dead room's are, and the wipe releases the hold. One holding the
+--- person's own unsaved changes stays where it is, because wiping it would drop their text, and
+--- stops being the room's instead: it is let go of, and the mirror's refusal of an unlisted name is
+--- not said over it again. Either way the path is not offered until a listing names it again.
+---
+--- @param paths string[] held paths
+local function drop_documents(paths)
+  local wiped = {}
+  for _, path in ipairs(paths) do
+    local document = state.documents[path]
+    state.dropped[path] = true
+    if vim.bo[document.bufnr].modified then
+      let_go(document)
+      state.unlisted[path] = true
+      notify(
+        ('%s is no longer in the room; your unsaved copy is kept but no longer shared.'):format(path),
+        vim.log.levels.WARN
+      )
+    else
+      wiped[#wiped + 1] = document.bufnr
+      notify(('%s is no longer in the room, so it was closed.'):format(path), vim.log.levels.WARN)
+    end
+  end
+  land_windows(wiped)
+  for _, bufnr in ipairs(wiped) do
+    pcall(api.nvim_buf_delete, bufnr, { force = true })
+  end
+  -- A kept buffer can still be the one in front of the person, and no window moved to say its
+  -- caret is no longer in the room.
+  schedule_selection()
 end
 
 --- Ends the session: every buffer it shared stops reporting, presence goes, and the front-end
@@ -2970,7 +2998,7 @@ local function reset(land, keep_mirror)
   state.unlisted = {}
   state.unwritable = {}
   state.unmutated = {}
-  state.gone = {}
+  state.dropped = {}
   state.unfetched = {}
   mirror.teardown(keep_mirror)
   if state.group ~= nil then
@@ -3144,9 +3172,12 @@ local function on_report(report)
     if is_peer() then
       local first = nil
       for _, path in ipairs(report.documents) do
-        local bufnr = guest_buffer(path)
-        first = first or bufnr
-        share(bufnr, path)
+        -- A path the listing took away is still in the room's set while another peer holds it.
+        if not state.dropped[path] then
+          local bufnr = guest_buffer(path)
+          first = first or bufnr
+          share(bufnr, path)
+        end
       end
       -- The join is said here, where the room's document set is known, rather than when the
       -- handshake named the room: the sentence carries the landing, and a room with nothing in
@@ -3218,14 +3249,12 @@ local function on_report(report)
     for _, path in ipairs(state.grant) do
       previous[path] = true
     end
-    -- `mirror.setup` drops the file and the written mark of a path the listing no longer names,
-    -- so the removal check below reads the pre-update mark: an empty document the session already
-    -- wrote is fetched, not gone.
-    local written_before = {}
-    for path in pairs(state.documents) do
-      written_before[path] = mirror.written(path)
-    end
     state.grant = report.paths or {}
+    local listed = {}
+    for _, path in ipairs(state.grant) do
+      listed[path] = true
+      state.dropped[path] = nil
+    end
     if is_peer() then
       local root, blocked, created = mirror.setup(state.room, state.grant, report.unsafe)
       if root ~= nil then
@@ -3257,16 +3286,16 @@ local function on_report(report)
           )
         end
         remirror_documents()
-        for path, document in pairs(state.documents) do
-          if
-            previous[path]
-            and not mirror.granted(path)
-            and not written_before[path]
-            and document:text() == ''
-          then
-            notice_gone(path)
+        -- A held path the previous listing named and this one does not is a file the host
+        -- deleted. One the listing never named is a document shared after it, and is left alone.
+        local gone = {}
+        for path in pairs(state.documents) do
+          if previous[path] and not listed[path] then
+            gone[#gone + 1] = path
           end
         end
+        table.sort(gone)
+        drop_documents(gone)
         -- The grant is what `unfetched_buffer` reads, so a window already showing a buffer the
         -- listing no longer names is carrying a mark that is now wrong: the row is redrawn here
         -- rather than waiting for the next keystroke or session event.

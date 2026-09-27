@@ -196,10 +196,9 @@ end
 --- nowhere to be written; the call is still made, because that is what the companion's save
 --- policy asks for.
 ---
---- A path that left the room's listing keeps the file's name in a buffer the person still has
---- open, while the removal took the file and the directories that emptied with it. The save is
---- what puts the directory back: the text is the room's already, the file is only a cache of it,
---- and a `:w` that answered `E212` would leave the person with an error and a modified buffer.
+--- A directory removed under the file is put back first: the text is the room's already, the file
+--- is only a cache of it, and a `:w` that answered `E212` would leave the person with an error and
+--- a modified buffer.
 --- @param settled boolean|nil the buffer holds the room's text, so writing it counts as fetched
 function Document:save(settled)
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then

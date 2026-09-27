@@ -555,111 +555,160 @@ check('  and that file is left where it is', read(shrinking_root .. '/notes/tool
 check('  and the root stays, because the session still mirrors the room', vim.fn.isdirectory(shrinking_root), 1)
 check('  and the client no longer holds the path', mirror.granted('notes/deep.txt'), false)
 
--- A path the person has open is not taken away with its file: the room still holds the
--- document — the listing is not the open-document set — so the buffer keeps its text and its
--- name, and the session goes on sharing it under the same path.
+-- -- a path the host deleted while the person has it open ------------------------------------
+--
+-- The listing is the host's working tree (`PROTOCOL.md` §7.1), so a path that leaves it is a file
+-- the host no longer has. A buffer left standing on it would go on sharing a document no folder
+-- holds, with every autosave writing the file back into the mirror as if it still existed, so the
+-- buffer is taken away: the window is pointed at an empty buffer, the buffer is wiped, and the
+-- wipe releases the hold. The path is not offered again until a listing names it again, and the
+-- person is told once, in the sentence the other client says.
 
+local function sent_all(kind, path, from)
+  local found = 0
+  for index = from + 1, #sent do
+    if sent[index].type == kind and sent[index].path == path then
+      found = found + 1
+    end
+  end
+  return found
+end
+
+responder = room_holding({ ['notes/deep.txt'] = "the room's text\n" })
 local yanked = join({}, { 'notes/deep.txt', 'src/main.rs' }, 'r-yanked')
 selvage.open('notes/deep.txt')
 local open_buffer = vim.api.nvim_get_current_buf()
-local open_name = vim.api.nvim_buf_get_name(open_buffer)
-vim.api.nvim_buf_set_lines(open_buffer, 0, -1, false, { 'what the person was writing' })
+local open_window = vim.api.nvim_get_current_win()
+check("the room's text arrived before the host deleted the file", buffer_text(open_buffer), "the room's text")
+check('  and the buffer is not modified', vim.bo[open_buffer].modified, false)
+responder = nil
 
+local kicked = #sent
+local kick_said = #notices
 handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
 
 check('a path that leaves the listing loses its file', vim.fn.filereadable(yanked .. '/notes/deep.txt'), 0)
-check('  and the buffer the person has open is not taken away', vim.api.nvim_buf_is_valid(open_buffer), true)
-check('  and it keeps its text', buffer_text(open_buffer), 'what the person was writing')
-check('  and its name', vim.api.nvim_buf_get_name(open_buffer), open_name)
-check('  and the document is still the room\'s', selvage.text('notes/deep.txt'), 'what the person was writing')
-check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), true)
-check('  and it is not fetchable, because the listing no longer names it', vim.tbl_contains(selvage.fetchable(), 'notes/deep.txt'), false)
-
--- Entering it again — which is what a person or a plugin does — is not the mirror saying the file
--- is not the room's: this session still holds the document, and the sentence is for a name that is
--- neither listed nor held.
-local entered = #notices
-vim.api.nvim_exec_autocmds('BufEnter', { buffer = open_buffer })
-check('  and entering it again does not refuse it as a file of the moment', said_since(entered, 'is not in the room'), nil)
-
--- The save that follows is a save of a document the room still holds, into a file that is only
--- this session's cache of it: the removal took the file's directory away with the file, and the
--- save is what puts it back. Left as it was, `:w` would answer `E212` and leave the person with
--- an error and a modified buffer over a file whose text the room already has.
+check('  and the buffer the person had open is wiped', vim.api.nvim_buf_is_valid(open_buffer), false)
+check('  and the window that showed it is still there', vim.api.nvim_win_is_valid(open_window), true)
 check(
-  '  and the directory the file emptied went with it',
-  vim.fn.isdirectory(yanked .. '/notes'),
-  0
+  '  and shows an empty buffer instead',
+  buffer_text(vim.api.nvim_win_get_buf(open_window)),
+  ''
 )
-local writing = #notices
-vim.api.nvim_set_current_buf(open_buffer)
-vim.cmd('write')
-check('a save in it writes the file back, directory and all', read(open_name), 'what the person was writing\n')
-check('  and the directory is back', vim.fn.isdirectory(yanked .. '/notes'), 1)
-check('  and the buffer is not left modified', vim.bo[open_buffer].modified, false)
-check('  and nobody was told anything was wrong', #notices, writing)
-check('  and the file that came back is not in the room\'s listing', mirror.granted('notes/deep.txt'), false)
-
--- -- a fresh open of a path the host deleted ------------------------------------------------
---
--- A guest opening from a stale listing shares an empty buffer the room never answers. When the
--- listing catches up and leaves the path, the empty buffer is not content still loading: the
--- guest is told the host no longer has it. A buffer holding text is not this — content that
--- arrived, or the person's own keystrokes, stays without a word — and no open buffer is taken
--- away either way.
-
-responder = nil
-join({}, { 'gone.txt', 'stays.txt' }, 'r-gone')
-selvage.open('gone.txt')
-local gone_buf = vim.api.nvim_get_current_buf()
-local gone_before = #notices
-handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check('  and the hold is released', sent_all('close', 'notes/deep.txt', kicked), 1)
+check('  and the session no longer holds it', vim.tbl_contains(selvage.documents(), 'notes/deep.txt'), false)
+check('  and it is not offered', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), false)
 check(
-  'a fresh open the listing leaves says the host no longer has it',
-  said_since(gone_before, 'gone.txt is no longer in the room; the host no longer has it') ~= nil,
+  '  and the person is told it was closed',
+  said_since(kick_said, 'notes/deep.txt is no longer in the room, so it was closed.') ~= nil,
   true
 )
-check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(gone_buf), true)
-check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'gone.txt'), true)
-local gone_repeated = #notices
-handle({ type = 'report', report = { kind = 'grant', paths = { 'gone.txt', 'stays.txt' } } })
-handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
-check('  and says so once per path', #notices, gone_repeated)
+check('  and told nothing else', #notices, kick_said + 1)
+check('  and the directory the file emptied went with it', vim.fn.isdirectory(yanked .. '/notes'), 0)
 
-responder = room_holding({ ['kept.txt'] = 'kept\n' })
-join({}, { 'kept.txt' }, 'r-kept')
-selvage.open('kept.txt')
-local kept_buf = vim.api.nvim_get_current_buf()
-local kept_before = #notices
-handle({ type = 'report', report = { kind = 'grant', paths = {} } })
-check(
-  'a held document with content says nothing about being gone',
-  said_since(kept_before, 'kept.txt is no longer') ~= nil,
-  false
-)
-check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(kept_buf), true)
-check('  and it keeps its text', buffer_text(kept_buf), 'kept')
+-- The room's open-document set is a fact of its own, and the host keeps its own buffer: a
+-- `documents` report still naming the path is not an invitation to share it again.
+local reheld = #sent
+local reheld_said = #notices
+handle({ type = 'report', report = { kind = 'documents', documents = { 'notes/deep.txt' } } })
+check('a room that still holds it does not share it again', sent_all('open', 'notes/deep.txt', reheld), 0)
+check('  and the session does not hold it', vim.tbl_contains(selvage.documents(), 'notes/deep.txt'), false)
+check('  and it is still not offered', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), false)
+check('  and nothing about it is said again', #notices, reheld_said)
+check('  and its file is not written back', vim.fn.filereadable(yanked .. '/notes/deep.txt'), 0)
 
--- An empty document the session already wrote is not a fresh open without an answer: the save
--- marked it written even though its text is still empty, so the listing leaving it stays silent.
--- The removal takes the file and its written mark with it; the grant handler reads the pre-update
--- mark, which is what makes this the written half rather than the gone one above.
-responder = room_holding({ ['saved.txt'] = '\n' })
-join({}, { 'saved.txt', 'stays.txt' }, 'r-gone-written')
-selvage.open('saved.txt')
-local saved_buf = vim.api.nvim_get_current_buf()
-check('an empty document the room answered is still empty', buffer_text(saved_buf), '\n')
-check('  and the save marked it written', mirror.written('saved.txt'), true)
-local saved_before = #notices
-handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+-- A listing that names it again is the host having it again: it is offered, and the room's open
+-- set is followed for it as for any other path.
+handle({ type = 'report', report = { kind = 'grant', paths = { 'notes/deep.txt', 'src/main.rs' } } })
+check('a listing that names it again offers it again', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), true)
+local relisted = #sent
+handle({ type = 'report', report = { kind = 'documents', documents = { 'notes/deep.txt' } } })
+check('  and the room holding it shares it again', sent_all('open', 'notes/deep.txt', relisted), 1)
+check('  and the session holds it', vim.tbl_contains(selvage.documents(), 'notes/deep.txt'), true)
+
+-- A deleted directory is many paths in one listing: every buffer under it goes, each with its
+-- own sentence, and the windows showing them land on one empty buffer.
+join({}, { 'lib/a.txt', 'lib/b.txt', 'keep.txt' }, 'r-deleted-dir')
+selvage.open('lib/a.txt')
+local dir_a = vim.api.nvim_get_current_buf()
+vim.cmd('split')
+selvage.open('lib/b.txt')
+local dir_b = vim.api.nvim_get_current_buf()
+local dir_sent = #sent
+local dir_said = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'keep.txt' } } })
+check('a deleted directory wipes every buffer under it', vim.api.nvim_buf_is_valid(dir_a), false)
+check('  (the second too)', vim.api.nvim_buf_is_valid(dir_b), false)
+check('  and releases every hold', sent_all('close', 'lib/a.txt', dir_sent) + sent_all('close', 'lib/b.txt', dir_sent), 2)
+check('  and both windows are still there', #vim.api.nvim_list_wins(), 2)
+check('  and says one sentence per path', #notices, dir_said + 2)
+check('  (the first)', said_since(dir_said, 'lib/a.txt is no longer in the room, so it was closed.') ~= nil, true)
+check('  (the second)', said_since(dir_said, 'lib/b.txt is no longer in the room, so it was closed.') ~= nil, true)
+check('  and offers neither', #vim.tbl_filter(function(path)
+  return path:find('^lib/') ~= nil
+end, selvage.offered()), 0)
+vim.cmd('only')
+
+-- A buffer holding the person's own unsaved changes is kept, because wiping it would drop their
+-- text, and it stops being the room's: the hold is released, nothing it does is shared, and the
+-- mirror does not write it back — neither the room's autosave nor a `:w`.
+join({}, { 'draft.txt', 'stays.txt' }, 'r-kept-draft')
+local draft_opened = #sent
+selvage.open('draft.txt')
+local draft = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(draft, 0, -1, false, { 'what the person was writing' })
+check('the person has unsaved changes', vim.bo[draft].modified, true)
 check(
-  'an empty document already written says nothing about being gone',
-  said_since(saved_before, 'saved.txt is no longer') ~= nil,
-  false
+  "  and the room has the person's caret in it",
+  vim.wait(2000, function()
+    local selection = sent_since('selection', draft_opened)
+    return selection ~= nil and selection.path == 'draft.txt'
+  end, 20),
+  true
 )
-check('  and its buffer is not taken away', vim.api.nvim_buf_is_valid(saved_buf), true)
-check('  and it is still offered', vim.tbl_contains(selvage.offered(), 'saved.txt'), true)
-responder = nil
+local draft_sent = #sent
+local draft_said = #notices
+handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
+check('a modified buffer the listing leaves is kept', vim.api.nvim_buf_is_valid(draft), true)
+check('  and keeps its text', buffer_text(draft), 'what the person was writing')
+check('  and is still modified', vim.bo[draft].modified, true)
+check('  and is still in front of the person', vim.api.nvim_get_current_buf(), draft)
+check('  and its hold is released', sent_all('close', 'draft.txt', draft_sent), 1)
+check('  and the session no longer holds it', vim.tbl_contains(selvage.documents(), 'draft.txt'), false)
+check('  and it is not offered', vim.tbl_contains(selvage.offered(), 'draft.txt'), false)
+check(
+  '  and the person is told the copy is kept and not shared',
+  said_since(draft_said, 'draft.txt is no longer in the room; your unsaved copy is kept but no longer shared.') ~= nil,
+  true
+)
+check('  and told nothing else', #notices, draft_said + 1)
+check(
+  '  and the caret is no longer in the room',
+  vim.wait(2000, function()
+    return sent_since('selectionCleared', draft_sent) ~= nil
+  end, 20),
+  true
+)
+
+local draft_after = #sent
+vim.api.nvim_buf_set_lines(draft, 0, -1, false, { 'more of it' })
+vim.api.nvim_exec_autocmds('BufEnter', { buffer = draft })
+check('  and an edit in it is not shared', sent_all('change', 'draft.txt', draft_after), 0)
+check('  and entering it does not share it again', sent_all('open', 'draft.txt', draft_after), 0)
+check('  and entering it says nothing more', #notices, draft_said + 1)
+local autosave_id = message_id()
+handle({ type = 'save', id = autosave_id, path = 'draft.txt' })
+local answered = nil
+for index = draft_after + 1, #sent do
+  if sent[index].type == 'saved' and sent[index].id == autosave_id then
+    answered = sent[index].ok
+  end
+end
+check("  and the room's autosave is refused", answered, false)
+vim.cmd('silent! write')
+check('  and neither that nor a :w writes the file back', vim.fn.filereadable(vim.api.nvim_buf_get_name(draft)), 0)
+vim.cmd('enew!')
+pcall(vim.api.nvim_buf_delete, draft, { force = true })
 
 -- A listing that shrinks to nothing leaves the directory, empty: the session still mirrors the
 -- room, which now lists no files at all.
@@ -869,6 +918,13 @@ check(
   true
 )
 check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(listed_buf), true)
+-- The file is only this session's cache of the room's text, so a save over a directory removed
+-- under it puts the directory back rather than answering `E212` over a modified buffer.
+vim.fn.delete(root .. '/notes', 'rf')
+vim.api.nvim_buf_set_lines(listed_buf, 0, -1, false, { 'written after the directory went' })
+vim.cmd('write')
+check('  and a save puts its directory back with it', read(listed_file), 'written after the directory went\n')
+check('  and leaves the buffer saved', vim.bo[listed_buf].modified, false)
 vim.cmd('bwipeout!')
 
 -- -- a write that is not the whole buffer ---------------------------------------------------
