@@ -169,6 +169,12 @@ if harness.control_file ~= nil then
   end, function()
     return 'the window holds ' .. vim.inspect(harness.row())
   end)
+  -- A listing that leaves a path takes this window's buffer on it away, so a reconnect that
+  -- passed through an empty listing would have closed the granted path here. The blip is over,
+  -- so the buffer and its hold still standing is the proof that it did not.
+  if not vim.api.nvim_buf_is_valid(granted_buf) or not vim.tbl_contains(selvage.documents(), harness.granted_path) then
+    harness.fail(('the reconnect took the granted path away: held %s'):format(vim.inspect(selvage.documents())))
+  end
   vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { harness.markers.guest2 })
   harness.log('made the second guest edit')
   harness.wait('the host edit made after the blip', harness.reconnect_deadline_ms, function()
