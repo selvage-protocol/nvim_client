@@ -1707,6 +1707,40 @@ check(
   true
 )
 
+-- -- a give-up takes a guest's mirror ------------------------------------------
+--
+-- The mirror is a cache of the room, and the one ending that leaves it standing is a room that
+-- died under the guest, whose cache is the only copy of what they did in it. A connection the
+-- engine gave up on has said nothing about the room, so the directory goes with the session, the
+-- way a leave's does. VS Code's adapter is held to the same thing at the same moment.
+
+selvage.join('ws://127.0.0.1:1/session?room=r-dropped&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-dropped' })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'grant', paths = { 'dropped/one.txt' } },
+})
+local dropped_root = selvage.session().mirror
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'dropped/one.txt' } },
+})
+vim.cmd('SelvageOpen dropped/one.txt')
+local dropped_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(dropped_buf, 0, -1, false, { 'typed while the socket was down' })
+handlers().on_message({ type = 'save', id = 4244, path = 'dropped/one.txt' })
+check('the guest has work in the mirror before the retry gives up', vim.fn.isdirectory(dropped_root), 1)
+
+local before_dropped = #notices
+handlers().on_message({ type = 'report', report = { kind = 'disconnected' } })
+check('the engine giving up takes the guest mirror', vim.fn.isdirectory(dropped_root), 0)
+check('  and the session is over', selvage.session().status, 'idle')
+check(
+  '  and nothing claims a copy was kept somewhere',
+  said_since(before_dropped, 'Your copy is kept') == nil,
+  true
+)
+
 -- A report's cause is part of what it says: the sentence is the fact and the parenthetical is
 -- why, and a report that carries a reason must not lose it. The kind name is not a sentence.
 local before_reports = #notices
