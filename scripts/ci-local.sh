@@ -3,7 +3,8 @@
 # Runs the steps of .github/workflows/ci.yml on this machine, without containers (this host
 # has no Docker or Podman, so `act` cannot run here).
 #
-#   scripts/ci-local.sh checks   # the `checks` job: install, typecheck, the companion suite
+#   scripts/ci-local.sh checks   # the `checks` job: install, typecheck, the companion suite,
+#                                # the release workflow's dry_run gating
 #   scripts/ci-local.sh lint     # actionlint over the workflow files
 #   scripts/ci-local.sh e2e      # the end-to-end proof: real Neovims against a real `selvaged`
 #   scripts/ci-local.sh all      # lint + checks + e2e
@@ -24,6 +25,9 @@ cd "$repo_root"
 export TMPDIR="$repo_root/.tmp"
 mkdir -p "$TMPDIR"
 
+# The system whose flake checks this builds; the flake carries them for both Linux architectures.
+system=$(nix eval --raw --impure --expr builtins.currentSystem)
+
 say() { printf '\n=== %s ===\n' "$*"; }
 
 job_checks() {
@@ -33,6 +37,11 @@ job_checks() {
   npm run typecheck
   say "checks: the companion suite"
   npm test
+  # The guard around a workflow's `dry_run` input reads `.github/workflows`, so none of the suites
+  # above covers it. The flake check runs the same two files `ci.yml` runs, with the flake's Python
+  # supplying the PyYAML that job installs.
+  say "checks: the release workflow's dry_run gating"
+  nix build ".#checks.${system}.dry-run-gating" --no-link --print-build-logs
 }
 
 job_lint() {

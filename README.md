@@ -549,7 +549,7 @@ scripts/ci-local.sh all     # the workflow's commands, plus actionlint and the p
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim (not in `all`: see below)
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
 
-nix flake check             # the same three suites, plus the built package, in a sandbox
+nix flake check             # the same three suites, the built package and the workflow guard
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
@@ -563,7 +563,11 @@ has installed, and says so rather than testing that one instead when the two are
 each in its own Neovim, with no network and no editor session, and then the `plugin` check, which is
 the only one that starts Neovim against the built package rather than a checkout: the plugin that
 `packages.<system>.default` is, on the runtime path of the wrapped Neovim that
-`packages.<system>.neovim-selvage` is, with the real companion started from it. The two-instance
+`packages.<system>.neovim-selvage` is, with the real companion started from it. `dry-run-gating` is
+the fourth: it reads `.github/workflows` back and refuses a workflow that declares a `dry_run` input
+and leaves a step below its plan step without a condition that excludes a dry run — the defect
+`actionlint` cannot see, because it is the condition a step does not carry. `ci.yml` runs the same
+two files, with pip's PyYAML. The two-instance
 proof is not one of them: it needs a `selvaged` from the sibling `reference_server` checkout, which
 a sandboxed build cannot see, so `SELVAGE_SELVAGED` is the seam. `nix run .#e2e` runs that proof
 with the flake's Node and Neovim and whatever `SELVAGE_SELVAGED` names, from the checkout in the
