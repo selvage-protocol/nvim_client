@@ -201,6 +201,23 @@
 
           lua = mkSuite "nvim-client-lua-suite" [ pkgs.neovim ] (map (f: "nvim --headless -l ${f}") luaFiles);
 
+          # The guard around what a workflow's `dry_run` input promises
+          # (`scripts/check_dry_run_gating.py`). `release.yml` declares the input, its plan step
+          # carries `inputs.dry_run == true` and every step after it `inputs.dry_run != true`,
+          # which is the whole of what keeps a rehearsal from cutting a release; a step added
+          # below the plan with no condition performs the bump the plan said it would not.
+          # `actionlint` lints that file clean, because the defect is the condition a step does
+          # *not* carry. Python and PyYAML only, so no Node tree is built for it, and the
+          # sandbox's own `TMPDIR` takes the suite's scratch.
+          dry-run-gating =
+            pkgs.runCommand "nvim-client-dry-run-gating" {
+              nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.pyyaml ])) ];
+            } ''
+              python3 -B ${self}/scripts/test_check_dry_run_gating.py
+              python3 -B ${self}/scripts/check_dry_run_gating.py ${self}/.github/workflows
+              touch $out
+            '';
+
           inherit plugin;
         }
       );
