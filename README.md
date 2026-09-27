@@ -220,9 +220,14 @@ on a character and its column is that character's byte index, so this client pub
 of the character the cursor is on, the same offset a VS Code caret sitting in front of that
 character publishes. A block over a character and a bar between two characters are not the same
 shape, so a peer running Neovim is shown to everyone else with the block one cell to the left of
-where that peer sees their own cursor. A linewise Visual selection is published as its lines whole,
-from the start of the first to the end of the last one's text, so there the head, and the block
-drawn for it, is at the start or the end of the line the cursor is on rather than on its character.
+where that peer sees their own cursor. A charwise Visual selection is published with the character
+at its later end included, as Neovim's own operators take it, and with the line break too when that
+end is past the line's text, except on the last line, which has none. A selection made forward then
+ends just past the cursor's character, so its block is drawn on that character. With `'selection'`
+set to `exclusive` that last character is left out, again as the operators do. A linewise Visual
+selection is published as its lines whole, from the start of the first to the end of the last one's
+text, so there the head, and the block drawn for it, is at the start or the end of the line the
+cursor is on rather than on its character.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. Two

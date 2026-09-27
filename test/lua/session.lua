@@ -486,19 +486,31 @@ check(
 -- the two ends stand: from the start of the first line to the end of the last one's text, with
 -- the head on the end the cursor is on. Both columns sit mid-line and after a multi-byte
 -- character, so a column that leaked through, or a byte count, would move an offset.
-local function select_lines(from, to)
+--- `to` is where the cursor is put once Visual mode is on, or the keys that move it there.
+local function select_as(visual, from, to)
   vim.api.nvim_win_set_cursor(0, from)
-  vim.cmd('normal! V')
-  vim.api.nvim_win_set_cursor(0, to)
+  vim.cmd('normal! ' .. visual)
+  if type(to) == 'string' then
+    vim.cmd('normal! ' .. to)
+  else
+    vim.api.nvim_win_set_cursor(0, to)
+  end
   local before = count_type('selection')
   vim.api.nvim_exec_autocmds('CursorMoved', { buffer = presence_buf })
-  vim.wait(500, function()
+  local published = vim.wait(500, function()
     return count_type('selection') > before
   end)
   local mode = vim.fn.mode(1)
   vim.cmd('normal! \27')
+  if not published then
+    return mode .. ' unpublished'
+  end
   local selection = last_of('selection')
   return ('%s %d:%d'):format(mode, selection.anchor, selection.head)
+end
+
+local function select_lines(from, to)
+  return select_as('V', from, to)
 end
 
 check('a linewise selection made downward is shared as whole lines', select_lines({ 1, 1 }, { 2, 3 }), 'V 0:10')
@@ -507,6 +519,35 @@ check('  and one line alone is that line', select_lines({ 2, 3 }, { 2, 1 }), 'V 
 check('  and one ending on the last line ends the document', select_lines({ 3, 2 }, { 4, 0 }), 'V 11:17')
 check('  and one made upward from the last line starts there', select_lines({ 4, 0 }, { 2, 3 }), 'V 17:5')
 check('  and an empty line alone has nothing to fill', select_lines({ 4, 0 }, { 4, 0 }), 'V 17:17')
+
+-- A charwise selection takes the character its later end is on, as Neovim's operators do, so the
+-- range reaches past it by that character's UTF-16 width: two for the emoji, one for `ö` (two
+-- bytes). An end beyond a line's text takes the line break, which the last line does not have.
+local function select_chars(from, to)
+  return select_as('v', from, to)
+end
+
+check('a charwise selection made forward includes the character under the cursor', select_chars({ 3, 1 }, { 3, 3 }), 'v 12:15')
+check('  and one made backward includes the one it started on', select_chars({ 3, 3 }, { 3, 1 }), 'v 15:12')
+check('  and one character alone is that character', select_chars({ 3, 2 }, { 3, 2 }), 'v 13:14')
+check('  and one ending on an astral character takes all of it', select_chars({ 1, 0 }, { 1, 1 }), 'v 0:3')
+check('  and so does one started on it and made backward', select_chars({ 1, 1 }, { 1, 0 }), 'v 3:0')
+check('  and one ending on a two-byte character takes one unit', select_chars({ 2, 0 }, { 2, 1 }), 'v 5:7')
+check('  and one beyond the end of a line takes its line break', select_chars({ 3, 2 }, '$'), 'v 13:17')
+check('  and so does one started there and made backward', select_chars({ 2, 3 }, '$o'), 'v 11:7')
+check('  and one on the empty last line has no line break to take', select_chars({ 3, 2 }, { 4, 0 }), 'v 13:17')
+check('  and that line alone has nothing to fill', select_chars({ 4, 0 }, { 4, 0 }), 'v 17:17')
+
+-- `'selection'` set to `exclusive` leaves the last character out, except of a selection whose two
+-- ends meet, which an operator still takes whole.
+vim.o.selection = 'exclusive'
+check('an exclusive charwise selection leaves out its last character', select_chars({ 3, 1 }, { 3, 3 }), 'v 12:14')
+check('  and made backward too', select_chars({ 3, 3 }, { 3, 1 }), 'v 14:12')
+check('  but one character alone is still that character', select_chars({ 1, 1 }, { 1, 1 }), 'v 1:3')
+vim.o.selection = 'inclusive'
+
+-- A blockwise selection is still the two corners the cursor and the other end stand on.
+check('a blockwise selection is its two corners', select_as('\22', { 2, 1 }, { 3, 3 }), '\22 6:14')
 
 -- A buffer the room does not hold is not where anyone can see the caret, so it is cleared —
 -- once, however much the caret moves there.

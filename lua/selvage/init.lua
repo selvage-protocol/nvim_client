@@ -650,8 +650,28 @@ local function current_document()
   return document_for_buf(api.nvim_get_current_buf())
 end
 
+--- The UTF-16 offset just past what a charwise selection ending at (`row`, `col`) takes of that
+--- position: the character there, a wide or an astral one whole, or, beyond the line's text, the
+--- line break. The last line has no break to take.
+local function past(document, row, col)
+  local line = document:line(row)
+  if col < #line then
+    return document:offset(row, cell_end(line, col))
+  end
+  local offset = document:offset(row, #line)
+  if row < #document.lines - 1 then
+    return offset + 1
+  end
+  return offset
+end
+
 --- The caret as the two UTF-16 offsets the room counts. In Visual mode the selection's other
 --- end is the anchor; a caret is both ends alike.
+---
+--- A charwise selection includes the character its later end is on, whichever end that is, as
+--- Neovim's operators do. With `'selection'` set to `exclusive` it does not, except when the two
+--- ends meet: an operator still takes that one character. `old` is read as `inclusive`: the two
+--- differ only where an end is on an empty line.
 ---
 --- A linewise selection is its lines whole, from the start of the first to the end of the last
 --- one's text, with the head on whichever end the cursor is. The end of the text rather than the
@@ -676,6 +696,13 @@ local function caret(document)
       end
     elseif start[2] > 0 and start[3] > 0 then
       anchor = document:offset(start[2] - 1, start[3] - 1)
+      if mode == 'v' and (vim.o.selection ~= 'exclusive' or anchor == head) then
+        if anchor <= head then
+          head = past(document, cursor[1] - 1, cursor[2])
+        else
+          anchor = past(document, start[2] - 1, start[3] - 1)
+        end
+      end
     end
   end
   return anchor, head
