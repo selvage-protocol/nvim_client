@@ -160,11 +160,15 @@ local heard = statuses()
 check('  it said it was connecting first', heard[1] ~= nil and heard[1].state, 'connecting')
 local refusal = heard[2]
 check('  and then why it could not', refusal ~= nil and refusal.state, 'error')
-check("  carrying the protocol's own code", refusal ~= nil and refusal.code, 'bad_params')
+-- `§5.1`'s refusal is local and has no wire form, so it has no code of the protocol's either:
+-- the companion's own name for the case is what the failure carries. The words beside it are
+-- the engine's, `MISSING_FRAGMENT` in `vendor/engine/peer.ts`, which `relay.ts` throws and the
+-- companion passes on unaltered.
+check("  carrying the companion's own code", refusal ~= nil and refusal.code, 'invite_refused')
 check(
   '  and the engine\'s own words',
   refusal ~= nil and refusal.message,
-  'not an invite URL: it has no session address'
+  'the invite carries no fragment, so neither its room key nor its host key is here: ask for the whole link, `#` and all'
 )
 
 -- Closing its stdin is what the plugin does on the way out and what the companion reads as
