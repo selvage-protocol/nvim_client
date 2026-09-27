@@ -1,6 +1,6 @@
 /**
  * `scripts/bump-version.sh`, the file set it exists to keep in step, and the release workflow's
- * `version` input.
+ * `bump` input.
  *
  * The script takes a bump word — `major`, `minor` or `patch` — reads the version `package.json`
  * carries, moves it, and prints the resulting version as the last line of stdout, which is what
@@ -11,8 +11,9 @@
  * The 0.5.1 bump is the case this pins: the version lives in `package.json` and its lockfile, a
  * release that moves one and not the other is a red run, and the bump left the release workflow's
  * `version` default behind at 0.4.6 — `package.json version 0.5.1 != release 0.4.6` — before it
- * reached a tag. The default is gone; the input is required, and the last test here holds it that
- * way.
+ * reached a tag. That input is gone: the workflow takes the bump word and computes the version
+ * with this script, so it carries no version string of its own, and the last test here holds it
+ * that way.
  *
  * The script is run, for real, on a copy of the checkout that this file takes itself under
  * `.tmp/` — never on the working tree, which no case below can reach. The copy is taken with
@@ -484,31 +485,58 @@ test("the lockfile's root entry is written, not the first version line", () => {
 });
 
 /**
- * The `version` input's own block from `on.workflow_dispatch.inputs`, up to the next input at the
- * same indentation. This repository's dependency set carries no YAML parser, so the block is
- * taken by indentation; the caller checks that it read an input's body before reading it.
+ * The release workflow's `inputs:` block under `on.workflow_dispatch`: the input names it declares,
+ * in order. This repository's dependency set carries no YAML parser, so the block is taken by
+ * indentation; the caller checks that it read inputs before reading them.
  */
-function versionInput(workflow: string): string {
+function workflowInputs(workflow: string): string[] {
   const lines = workflow.split('\n');
-  const start = lines.indexOf('      version:');
-  assert.notEqual(start, -1, 'no `version` input under `on.workflow_dispatch.inputs`');
+  const start = lines.indexOf('    inputs:');
+  assert.notEqual(start, -1, 'no `inputs:` under `on.workflow_dispatch`');
+  const body = lines.slice(start + 1);
+  const end = body.findIndex((line) => /^ {0,4}\S/.test(line));
+  const block = end === -1 ? body : body.slice(0, end);
+  return block.filter((line) => /^ {6}\S/.test(line)).map((line) => line.trim().replace(/:$/, ''));
+}
+
+/** One input's own block from that list, up to the next input at the same indentation. */
+function inputBlock(workflow: string, name: string): string {
+  const lines = workflow.split('\n');
+  const start = lines.indexOf(`      ${name}:`);
+  assert.notEqual(start, -1, `no \`${name}\` input under \`on.workflow_dispatch.inputs\``);
   const body = lines.slice(start + 1);
   const end = body.findIndex((line) => /^ {6}\S/.test(line));
   return (end === -1 ? body : body.slice(0, end)).join('\n');
 }
 
-test('the release workflow requires the version and carries no default', () => {
+test('the release workflow takes the bump word and carries no version of its own', () => {
   const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-  const input = versionInput(workflow);
+  assert.deepEqual(
+    workflowInputs(workflow),
+    ['bump', 'dry_run'],
+    'the release workflow takes inputs other than the bump word and dry_run',
+  );
+  const input = inputBlock(workflow, 'bump');
   assert.match(input, /^\s*description:/m, 'the block read is not a workflow input');
   assert.match(
     input,
     /^\s*required:\s*true\s*$/m,
-    'the version input is not required, so a dispatch could reach the assertion without naming one',
+    'the bump input is not required, so a dispatch could reach the workflow without naming one',
+  );
+  assert.match(
+    input,
+    /^\s*type:\s*choice\s*$/m,
+    'the bump input is not a choice, so a dispatch could name something that is not a bump word',
+  );
+  const options = (input.match(/^\s*-\s*(\S+)\s*$/gm) ?? []).map((line) => line.trim().slice(2));
+  assert.deepEqual(
+    options,
+    ['patch', 'minor', 'major'],
+    'the bump input does not offer exactly patch, minor and major, in that order',
   );
   assert.doesNotMatch(
     input,
     /^\s*default:/m,
-    'the version input carries a default: a second copy of the version that no bump moves',
+    'the bump input carries a default: which component a release moves would be decided here',
   );
 });

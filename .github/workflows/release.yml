@@ -7,28 +7,39 @@ name: release
 # bundle nobody consumes would be machinery for its own sake.
 #
 # The owner triggers a release from this workflow. `workflow_dispatch` (with a
-# `version` input) is the manual button; pushing a tag `v*` runs the same job
-# for a release cut by hand. Either way the job is idempotent: the companion
-# version is asserted first, an existing tag must point at this run's commit
-# before the release is touched, and an existing release is left alone.
+# required `bump` input naming `patch`, `minor` or `major`) is the manual button;
+# pushing a tag `v*` releases the version that tag names. A dispatch computes its
+# own version: it refuses unless the version `package.json` already carries is
+# released as `v<version>` on the remote, derives the next one with
+# `scripts/bump-version.sh`, and commits and pushes it to `main` before the tag
+# exists. Requiring the manifest version to be released is what makes a second
+# click safe: a bump that has been pushed without its tag refuses loudly instead of
+# computing the version after it and releasing a number nobody chose.
+# An existing tag must name the commit this run releases before the release is
+# touched — nothing here moves a tag — and an existing release is left alone.
 # A pull request runs ci.yml instead and can never publish or release.
 #
 # `package.json:3` (`selvage-nvim-companion`, private) carries the version the
 # run asserts against. `lua/` and `plugin/` carry no version string.
 #
-# `version` is required and carries no default. A default here is a second copy of
-# the number that no bump moves: 0.5.1 moved `package.json` and left the default at
-# 0.4.6, so a dispatch that took it failed the assertion below before it reached a
-# tag. The number a release cuts is named deliberately, and `scripts/bump-version.sh`
-# moves nothing else — a workflow carrying a version would belong to it too.
+# `bump` is required and carries no default, and this file carries no version
+# string at all: `scripts/bump-version.sh` moves every copy of the version
+# `package.json` carries. A version written here would be a copy no bump moves —
+# 0.5.1 moved `package.json` and left a `version` default at 0.4.6, so a dispatch
+# that took it failed the assertion below before it reached a tag.
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release version, without the leading v (must match package.json; the tag v<version> is created)"
+      bump:
+        description: "Which component to bump: scripts/bump-version.sh moves the version package.json carries, and the release is cut at the result"
         required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
       dry_run:
-        description: "Assert the version and run the companion suite without tagging or releasing"
+        description: "Refuse if the manifest version is not released, print the version this bump would cut, and stop: nothing is bumped, committed, tagged or released"
         required: false
         default: false
         type: boolean
@@ -58,23 +69,15 @@ jobs:
           cache: npm
 
       # No dependency's install script runs here: this job holds a `contents: write` token and the
-      # checkout keeps it in `.git/config` for the tag push below, and none of the companion's
-      # dependencies has an install script to need.
+      # checkout keeps it in `.git/config` for the commit and the tag push below, and none of the
+      # companion's dependencies has an install script to need.
       - run: npm ci --ignore-scripts
 
-      # The release version comes from the dispatch input, or from the tag
-      # name on a tag push. It passes through `env` rather than a workflow
-      # expression inside `run:`, and anything outside `X.Y.Z` stops the job
-      # before anything is asserted, tagged or released.
+      # On a tag push the tag names the version, and nothing here computes anything.
       - name: resolve the release version
-        env:
-          DISPATCH_VERSION: ${{ inputs.version }}
+        if: github.event_name != 'workflow_dispatch'
         run: |
-          if [ -n "$DISPATCH_VERSION" ]; then
-            version="$DISPATCH_VERSION"
-          else
-            version="${GITHUB_REF_NAME#v}"
-          fi
+          version="${GITHUB_REF_NAME#v}"
           case "$version" in
             [0-9]*.[0-9]*.[0-9]*)
               ;;
@@ -85,7 +88,70 @@ jobs:
           esac
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
-      # The companion version is the release version: refuse to tag anything else.
+      # A dispatch computes its own version. The version the manifest carries has to be released
+      # before the next one is computed from it — a run that pushed its bump and died before the
+      # tag was created leaves that state, and computing from an unreleased manifest would release
+      # the version after a number nobody has released. `scripts/bump-version.sh --dry-run` then
+      # names the files it would write and prints the version it would write as the last line of
+      # stdout, which is the line this run takes its tag and its Release from. The word is the
+      # dispatch input, applied to whatever the manifest carries now.
+      - name: compute the version this bump cuts
+        if: github.event_name == 'workflow_dispatch'
+        id: target
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          current=$(node -p "require('./package.json').version")
+          remote=$(git ls-remote --tags origin "refs/tags/v${current}")
+          if [ -z "$remote" ]; then
+            cat >&2 <<EOF
+          refusing: package.json carries ${current}, and there is no tag v${current} on the remote.
+          That version was bumped but never released, and computing the next version from it would
+          release the version after a number nobody has released. Push the tag at the commit that
+          carries it (git push origin v${current}) and let this workflow release it, or put the
+          manifest back to the version last released, then dispatch again.
+          EOF
+            exit 1
+          fi
+          report=$(scripts/bump-version.sh "$BUMP" --dry-run)
+          printf '%s\n' "$report"
+          version=$(printf '%s\n' "$report" | tail -n1)
+          remote=$(git ls-remote --tags origin "refs/tags/v${version}")
+          if [ -n "$remote" ]; then
+            cat >&2 <<EOF
+          refusing: tag v${version} already exists on the remote, so this bump would cut a version
+          that is already released. The manifest is behind its own tags: bump from the version the
+          last release carries, then dispatch again.
+          EOF
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+
+      - name: stop before changing anything on a dry run
+        if: inputs.dry_run == true
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          cat <<EOF
+          dry_run: nothing was bumped, gated, committed, pushed, tagged or released. This dispatch
+          would have:
+            - run scripts/bump-version.sh ${BUMP}, setting every version in the tree to ${RELEASE_VERSION}
+            - run the gate ci.yml runs: npm ci, npm run typecheck, npm test
+            - asserted that package.json carries ${RELEASE_VERSION}
+            - committed that as DontBlameMe <dontblameme@noreply.codeberg.org> with the subject
+              "chore(bump): release ${RELEASE_VERSION}", and pushed it to main
+            - created the tag v${RELEASE_VERSION} and its GitHub Release
+          EOF
+
+      - name: bump the version
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: scripts/bump-version.sh "$BUMP"
+
+      # The companion version is the release version: refuse to tag anything else. On a dispatch
+      # the manifest read here is the one the bump just wrote.
       - name: assert the companion version matches
         run: |
           pkg=$(node -p "require('./package.json').version")
@@ -94,6 +160,10 @@ jobs:
             exit 1
           fi
 
+      # The gate `.github/workflows/ci.yml` runs, which `scripts/ci-local.sh checks` mirrors, and it
+      # runs on the bumped tree before the commit exists: a commit pushed with this workflow's own
+      # `GITHUB_TOKEN` starts no run, so this is the only check the commit reaching `main` will ever
+      # have.
       - run: npm run typecheck
 
       # The companion's suite only, same as ci.yml: the two-instance proof
@@ -101,28 +171,40 @@ jobs:
       # neither of.
       - run: npm test
 
-      - name: stop before tagging on a dry run
-        if: inputs.dry_run == true
+      # The one push this workflow makes to `main`, and the reason this job holds
+      # `contents: write`. A bump pull request would carry no checks at all — an event created with
+      # this workflow's own `GITHUB_TOKEN` starts no run — so the gate above runs here instead, on
+      # the tree this commit carries. The commit's identity is the one every other commit in this
+      # repository has.
+      - name: commit and push the bump
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true
         run: |
-          echo "dry_run: version asserted and suite green, tagging and releasing nothing."
+          git config user.name "DontBlameMe"
+          git config user.email "dontblameme@noreply.codeberg.org"
+          git commit -a -m "chore(bump): release ${RELEASE_VERSION}"
+          git push origin HEAD:main
 
       # Tags are resolved against `origin`, not local refs: the checkout may
-      # not have fetched them. An existing tag must point at this run's
-      # commit; anything else is someone else's release and stops the job.
-      # An annotated tag's own ref resolves to the tag object, not the commit
-      # it names, so both the plain ref and its peeled `^{}` form are queried
-      # and the peeled (commit) sha is preferred when present.
+      # not have fetched them. An existing tag must name the commit this run
+      # releases — the bump commit a dispatch just pushed, the tagged commit on a
+      # tag push, which is `HEAD` in both cases; anything else is someone else's
+      # release and stops the job. Nothing here moves a tag: a dispatch derives
+      # its version from the manifest, so the version after a released one is a
+      # new number. An annotated tag's own ref resolves to the tag object, not
+      # the commit it names, so both the plain ref and its peeled `^{}` form are
+      # queried and the peeled (commit) sha is preferred when present.
       - name: create and push the tag
         if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_commit=$(git rev-parse HEAD)
           remote_refs=$(git ls-remote origin "refs/tags/v${RELEASE_VERSION}" "refs/tags/v${RELEASE_VERSION}^{}" 2>/dev/null)
           if [ -n "$remote_refs" ]; then
             remote_sha=$(printf '%s\n' "$remote_refs" | tail -n1 | cut -f1)
             echo "tag v${RELEASE_VERSION} already exists at ${remote_sha}"
-            if [ "$remote_sha" != "$GITHUB_SHA" ]; then
-              printf 'refusing: tag v%s points at %s, not this run\n' "$RELEASE_VERSION" "$remote_sha" >&2
+            if [ "$remote_sha" != "$release_commit" ]; then
+              printf 'refusing: tag v%s points at %s, not the commit this run releases\n' "$RELEASE_VERSION" "$remote_sha" >&2
               exit 1
             fi
           else
