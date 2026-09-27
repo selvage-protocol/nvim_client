@@ -652,6 +652,12 @@ end
 
 --- The caret as the two UTF-16 offsets the room counts. In Visual mode the selection's other
 --- end is the anchor; a caret is both ends alike.
+---
+--- A linewise selection is its lines whole, from the start of the first to the end of the last
+--- one's text, with the head on whichever end the cursor is. The end of the text rather than the
+--- start of the next line, because the head is where a peer draws this user's caret, and the
+--- start of the next line is a line the cursor is not on; the last line has no next line anyway.
+--- An empty line alone is then a collapsed selection: there is nothing on it to fill.
 local function caret(document)
   local cursor = api.nvim_win_get_cursor(0)
   local head = document:offset(cursor[1] - 1, cursor[2])
@@ -659,7 +665,16 @@ local function caret(document)
   local mode = vim.fn.mode(1)
   if mode == 'v' or mode == 'V' or mode == '\22' then
     local start = vim.fn.getpos('v')
-    if start[2] > 0 and start[3] > 0 then
+    if mode == 'V' and start[2] > 0 then
+      local from, to = start[2] - 1, cursor[1] - 1
+      if from <= to then
+        anchor = document:prefix(from)
+        head = document:offset(to, #document:line(to))
+      else
+        anchor = document:offset(from, #document:line(from))
+        head = document:prefix(to)
+      end
+    elseif start[2] > 0 and start[3] > 0 then
       anchor = document:offset(start[2] - 1, start[3] - 1)
     end
   end

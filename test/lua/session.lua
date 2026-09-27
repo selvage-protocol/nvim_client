@@ -482,6 +482,32 @@ check(
   '3:3'
 )
 
+-- A linewise selection is its lines whole, whichever way it was made and wherever on the lines
+-- the two ends stand: from the start of the first line to the end of the last one's text, with
+-- the head on the end the cursor is on. Both columns sit mid-line and after a multi-byte
+-- character, so a column that leaked through, or a byte count, would move an offset.
+local function select_lines(from, to)
+  vim.api.nvim_win_set_cursor(0, from)
+  vim.cmd('normal! V')
+  vim.api.nvim_win_set_cursor(0, to)
+  local before = count_type('selection')
+  vim.api.nvim_exec_autocmds('CursorMoved', { buffer = presence_buf })
+  vim.wait(500, function()
+    return count_type('selection') > before
+  end)
+  local mode = vim.fn.mode(1)
+  vim.cmd('normal! \27')
+  local selection = last_of('selection')
+  return ('%s %d:%d'):format(mode, selection.anchor, selection.head)
+end
+
+check('a linewise selection made downward is shared as whole lines', select_lines({ 1, 1 }, { 2, 3 }), 'V 0:10')
+check('  and one made upward stays backwards', select_lines({ 3, 2 }, { 1, 5 }), 'V 16:0')
+check('  and one line alone is that line', select_lines({ 2, 3 }, { 2, 1 }), 'V 5:10')
+check('  and one ending on the last line ends the document', select_lines({ 3, 2 }, { 4, 0 }), 'V 11:17')
+check('  and one made upward from the last line starts there', select_lines({ 4, 0 }, { 2, 3 }), 'V 17:5')
+check('  and an empty line alone has nothing to fill', select_lines({ 4, 0 }, { 4, 0 }), 'V 17:17')
+
 -- A buffer the room does not hold is not where anyone can see the caret, so it is cleared —
 -- once, however much the caret moves there.
 local other = vim.api.nvim_create_buf(true, false)
