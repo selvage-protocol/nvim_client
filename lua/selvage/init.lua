@@ -651,15 +651,15 @@ local function current_document()
 end
 
 --- The UTF-16 offset just past what a charwise selection ending at (`row`, `col`) takes of that
---- position: the character there, a wide or an astral one whole, or, beyond the line's text, the
---- line break. The last line has no break to take.
-local function past(document, row, col)
+--- position: the character there, a wide or an astral one whole, or, beyond the line's text and
+--- when `line_break` is set, the line break. The last line has no break to take.
+local function past(document, row, col, line_break)
   local line = document:line(row)
   if col < #line then
     return document:offset(row, cell_end(line, col))
   end
   local offset = document:offset(row, #line)
-  if row < #document.lines - 1 then
+  if line_break and row < #document.lines - 1 then
     return offset + 1
   end
   return offset
@@ -670,8 +670,11 @@ end
 ---
 --- A charwise selection includes the character its later end is on, whichever end that is, as
 --- Neovim's operators do. With `'selection'` set to `exclusive` it does not, except when the two
---- ends meet: an operator still takes that one character. `old` is read as `inclusive`: the two
---- differ only where an end is on an empty line.
+--- ends meet: an operator still takes that one character. Past a line's text there is no
+--- character: an anchor there takes the line break, and a head stops at the end of the text, for
+--- the reason a linewise head does below, leaving out the line break an operator would take.
+--- `old` is read as `inclusive`, and where an end is on an empty line the range can then
+--- differ from what an operator takes, which may be less, or whole lines. That gap is accepted.
 ---
 --- A linewise selection is its lines whole, from the start of the first to the end of the last
 --- one's text, with the head on whichever end the cursor is. The end of the text rather than the
@@ -698,9 +701,9 @@ local function caret(document)
       anchor = document:offset(start[2] - 1, start[3] - 1)
       if mode == 'v' and (vim.o.selection ~= 'exclusive' or anchor == head) then
         if anchor <= head then
-          head = past(document, cursor[1] - 1, cursor[2])
+          head = past(document, cursor[1] - 1, cursor[2], false)
         else
-          anchor = past(document, start[2] - 1, start[3] - 1)
+          anchor = past(document, start[2] - 1, start[3] - 1, true)
         end
       end
     end
