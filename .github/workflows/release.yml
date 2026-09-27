@@ -166,8 +166,11 @@ jobs:
         run: scripts/bump-version.sh "$BUMP"
 
       # The companion version is the release version: refuse to tag anything else. On a dispatch
-      # the manifest read here is the one the bump just wrote.
+      # the manifest read here is the one the bump just wrote. Everything from here to the tag is
+      # guarded on `dry_run`: a dispatch that only prints the plan has already said what it would
+      # have done, and the version it computed is not the one the manifest carries yet.
       - name: assert the companion version matches
+        if: inputs.dry_run != true
         run: |
           pkg=$(node -p "require('./package.json').version")
           if [ "$pkg" != "$RELEASE_VERSION" ]; then
@@ -179,12 +182,14 @@ jobs:
       # runs on the bumped tree before the commit exists: a commit pushed with this workflow's own
       # `GITHUB_TOKEN` starts no run, so this is the only check the commit reaching `main` will ever
       # have.
-      - run: npm run typecheck
+      - if: inputs.dry_run != true
+        run: npm run typecheck
 
       # The companion's suite only, same as ci.yml: the two-instance proof
       # needs a built `selvaged` and a real Neovim, which the runner has
       # neither of.
-      - run: npm test
+      - if: inputs.dry_run != true
+        run: npm test
 
       # The one push this workflow makes to `main`, and the reason this job holds
       # `contents: write`. A bump pull request would carry no checks at all — an event created with
