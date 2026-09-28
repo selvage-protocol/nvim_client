@@ -196,8 +196,34 @@ check('    at the right', badge_pos, 'right_align')
 check('  and none where nobody is', badges_on(one_line + 1), nil)
 check('  your own file lit', highlight_on(one_line, 'one.txt'), 'SelvagePanelHere')
 
+--- Waits until a caret flush armed before now has had its turn: a timer due later runs later.
+local function after_caret_flush()
+  local flushed = false
+  vim.defer_fn(function()
+    flushed = true
+  end, 250)
+  vim.wait(2000, function()
+    return flushed
+  end, 10)
+end
+
+local function count_of(kind)
+  local count = 0
+  for _, message in ipairs(sent) do
+    if message.type == kind then
+      count = count + 1
+    end
+  end
+  return count
+end
+
 vim.api.nvim_set_current_win(editing)
+after_caret_flush()
+local cleared = count_of('selectionCleared')
 vim.cmd('SelvagePeers')
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+after_caret_flush()
+check('your caret stays in your file while you look at the panel', count_of('selectionCleared'), cleared)
 check('opening it again moves to the one already open', #vim.api.nvim_tabpage_list_wins(0), 2)
 check('  and into it', vim.api.nvim_get_current_win(), panel_win())
 

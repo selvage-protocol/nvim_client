@@ -693,9 +693,10 @@ end
 
 --- Publishes where the caret is now, or clears it when the user is not in a shared document.
 --- The state is read at flush time, so a burst of movement costs one look and one message.
+--- Looking at the room's panel leaves the caret where it was, as the web's sidebar does.
 local function publish_selection()
   state.selection_armed = false
-  if state.process == nil then
+  if state.process == nil or vim.bo.filetype == 'selvage' then
     return
   end
   local document = current_document()
