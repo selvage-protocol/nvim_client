@@ -27,7 +27,7 @@ import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { enumerateGrant } from '../companion/grant.ts';
-import { Companion, realEngines } from '../companion/session.ts';
+import { CLOSING_WAIT_MS, Companion, realEngines } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/index.ts';
 
@@ -1024,6 +1024,41 @@ test('leaving disconnects and forgets the documents', async () => {
   it.engine.remote('notes.txt', 'changed\n');
   await settle();
   assert.equal(it.sent.length, before);
+});
+
+test("a host's leave closes the room before it disconnects", async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'leave' });
+  assert.deepEqual(it.engine.endings, ['closeRoom', 'disconnect'], 'every guest hears the room end at once');
+  assert.equal(it.sent.at(-1)?.type, 'status');
+});
+
+test('a closing that never answers holds the leave for a second at most', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  it.engine.closingStalls = true;
+  const started = Date.now();
+  const left = await Promise.race([
+    it.companion.handle({ type: 'leave' }).then(() => true),
+    delay(CLOSING_WAIT_MS + 800).then(() => false),
+  ]);
+  assert.equal(left, true, 'the leave finished inside the two seconds the front-end waits');
+  assert.ok(Date.now() - started >= CLOSING_WAIT_MS - 50, 'after giving the closing its second');
+  assert.deepEqual(it.engine.endings, ['closeRoom', 'disconnect']);
+});
+
+test('the pipe closing or the room ending disconnects without closing the room', async () => {
+  const piped = harness('host');
+  await piped.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await piped.companion.leave();
+  assert.deepEqual(piped.engine.endings, ['disconnect'], 'a host whose editor went can still come back');
+
+  const gone = harness('host');
+  await gone.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  gone.engine.emit({ type: 'roomGone', reason: 'host did not return' });
+  await until('the session to be given up', () => gone.engine.disconnected);
+  assert.deepEqual(gone.engine.endings, ['disconnect']);
 });
 
 test('the line reader reassembles a message split across chunks', () => {

@@ -151,7 +151,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the room's listing is sealed from it when the room is minted, the host republishes it when the folder changes, and serves a path from it when a peer asks. |
 | `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
-| `leave {}` | End the session; the process stays up. |
+| `leave {}` | End the session; the process stays up. A host's leave closes the room first, giving the closing a second to go out. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
 | `open {path, text}` | A buffer is now shared under `path` and holds `text`. |
 | `close {path}` | Stop sharing it. |
@@ -288,12 +288,13 @@ the host away, and a file whose content has not been fetched (`[not fetched]`).
 line; `vim.g.selvage_indicator = false` (or `'never'`) leaves the row off, and the statusline
 snippet with it, except for a follow's chip, which is the way to stop it.
 
-When the host leaves, the room says who left and how long it will wait, once, as a warning:
+When the host's connection drops, the room says who left and how long it will wait, once, as a warning:
 `Hana left the session. The room disconnects in 30 seconds.` The bar then counts it down, `Hana
 left the session · Disconnecting in 28s`, until the host is back, which is said once too: `Hana is
 back. The session continues.` A room that ends says why in one notice, with where the guest's copy
 is kept when there is one: `The host was away too long, so the session ended. Your copy is kept at
-<path>.` The row is window-local and the person's own row is saved and put back as it arrives and
+<path>.` A host who leaves with `:SelvageLeave` ends the room at once, and the guests read `The
+host ended the session.` there instead. The row is window-local and the person's own row is saved and put back as it arrives and
 leaves.
 `%{v:lua.require'selvage'.statusline()}` returns the session's words for a statusline that wants
 them somewhere else, `Following <name>` while a follow stands, and `[not fetched]` after them for a
