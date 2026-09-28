@@ -23,10 +23,11 @@
 -- - The expression that fills a hole: `%s` in a pinned sentence is that hole, so the pin is on
 --   the words around it.
 --
--- Five messages are variables — the connect failure, the companion's failure to start, the
--- question said where there is nobody to answer it, what a room's own refusal says, and the
--- host-disconnected sentence, which the row and its one announcement share so it has one home —
--- and their number is pinned, so a sixth cannot arrive unnoticed.
+-- Nine messages are variables, and their number is pinned so a tenth cannot arrive unnoticed.
+-- Four are the front-end's own: the connect failure, the companion's failure to start, the
+-- question said where there is nobody to answer it, and what a room's own refusal says. Five are
+-- the web page's words, which the companion sends and `test/room.test.ts` pins: why a follow
+-- ended, the host gone, the host back, the room gone, and the question a host leaving is asked.
 --
 --   nvim --headless -l test/lua/vocabulary.lua      (or scripts/test-lua.sh)
 
@@ -151,9 +152,8 @@ local MESSAGES = {
   { 'INFO', 'following %s.' },
   { 'INFO', '%s is not in a document; still following.' },
   { 'INFO', 'stopped following %s.' },
-  { 'WARN', 'Stopped following %s — you moved.' },
+  { 'WARN', '%s Your copy is kept at %s.' },
   { 'WARN', 'not following anyone.' },
-  { 'WARN', '%s left the room, so following stopped.' },
   { 'WARN', 'nothing to go to: %s is not in a document.' },
   { 'WARN', 'nothing to follow: %s is not in a document.' },
   { 'WARN', 'nothing to go to: %s\'s caret does not resolve here.' },
@@ -181,9 +181,6 @@ local MESSAGES = {
   -- room's and its own edit is never published (§13.9).
   { 'WARN', 'you are a viewer in this room, so its documents are read-only.' },
   -- What the room's own reports say.
-  { 'INFO', '%s is back — the session continues.' },
-  { 'WARN', 'the room is gone (%s).' },
-  { 'WARN', 'The room closed. Your copy is kept at %s.' },
   { 'WARN', '%d buffers with unsaved changes were kept; :ls lists them.' },
   { 'ERROR', 'the editor would not apply the room\'s change to %s; the file may be read-only.' },
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
@@ -437,7 +434,7 @@ for _, message in ipairs(MESSAGES) do
 end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
-check('the messages that are not literals are the five this file names', variables, 5)
+check('the messages that are not literals are the nine this file names', variables, 9)
 
 -- -- no room id reaches a sentence a user reads ----------------------------------------
 --

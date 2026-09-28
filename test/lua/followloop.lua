@@ -61,6 +61,10 @@ child(
   })
   vim.cmd('edit ' .. vim.fn.fnameescape(file))
   require('selvage').host('ws://127.0.0.1:1')
+  _G.deliver({
+    type = 'words',
+    words = vim.json.decode(table.concat(vim.fn.readfile(root .. '/test/lua/words.json'), '\n')),
+  })
   _G.deliver({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-loop' })
 ]],
   root,
@@ -141,12 +145,12 @@ check(
   child([[
     for _, notice in ipairs(_G.notices) do
       if notice.message:find('Stopped following', 1, true) then
-        return notice.message:find('Stopped following Ada', 1, true) ~= nil
+        return notice.message
       end
     end
     return nil
   ]]),
-  true
+  'selvage: Stopped following Ada because you moved.'
 )
 
 vim.fn.jobstop(chan)

@@ -1123,6 +1123,45 @@ check(
   true
 )
 
+-- -- a host leaving is asked first -----------------------------------------------------
+--
+-- Leaving ends the room for everyone in it, so a host is asked, in the web page's words, and a
+-- guest leaves at once. The question leaves out the web's clause about keystrokes: a host's typing
+-- is in its own buffers, which stay, and nothing is written behind its back.
+do
+  answer_with('unused')
+  selvage.host('ws://127.0.0.1:1')
+  handlers().on_message({
+    type = 'words',
+    words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')),
+  })
+  report_status('hosting', 'r-leave', 'ws://127.0.0.1:1/session?room=r-leave&token=t')
+  local leaves = count_type('leave')
+  confirmations = 0
+  confirmation = 2
+  selvage.leave()
+  check('a host leaving is asked first', confirmations, 1)
+  check(
+    '  in the web page\'s words',
+    question and question.text,
+    'Leaving ends the room for everyone and stops the invite link.'
+  )
+  check('  offering to leave anyway', question and question.choices, '&Leave anyway\n&Cancel')
+  check('  and a cancel leaves nothing', count_type('leave'), leaves)
+  check('  and the session stands', selvage.session().status, 'hosting')
+  confirmation = 1
+  selvage.leave()
+  check('  and leaving anyway leaves', count_type('leave'), leaves + 1)
+
+  selvage.join('ws://127.0.0.1:1/session?room=r-leave-guest&token=t')
+  report_status('joined', 'r-leave-guest')
+  confirmations = 0
+  selvage.leave()
+  check('a guest leaves at once', confirmations, 0)
+  check('  and is gone', count_type('leave'), leaves + 2)
+  vim.ui.input = builtin_input
+end
+
 vim.notify = notify
 vim.ui.input = builtin_input
 vim.fn.confirm = builtin_confirm

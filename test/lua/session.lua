@@ -1464,52 +1464,59 @@ selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-gone' })
 check('the session is live before the room goes', #selvage.documents(), 1)
 
+do
+-- The companion words the host's absence and counts it down (`test/room.test.ts`); here the
+-- sentence is said once and the bar carries the line it keeps sending.
+local function winbar()
+  return vim.api.nvim_get_option_value('winbar', { win = 0 })
+end
+local function detached(line)
+  handlers().on_message({
+    type = 'report',
+    report = {
+      kind = 'hostDetached',
+      graceMs = 30000,
+      sentence = 'Ada left the session. The room disconnects in 30 seconds.',
+      line = line,
+    },
+  })
+end
+local function attached()
+  handlers().on_message({
+    type = 'report',
+    report = {
+      kind = 'hostAttached',
+      peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' },
+      sentence = 'Ada is back. The session continues.',
+    },
+  })
+end
+
 local before_attached = #notices
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
-})
-check('the host coming back is announced', said_since(before_attached, 'Ada is back — the session continues.') ~= nil, true)
+attached()
+check('the host coming back is announced', said_since(before_attached, 'Ada is back. The session continues.') ~= nil, true)
 check('  at information level', notices[#notices].level, vim.log.levels.INFO)
 
 local before_detached = #notices
-handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 30000 } })
+detached('Ada left the session · Disconnecting in 30s')
 check(
-  'the host going is announced with the cause and the deadline',
-  said_since(
-    before_detached,
-    'Host disconnected. Ada left — if they return within 30s the session continues, otherwise this room closes and your local copy is kept.'
-  ) ~= nil,
+  'the host going is announced once',
+  notices[#notices].message,
+  'selvage: Ada left the session. The room disconnects in 30 seconds.'
+)
+check('  as a warning', notices[#notices].level, vim.log.levels.WARN)
+check('  and only once', #notices, before_detached + 1)
+check(
+  '  and the bar keeps the countdown',
+  winbar():find('Ada left the session · Disconnecting in 30s', 1, true) ~= nil,
   true
 )
-check('  at warning level', notices[#notices].level, vim.log.levels.WARN)
-check(
-  '  and the row says it too, persistently',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Host disconnected. Ada left', 1, true) ~= nil,
-  true
-)
-
--- The number is the room's clock, not a value printed once: it is derived from the deadline and
--- the row is redrawn every second until the host returns or the room goes. The wait polls the row
--- for the next reading rather than assuming a turn.
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
-})
-handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 2000 } })
-check(
-  'the row shows the deadline it was given',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 2s', 1, true) ~= nil,
-  true
-)
-local ticked = vim.wait(4000, function()
-  return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
-end, 50)
-check('  and the number counts down', ticked, true)
+handlers().on_message({ type = 'report', report = { kind = 'hostAway', line = 'Ada left the session · Disconnecting in 29s' } })
+check('  and each reading replaces the last', winbar():find('Disconnecting in 29s', 1, true) ~= nil, true)
+check('  without saying it again', #notices, before_detached + 1)
 -- The room's own membership is the all-clear as well as the departure: `host.attached` is the
 -- only frame that says the host is back, so a guest whose socket was down when it arrived is
--- told by the next membership frame that names them — otherwise the row counts a deadline that
--- has already passed for the rest of the session.
+-- told by the next membership frame that names them.
 handlers().on_message({
   type = 'report',
   report = {
@@ -1517,34 +1524,19 @@ handlers().on_message({
     peers = { { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
   },
 })
-check(
-  '  and a membership frame naming the host takes it down too',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
-  true
-)
-handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 2000 } })
-check(
-  '  and the countdown starts again if the host leaves again',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 2s', 1, true) ~= nil,
-  true
-)
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
-})
-check(
-  '  and the row takes the countdown down when the host returns',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
-  true
-)
+check('  and a membership frame naming the host takes it down', winbar():find('Disconnecting', 1, true), nil)
+handlers().on_message({ type = 'report', report = { kind = 'hostAway', line = 'Ada left the session · Disconnecting in 28s' } })
+check('  and a late reading does not put it back', winbar():find('Disconnecting', 1, true), nil)
+detached('Ada left the session · Disconnecting in 30s')
+check('  and the countdown stands again if the host leaves again', winbar():find('Disconnecting in 30s', 1, true) ~= nil, true)
+attached()
+check('  and the bar takes it down when the host returns', winbar():find('Disconnecting', 1, true), nil)
 
 -- -- a float is not a place for the session's row -----------------------------------
 --
 -- The configuration this was found in shows its notifications through `nvim-notify`, whose popup
 -- is a one-line floating window. Writing the row into one is where Neovim raises `E36: Not enough
--- room`, and on that configuration the countdown stopped after three ticks and kept the number it
--- last drew: Neovim stops a repeating timer whose runs raise errors. No indicator goes into a
--- float, and the countdown keeps ticking with one on screen.
+-- room`. No indicator goes into a float, and the countdown keeps moving with one on screen.
 local float_buffer = vim.api.nvim_create_buf(false, true)
 local float_window = vim.api.nvim_open_win(float_buffer, false, {
   relative = 'editor',
@@ -1561,41 +1553,26 @@ local function own_row(win)
   return ok and value or ('<error: ' .. tostring(value) .. '>')
 end
 
-handlers().on_message({ type = 'report', report = { kind = 'hostDetached', graceMs = 4000 } })
+detached('Ada left the session · Disconnecting in 4s')
 check('a floating window is given no row of the session\'s', own_row(float_window), '')
-check(
-  '  and the window the person is in carries it',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('Host disconnected', 1, true) ~= nil,
-  true
-)
-
--- The countdown's own clock: the float is on screen for the second reading rather than gone
--- before it, and the row it must not have is still the row it must not have afterwards.
-local ticked_with_float = vim.wait(4000, function()
-  return vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within 1s', 1, true) ~= nil
-end, 50)
-check('  and the countdown keeps ticking with one on screen', ticked_with_float, true)
+check('  and the window the person is in carries it', winbar():find('Disconnecting in 4s', 1, true) ~= nil, true)
+handlers().on_message({ type = 'report', report = { kind = 'hostAway', line = 'Ada left the session · Disconnecting in 3s' } })
+check('  and the countdown keeps moving with one on screen', winbar():find('Disconnecting in 3s', 1, true) ~= nil, true)
 check('  and the float still has no row of the session\'s', own_row(float_window), '')
-
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'hostAttached', peer = { peer_id = 'p-host', display_name = 'Ada', role = 'host' } },
-})
-check(
-  '  and the row leaves the window when the countdown ends',
-  vim.api.nvim_get_option_value('winbar', { win = 0 }):find('within ', 1, true) == nil,
-  true
-)
+attached()
+check('  and the row leaves the window when the countdown ends', winbar():find('Disconnecting', 1, true), nil)
 vim.api.nvim_win_close(float_window, true)
 vim.api.nvim_buf_delete(float_buffer, { force = true })
 
+end
+
 local before_gone = #notices
-handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
-check(
-  'the room going is reported with its reason',
-  said_since(before_gone, 'the room is gone (host did not return)') ~= nil,
-  true
-)
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'roomGone', reason = 'host did not return', sentence = 'The session ended (host did not return).' },
+})
+check('the room going is said in a sentence', notices[#notices].message, 'selvage: The session ended (host did not return).')
+check('  as a warning', notices[#notices].level, vim.log.levels.WARN)
 check('  and the session ends with it', selvage.session().status, 'idle')
 check('  and its documents are let go', #selvage.documents(), 0)
 check('  and its peers with them', #selvage.peers(), 0)
@@ -1627,7 +1604,10 @@ vim.api.nvim_buf_set_lines(two_buf, -1, -1, true, { 'kept by hand' })
 check('  and it has unsaved changes', vim.bo[two_buf].modified, true)
 
 local before_land = #notices
-handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'roomGone', reason = 'host did not return', sentence = 'The session ended (host did not return).' },
+})
 check('the dead room is not left in the window', vim.fn.bufname('%'), '')
 check('  and the buffer with no changes is gone', vim.api.nvim_buf_is_valid(one_buf), false)
 check('  while the one with unsaved changes is kept', vim.api.nvim_buf_is_valid(two_buf), true)
@@ -1656,7 +1636,10 @@ handlers().on_message({
 })
 local only_buf = vim.api.nvim_get_current_buf()
 local before_clean = #notices
-handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'roomGone', reason = 'host did not return', sentence = 'The session ended (host did not return).' },
+})
 check('an unchanged room buffer goes with the room', vim.api.nvim_buf_is_valid(only_buf), false)
 check('  and nothing was kept to announce', said_since(before_clean, 'were kept') ~= nil, false)
 
@@ -1689,7 +1672,10 @@ check('the guest saved work into the mirror', vim.fn.readfile(kept_root .. '/kep
 vim.fn.writefile({ 'notes the room never heard' }, kept_root .. '/kept/scratch.txt')
 
 local before_kept = #notices
-handlers().on_message({ type = 'report', report = { kind = 'roomGone', reason = 'host did not return' } })
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'roomGone', reason = 'host did not return', sentence = 'The session ended (host did not return).' },
+})
 check('the room closing keeps the guest mirror', vim.fn.isdirectory(kept_root), 1)
 check(
   '  holding the work the guest saved',
@@ -1702,10 +1688,11 @@ check(
   'notes the room never heard'
 )
 check(
-  '  and the person is told where it is',
-  said_since(before_kept, ('The room closed. Your copy is kept at %s.'):format(kept_root)) ~= nil,
-  true
+  '  and the person is told where it is, in the same notice',
+  notices[#notices].message,
+  ('selvage: The session ended (host did not return). Your copy is kept at %s.'):format(kept_root)
 )
+check('  which is the only one', #notices, before_kept + 1)
 
 -- -- a give-up takes a guest's mirror ------------------------------------------
 --
@@ -1981,17 +1968,16 @@ check('  and a keystroke still reaches the room', count_type('change'), before_s
 selvage.leave()
 -- -- the window says what the session is ------------------------------------------
 --
--- A live session is otherwise invisible: hosting is one notice, and after it neither the side the
--- person is on, nor how many are in the room, nor whether the connection is still standing is
--- anywhere on screen. The window's own `winbar` row carries it, the row the follow's indicator
--- already uses (window-local, so never the statusline a statusline plugin owns), and every
--- buffer's own row is saved and put back the way the follow's is. What is pinned here is the
--- words, when the row stands, and the save/restore; the precedence between the two indicators is
+-- A live session is otherwise invisible: hosting is one notice, and after it neither the session,
+-- nor who is in the room, nor whether the connection is still standing is anywhere on screen. The
+-- window's own `winbar` row carries the web page's session bar (window-local, so never the
+-- statusline a statusline plugin owns), and every buffer's own row is saved and put back. What is
+-- pinned here is the words, when the row stands, and the save/restore; the follow's chip is
 -- `test/lua/follow.lua`'s.
 --
--- This section runs with `vim.g.selvage_indicator` unset: the row is on by default and reads the
--- words the VS Code client's status bar reads, so whoever has just hosted sees that they have
--- before anyone joins. The two other settings have sections of their own below.
+-- This section runs with `vim.g.selvage_indicator` unset: the row is on by default, so whoever
+-- has just hosted sees that they have before anyone joins. The two other settings have sections
+-- of their own below.
 
 vim.cmd('edit! ' .. path)
 local own_winbar = 'my own row %f'
@@ -2022,117 +2008,120 @@ local function screen_row(number)
   return (table.concat(cells):gsub('%s+$', ''))
 end
 
+do
+-- The room as the companion reports it: everyone else, your own seat, and what the session is
+-- called (`test/room.test.ts` pins how those are worked out).
+local ME = { peer_id = 'p-me', display_name = 'Test User', role = 'host', roster = 'Test User', initials = 'Te', colour = '#cba6f7' }
+local ADA = { peer_id = 'p-ada', display_name = 'Ada', role = 'guest', roster = 'Ada', initials = 'Ad', colour = '#94e2d5' }
+local function room(peers, self, identity)
+  handlers().on_message({
+    type = 'report',
+    report = { kind = 'peers', peers = peers, self = self or ME, identity = identity or 'Sharing “notes”' },
+  })
+end
+
+--- A row with each peer's own group numbered out, so a pin reads the shape rather than the order
+--- the groups were made in.
+local function shape(text)
+  return (tostring(text):gsub('SelvagePeer%d+', 'SelvagePeerN'))
+end
+
+local ALONE = '%#SelvageSession# Sharing “notes”%=%#SelvageCrown#♛%#SelvageYou# Te %* '
+local WITH_ADA = '%#SelvageSession# Sharing “notes”%=%#SelvageCrown#♛%#SelvageYou# Te %* %#SelvagePeerN# Ad %* '
+
 -- The row is drawn by an event, so a session that has not spoken yet has not painted one.
 selvage.host('ws://127.0.0.1:1')
 check('a session with nothing on the row yet', row(), own_winbar)
 handlers().on_message({ type = 'status', state = 'connecting' })
-check(
-  'a session being opened says so while the connection is made',
-  row(),
-  '%#SelvageSession#Selvage: connecting…%*'
-)
+check('a session being opened says so while the connection is made', row(), '%#SelvageSession# Connecting…%= ')
 -- Said by the row and not announced, so a repeated word moves nothing: a slow connect is one
 -- state rather than a count of attempts, and nothing scrolls past while it is waited out.
 local before_repeat = #notices
 handlers().on_message({ type = 'status', state = 'connecting' })
 check('  and a second one says nothing new', #notices, before_repeat)
-check('    with the row where it was', row(), '%#SelvageSession#Selvage: connecting…%*')
+check('    with the row where it was', row(), '%#SelvageSession# Connecting…%= ')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-row' })
-check(
-  'a host alone reads that they are hosting, before anyone joins',
-  row(),
-  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
-)
-check(
-  '  and a statusline reports the same words',
-  selvage.statusline(),
-  'Selvage: hosting — 1 person in the room'
-)
+room({})
+check('a host alone reads what they share, with their own face crowned', row(), ALONE)
+check('  and a statusline reports the same words', selvage.statusline(), 'Sharing “notes”')
 check(
   '  in a highlight a colorscheme can own',
   vim.api.nvim_get_hl(0, { name = 'SelvageSession', link = true }).link,
   'Title'
 )
+check('  with your own face in your seat\'s colour', vim.api.nvim_get_hl(0, { name = 'SelvageYou' }).bg, 0xcba6f7)
 
--- The count is the room's own membership report: everyone it names, plus this client.
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } } },
-})
-check(
-  'the room naming a peer counts them',
-  row(),
-  '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
-)
+-- Everyone the room names has a face, in the colour of their seat.
+room({ ADA })
+check('the room naming a peer gives them a face', shape(row()), WITH_ADA)
+local ada_group = row():match('%%#(SelvagePeer%d+)# Ad ')
+check('  in their seat\'s colour', ada_group and vim.api.nvim_get_hl(0, { name = ada_group }).bg, 0x94e2d5)
 
 -- A dropped socket the engine is retrying is the one session state a person cannot see from
 -- the outside: the room goes quiet, and a quiet room is also what everyone else reading looks
 -- like. A seat reports the room's documents and its peers, so the first of either is the
 -- connection standing again.
 handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
-check('a connection the engine is re-establishing says so', row(), '%#SelvageSession#Selvage: reconnecting…%*')
-handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { path } } })
 check(
-  '  and a room that speaks again takes the word back',
-  row(),
-  '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
+  'a connection the engine is re-establishing says so',
+  shape(row()),
+  '%#SelvageSession# Sharing “notes” %#SelvageWarn#Reconnecting…%*%=%#SelvageCrown#♛%#SelvageYou# Te %* %#SelvagePeerN# Ad %* '
 )
+check('  and so does the statusline', selvage.statusline(), 'Sharing “notes” · Reconnecting…')
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { path } } })
+check('  and a room that speaks again takes the word back', shape(row()), WITH_ADA)
 
 -- Every window: the row is window-local, and a split is a window like any other.
 vim.cmd('vsplit')
 local wins = vim.api.nvim_list_wins()
 check('a split carries the session row too', #wins, 2)
-check('  in the window that was split', row(wins[1]), '%#SelvageSession#Selvage: hosting — 2 people in the room%*')
-check('  and in the one it made', row(wins[2]), '%#SelvageSession#Selvage: hosting — 2 people in the room%*')
+check('  in the window that was split', shape(row(wins[1])), WITH_ADA)
+check('  and in the one it made', shape(row(wins[2])), WITH_ADA)
 vim.cmd('only')
 
 -- The person's own row is theirs: `vim.g.selvage_indicator = false` puts it back and leaves it
 -- there, which is what a statusline-only setup asks for.
 vim.g.selvage_indicator = false
-handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+room({})
 check('the session row can be turned off', row(), own_winbar)
 check('  and the statusline says nothing then', selvage.statusline(), '')
 vim.g.selvage_indicator = true
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } } },
-})
-check('  and comes back when it is turned on again', row(), '%#SelvageSession#Selvage: hosting — 2 people in the room%*')
+room({ ADA })
+check('  and comes back when it is turned on again', shape(row()), WITH_ADA)
 
--- A guest's row says which side it is on, which is the one thing the two ends differ in.
+-- A guest's row names whose session it is, and the host's face comes first.
 selvage.leave()
 check('leaving puts the person\'s own row back', row(), own_winbar)
 check('  and the statusline with it', selvage.statusline(), '')
 selvage.join('ws://127.0.0.1:1/session?room=r-row&token=t')
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-row' })
+room(
+  { ADA, { peer_id = 'p-hana', display_name = 'Hana', role = 'host', roster = 'Hana', initials = 'Ha', colour = '#cba6f7' } },
+  { peer_id = 'p-me', display_name = 'Test User', role = 'guest', roster = 'Test User', initials = 'Te', colour = '#94e2d5' },
+  'In Hana’s session'
+)
 check(
-  'a guest is named as the guest',
-  row(),
-  '%#SelvageSession#Selvage: guest — 1 person in the room%*'
+  'a guest reads whose session it is, the host first and then their own face',
+  shape(row()),
+  '%#SelvageSession# In Hana’s session%=%#SelvageCrown#♛%#SelvagePeerN# Ha %* %#SelvageYou# Te %* %#SelvagePeerN# Ad %* '
 )
 selvage.leave()
 
 -- -- a peer in this file is the gutter's and the roster's, not the row's ------------------
 --
--- What the row carries is the session's own: which side the person is on, how many are in the
--- room, whether the connection is standing. Who is in *this* file is a different kind of fact, and
--- the row was the wrong home for it — a standing line that grew a name every time a caret moved
--- in or out of a file would churn, and the name is written where the caret is: the gutter signs it
--- in the peer's own colour, `:SelvagePeers` names them with the document they are in, and
--- `vim.g.selvage_file_peers` hands the same names to whatever decorates a file list. A presence
--- frame redraws every window's row, so a row that still names nobody is a pin rather than a
--- coincidence of nothing having repainted.
+-- The row carries the room's own faces, the same whichever file a person is in. Who is in *this*
+-- file is a different kind of fact: the gutter signs it in the peer's own colour, `:SelvagePeers`
+-- names them with the document they are in, and `vim.g.selvage_file_peers` hands the same names to
+-- whatever decorates a file list. A presence frame redraws every window's row, so a row that is
+-- unchanged by one is a pin rather than a coincidence of nothing having repainted.
 
 vim.g.selvage_indicator = nil
 vim.cmd('edit! ' .. path)
 selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers' })
+room({})
 local peers_path = last_of('open') and last_of('open').path
-check(
-  'a healthy session stands on the row, alone in the room',
-  row(),
-  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
-)
+check('a healthy session stands on the row, alone in the room', row(), ALONE)
 
 -- The frame that puts a peer's caret in this file: the one moment the row could have grown a tail.
 local presence_events = 0
@@ -2142,10 +2131,9 @@ local seam_autocmd = vim.api.nvim_create_autocmd('User', {
     presence_events = presence_events + 1
   end,
 })
-handlers().on_message({
-  type = 'report',
-  report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' } } },
-})
+local ADA_LOVELACE = { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest', roster = 'Ada Lovelace', initials = 'Ad', colour = '#94e2d5' }
+room({ ADA_LOVELACE })
+local before_presence = shape(row())
 handlers().on_message({
   type = 'presence',
   cursors = {
@@ -2156,22 +2144,19 @@ handlers().on_message({
       path = peers_path,
       anchor = 0,
       head = 0,
-      colour = '#61afef',
-      fill = '#61afef40',
+      colour = '#94e2d5',
+      fill = '#94e2d540',
     },
   },
 })
-check(
-  'a peer whose caret is in this file is not named on the row',
-  row(),
-  '%#SelvageSession#Selvage: hosting — 2 people in the room%*'
-)
+check('a peer whose caret is in this file does not change the row', shape(row()), before_presence)
+check('  which is the faces', before_presence, WITH_ADA)
 -- The row is a statusline string, so what it says is what the screen draws once the items are
--- resolved: the name is nowhere in it.
+-- resolved: the name in full is nowhere in it.
 check(
-  '  which the screen draws as the standing words alone',
-  screen_row(1),
-  'Selvage: hosting — 2 people in the room'
+  '  which the screen draws with the initials alone',
+  (screen_row(1):gsub('%s+', ' ')),
+  ' Sharing “notes” ♛ Te Ad'
 )
 -- The gutter keeps the two cells and the colour: a window column shows the peer's initials and the
 -- caret wears their colour, and that is what ties the two cells to a caret on screen.
@@ -2190,53 +2175,54 @@ check('  with the gutter cells', here ~= nil and here[1].initials, 'Ad')
 check('  and a User event fires with it', presence_events > 0, true)
 vim.api.nvim_del_autocmd(seam_autocmd)
 
--- The name in full is one command away: `:SelvagePeers` lists the sign the gutter drew beside the
--- whole display name and the document that peer is in.
-local echoed = nil
-local echo = vim.api.nvim_echo
-vim.api.nvim_echo = function(chunks)
-  echoed = chunks
-end
-vim.cmd('SelvagePeers')
-vim.api.nvim_echo = echo
-check(
-  'and the roster names them with the document they are in',
-  echoed ~= nil
-    and echoed[2] ~= nil
-    and echoed[2][1] ~= nil
-    and echoed[2][1]:find(peers_path, 1, true) ~= nil,
-  true
-)
-
--- The peer leaving moves the count and not the shape: the row is the same line of standing words,
--- drawn again by the frame that took them out of the file.
-handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+-- The peer leaving takes their face and nothing else.
+room({})
 handlers().on_message({ type = 'presence', cursors = {} })
-check(
-  'the row is the standing words with the peer gone, and nothing else',
-  row(),
-  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
-)
+check('the row is the standing words with the peer gone, and nothing else', row(), ALONE)
 
 -- The connection states still earn it.
 handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
-check('a retried connection shows on the row', row(), '%#SelvageSession#Selvage: reconnecting…%*')
-handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { peers_path } } })
 check(
-  '  and the words come back when the room speaks',
+  'a retried connection shows on the row',
   row(),
-  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
+  '%#SelvageSession# Sharing “notes” %#SelvageWarn#Reconnecting…%*%=%#SelvageCrown#♛%#SelvageYou# Te %* '
 )
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { peers_path } } })
+check('  and the words come back when the room speaks', row(), ALONE)
 
 -- The string spelling is the same request as `true`.
 vim.g.selvage_indicator = 'always'
-handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
-check(
-  "`'always'` is the always-on row too",
-  row(),
-  '%#SelvageSession#Selvage: hosting — 1 person in the room%*'
-)
+room({})
+check("`'always'` is the always-on row too", row(), ALONE)
 vim.g.selvage_indicator = nil
+
+-- -- the invite control ------------------------------------------------------------------
+--
+-- The web page's bar carries the invite link as a control, and so does this one once the session
+-- holds a link and the companion has said its words. A click copies it and the control reads
+-- `Copied` for as long as the web page's does, with nothing notified: the control said it.
+handlers().on_message({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers', invite = 'ws://127.0.0.1:1/session?room=r-peers&token=t' })
+room({})
+local INVITE = '%#SelvageSession# Sharing “notes” %#SelvageInvite#%0@SelvageCopyInvite@ Copy invite link %X%*%=%#SelvageCrown#♛%#SelvageYou# Te %* '
+check('a session holding an invite link offers it on the row', row(), INVITE)
+local before_click = #notices
+vim.fn.SelvageCopyInvite(0, 1, 'l', '    ')
+check('  and a click copies it', vim.fn.getreg('"'):find('r-peers', 1, true) ~= nil, true)
+check('  saying so on the control', row(), (INVITE:gsub('Copy invite link', 'Copied')))
+check('  and nowhere else', #notices, before_click)
+local turned_back = vim.wait(4000, function()
+  return row() == INVITE
+end, 20)
+check('  until it turns back', turned_back, true)
+vim.cmd('SelvageCopyInvite')
+check('the command still says where the link went', notices[#notices].message, 'selvage: the invite link is on the clipboard.')
+selvage.leave()
+check('leaving takes the control with the row', row(), own_winbar)
+vim.cmd('edit! ' .. path)
+selvage.host('ws://127.0.0.1:1')
+handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers' })
+room({})
 
 -- -- the quiet row ------------------------------------------------------------------------
 --
@@ -2247,28 +2233,29 @@ vim.g.selvage_indicator = nil
 -- stands (`test/lua/mirror.lua`).
 
 vim.g.selvage_indicator = 'changes'
-handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+room({})
 check('a healthy session leaves the quiet row to the person', row(), own_winbar)
 
 -- `'never'` is the same request as `false`, and neither spelling may be the one that turns the
 -- row on: the mode names are the setting's own words.
 vim.g.selvage_indicator = 'never'
-handlers().on_message({ type = 'report', report = { kind = 'peers', peers = {} } })
+room({})
 check("`'never'` leaves the row off, where `false` does", row(), own_winbar)
 check('  and the statusline with it', selvage.statusline(), '')
 vim.g.selvage_indicator = 'changes'
 handlers().on_message({ type = 'report', report = { kind = 'reconnecting' } })
-check('a retried connection earns it', row(), '%#SelvageSession#Selvage: reconnecting…%*')
+check(
+  'a retried connection earns it',
+  row(),
+  '%#SelvageSession# Sharing “notes” %#SelvageWarn#Reconnecting…%*%=%#SelvageCrown#♛%#SelvageYou# Te %* '
+)
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = { peers_path } } })
 check('  and gives it back when the room speaks', row(), own_winbar)
-check(
-  '    while the statusline still reports the session',
-  selvage.statusline(),
-  'Selvage: hosting — 1 person in the room'
-)
+check('    while the statusline still reports the session', selvage.statusline(), 'Sharing “notes”')
 vim.g.selvage_indicator = nil
 
 selvage.leave()
+end
 
 -- -- a companion that misspeaks ---------------------------------------------------------
 --

@@ -782,7 +782,7 @@ local buf = vim.api.nvim_get_current_buf()
 check('the placeholder opened empty', buffer_text(buf), '')
 check(
   '  and the row says its content has not arrived',
-  winbar():find(' [not fetched]', 1, true) ~= nil,
+  winbar():find('[not fetched]', 1, true) ~= nil,
   true
 )
 
@@ -798,7 +798,7 @@ handle({
 check("the room's text lands in the buffer", buffer_text(buf), 'the room wrote this')
 check(
   '  and the row stops saying the content has not arrived',
-  winbar():find(' [not fetched]', 1, true) == nil,
+  winbar():find('[not fetched]', 1, true) == nil,
   true
 )
 check('  and nothing is on disk yet', read(root .. '/notes/deep.txt'), '')
@@ -1013,13 +1013,13 @@ check('  at info level', hint_at ~= nil and notices[hint_at].level or nil, vim.l
 -- the person rather than remembered from a sentence in `:messages`.
 check(
   'the row marks this file as holding no fetched content',
-  winbar():find(' [not fetched]', 1, true) ~= nil,
+  winbar():find('[not fetched]', 1, true) ~= nil,
   true
 )
 vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/src/util.rs'))
 check(
   '  and marks every such file, not only the first one hinted',
-  winbar():find(' [not fetched]', 1, true) ~= nil,
+  winbar():find('[not fetched]', 1, true) ~= nil,
   true
 )
 
@@ -1030,7 +1030,7 @@ vim.g.selvage_indicator = 'changes'
 vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/README.md'))
 check(
   'the quiet row still marks a file nobody has fetched',
-  winbar():find(' [not fetched]', 1, true) ~= nil,
+  winbar():find('[not fetched]', 1, true) ~= nil,
   true
 )
 vim.g.selvage_indicator = nil
@@ -1041,7 +1041,7 @@ vim.g.selvage_indicator = nil
 handle({ type = 'report', report = { kind = 'grant', paths = {} } })
 check(
   'a path the room stops listing loses the mark at once',
-  winbar():find(' [not fetched]', 1, true) == nil,
+  winbar():find('[not fetched]', 1, true) == nil,
   true
 )
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
@@ -1059,7 +1059,7 @@ vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/src/main.rs'))
 check('  while a file holding text says nothing', said_since(before, 'empty until fetched') ~= nil, false)
 check(
   '  and carries no mark for content that is here',
-  winbar():find(' [not fetched]', 1, true) == nil,
+  winbar():find('[not fetched]', 1, true) == nil,
   true
 )
 
@@ -1278,6 +1278,36 @@ selvage.fetch()
 check('a session that ends mid-fetch ends the wait', fetched_since(before, 'the session ended before the files were fetched') ~= nil, true)
 check('  and the mirror went with it', selvage.session().mirror, nil)
 vim.g.selvage_fetch_timeout_ms = nil
+
+-- A follow whose peer is in the file the host deleted ends with it, in the web page's words.
+do
+  handle({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
+  responder = room_holding({ ['notes/gone.txt'] = "the room's text\n" })
+  join({}, { 'notes/gone.txt', 'src/main.rs' }, 'r-gone-follow')
+  selvage.open('notes/gone.txt')
+  responder = nil
+  handle({
+    type = 'report',
+    report = { kind = 'peers', peers = { { peer_id = 'p-ada', display_name = 'Ada', role = 'host' } } },
+  })
+  handle({
+    type = 'presence',
+    cursors = { {
+      peerId = 'p-ada', label = 'Ada', role = 'host', path = 'notes/gone.txt',
+      anchor = 0, head = 0, colour = '#cba6f7', fill = '#cba6f740',
+    } },
+  })
+  selvage.follow('Ada')
+  check('a follow stands in a file the host is about to delete', selvage.following(), 'Ada')
+  local before_gone = #notices
+  handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
+  check('  and the file going ends it', selvage.following(), nil)
+  check(
+    '  saying why',
+    said_since(before_gone, 'Stopped following Ada') or '',
+    'selvage: Stopped following Ada because the file is gone.'
+  )
+end
 
 -- -- what a host does with all of this ----------------------------------------------------
 --
