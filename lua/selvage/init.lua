@@ -789,9 +789,10 @@ end
 
 --- Says, once per buffer, that a buffer with no file is not the room's to share. Hosting from
 --- an untitled buffer and typing is the newcomer's silence: the room never hears it, and
---- nothing else here says so.
+--- nothing else here says so. A buffer that was never meant to be a file, such as help or the
+--- room's own panel, is not one a person types into for the room, so it is left unsaid.
 local function refuse_unfiled(bufnr)
-  if state.unfiled[bufnr] ~= nil then
+  if state.unfiled[bufnr] ~= nil or vim.bo[bufnr].buftype ~= '' then
     return
   end
   local root = state.root

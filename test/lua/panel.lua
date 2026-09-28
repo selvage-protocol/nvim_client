@@ -160,8 +160,10 @@ handlers.on_message({
 
 -- -- what it shows --------------------------------------------------------------------
 
+local before_open = #notices
 vim.cmd('SelvagePeers')
 check(':SelvagePeers opens the panel', panel_buf() ~= nil, true)
+check('  and says nothing about it', #notices, before_open)
 check('  on the left', vim.fn.win_screenpos(panel_win())[2], 1)
 check('  and moves there', vim.api.nvim_get_current_win(), panel_win())
 check('  as a buffer of its own kind', vim.bo[panel_buf()].filetype, 'selvage')
