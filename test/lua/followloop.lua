@@ -165,112 +165,11 @@ check(
   'selvage: Stopped following Ada because you moved.'
 )
 
--- -- the room's panel, in a loop that turns ----------------------------------------------
+-- -- typing ends a follow ----------------------------------------------------------------
 --
--- The panel is a window of its own, so going into it moves a caret the follow never placed. It is
--- somewhere to look at the room from, not a move away from the person followed, and no landing
--- ever puts a file in it: a file goes in the window beside it.
-child([[
-  _G.panel_window = function()
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-      if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'selvage' then
-        return win
-      end
-    end
-    return nil
-  end
-  _G.file_window = function()
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-      if vim.bo[vim.api.nvim_win_get_buf(win)].filetype ~= 'selvage' then
-        return win
-      end
-    end
-    return nil
-  end
-  _G.file_cursor = function()
-    return table.concat(vim.api.nvim_win_get_cursor(_G.file_window()), ',')
-  end
-  _G.on_row = function(name)
-    vim.api.nvim_set_current_win(_G.panel_window())
-    for lnum, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
-      if line:find(name, 1, true) then
-        vim.api.nvim_win_set_cursor(0, { lnum, 0 })
-        return line
-      end
-    end
-  end
-  _G.press = function(lhs)
-    vim.fn.maparg(lhs, 'n', false, true).callback()
-  end
-  _G.presence = function(path, cursors)
-    local list = {}
-    for _, each in ipairs(cursors) do
-      list[#list + 1] = {
-        peerId = each[1], label = each[2], role = 'guest', path = path,
-        anchor = each[3], head = each[3], colour = '#94e2d5', fill = '#94e2d540',
-      }
-    end
-    _G.deliver({ type = 'presence', cursors = list })
-  end
-]])
-
-local before_refollow = child('return _G.moves')
-child([[require('selvage').follow('Ada')]])
-moved_past(before_refollow)
-local said_before_panel = child('return #_G.notices')
-local before_panel = child('return _G.moves')
-child([[vim.cmd('SelvagePeers')]])
-check('opening the panel moves into it', child('return vim.bo.filetype'), 'selvage')
-check('  and the loop sees the caret move there', moved_past(before_panel) ~= nil, true)
-check('  and the follow stands', child([[return require('selvage').following()]]), 'Ada')
-
-child([[_G.presence(..., { { 'p-ada', 'Ada', 13 } })]], path)
-check('a frame landing while you are in the panel leaves you there', child('return vim.bo.filetype'), 'selvage')
-check('  and lands in the window beside it', child('return _G.file_cursor()'), '3,2')
-
-local before_look = child('return _G.moves')
-child([[vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(0), 0 })]])
-check('moving about the panel is seen by the loop', moved_past(before_look) ~= nil, true)
-check('  and leaves the follow standing', child([[return require('selvage').following()]]), 'Ada')
-check('the panel marks the person followed', child([[return _G.on_row('Ada')]]):find('◉', 1, true) ~= nil, true)
-child([[_G.press('f')]])
-check('f on their row stops following', child([[return require('selvage').following()]]), vim.NIL)
-check('  and says nothing, as the web does', child('return #_G.notices'), said_before_panel)
-
--- Bob is in the room and in no file yet: the web offers no Go to on his face, and <CR> on his
--- row does nothing, now or when he opens a file later.
-child([[
-  _G.deliver({ type = 'report', report = { kind = 'peers', peers = {
-    { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' },
-    { peer_id = 'p-bob', display_name = 'Bob', role = 'guest' },
-  } } })
-]])
-local before_bob = child('return _G.moves')
-check('someone in no file yet is listed', child([[return _G.on_row('Bob')]]) ~= nil, true)
-moved_past(before_bob)
-child([[_G.press('<CR>')]])
-check('<CR> on them stays in the panel', child('return vim.bo.filetype'), 'selvage')
-child([[_G.presence(..., { { 'p-ada', 'Ada', 13 }, { 'p-bob', 'Bob', 18 } })]], path)
-check('  and nothing lands when they open a file', child('return _G.file_cursor()'), '3,2')
-
--- A go-to typed while they were in no file lands when they open one, and while you wait in the
--- panel it lands beside it.
-child([[_G.presence(..., { { 'p-ada', 'Ada', 13 } })]], path)
-child([[
-  vim.api.nvim_set_current_win(_G.file_window())
-  require('selvage').go_to('Bob')
-  vim.api.nvim_set_current_win(_G.panel_window())
-]])
-child([[_G.presence(..., { { 'p-ada', 'Ada', 13 }, { 'p-bob', 'Bob', 18 } })]], path)
-check('a go-to landing while you are in the panel keeps the panel', child('return _G.panel_window() ~= nil'), true)
-check('  and you in it', child('return vim.bo.filetype'), 'selvage')
-check('  and lands on them beside it', child('return _G.file_cursor()'), '4,1')
-
--- -- typing ends a follow the panel started, with the panel still open ---------------------
---
--- `f` on a row keeps the panel and lands in the window beside it, so the next thing a person does
--- is type there. The keystroke's change arrives inside the buffer's own change callback, where
--- Neovim refuses to change any other buffer's text: the panel is redrawn after it, not inside it.
+-- A follow lands in the file, so the next thing a person does is type there. The keystroke's
+-- change arrives inside the buffer's own change callback, where Neovim refuses to open a window:
+-- the notifier's float is drawn after it, not inside it.
 
 --- Waits for `code` to answer true in the second editor, and answers whether it did.
 local function until_child(code)
@@ -283,12 +182,19 @@ child([[
   vim.v.errmsg = ''
   _G.sent = {}
 ]])
-child([[_G.on_row('Ada')]])
-vim.rpcrequest(chan, 'nvim_input', 'f')
-check('f on their row follows them', until_child([[return require('selvage').following() == 'Ada']]), true)
-check('  and keeps the panel open', child('return _G.panel_window() ~= nil'), true)
-check('  and puts you in the file beside it', child([[return vim.bo.filetype ~= 'selvage']]), true)
-check('  on their caret', child('return _G.file_cursor()'), '3,2')
+child(
+  [[
+  local path = ...
+  _G.deliver({ type = 'presence', cursors = { {
+    peerId = 'p-ada', label = 'Ada', role = 'guest', path = path,
+    anchor = 13, head = 13, colour = '#94e2d5', fill = '#94e2d540',
+  } } })
+]],
+  path
+)
+vim.rpcrequest(chan, 'nvim_input', ':SelvageFollow Ada<CR>')
+check('following them', until_child([[return require('selvage').following() == 'Ada']]), true)
+check('  lands on their caret', child([[return table.concat(vim.api.nvim_win_get_cursor(0), ',')]]), '3,2')
 local said_before_typing = child('return #_G.notices')
 vim.rpcrequest(chan, 'nvim_input', 'ix<Esc>')
 check(
@@ -326,24 +232,6 @@ check(
   '  and no error on the way',
   child([[return vim.v.errmsg .. (vim.fn.execute('messages'):match('E%d+[^\n]*') or '')]]),
   ''
-)
-check(
-  'the panel buffer is still not yours to edit',
-  child([[return vim.bo[vim.api.nvim_win_get_buf(_G.panel_window())].modifiable]]),
-  false
-)
-check(
-  '  and it is drawn again with nobody followed',
-  until_child([[
-    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(_G.panel_window()), 0, -1, false)
-    for _, line in ipairs(lines) do
-      if line:find('Ada', 1, true) then
-        return line:find('◉', 1, true) == nil
-      end
-    end
-    return false
-  ]]),
-  true
 )
 
 vim.fn.jobstop(chan)

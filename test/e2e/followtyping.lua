@@ -1,13 +1,13 @@
--- Typing ends a follow the panel started, between two real editors in one real room.
+-- Typing ends a follow, between two real editors in one real room.
 --
 --   SELVAGE_SELVAGED=/path/to/selvaged nvim --headless -l test/e2e/followtyping.lua
 --   (or scripts/e2e/run-two-instance.sh, which runs it after the main proof)
 --
 -- Ada hosts and Grace joins, each a Neovim whose event loop turns (driven over RPC, as
 -- `test/lua/followloop.lua` drives one) with the real plugin and its real companion, over a real
--- `selvaged`. Ada opens `:SelvagePeers`, presses `f` on Grace's row, and types in the window the
--- follow landed in with the panel still open. The follow has to end saying why, the keystroke has
--- to reach Grace, and the two copies have to agree. Every wait is on the effect, with a deadline
+-- `selvaged`. Ada runs `:SelvageFollow Grace` and types in the window the follow landed in. The
+-- follow has to end saying why, the keystroke has to reach Grace, and the two copies have to
+-- agree. Every wait is on the effect, with a deadline
 -- that reports what it saw.
 
 local root = vim.fn.getcwd()
@@ -179,29 +179,15 @@ local function main()
     ]])
   end)
 
-  ada([[
-    vim.cmd('SelvagePeers')
-    for lnum, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
-      if line:find('Grace', 1, true) then
-        vim.api.nvim_win_set_cursor(0, { lnum, 0 })
-        break
-      end
-    end
-    vim.v.errmsg = ''
-  ]])
-  vim.rpcrequest(ada_chan, 'nvim_input', 'f')
-  reach('f on her row follows her', function()
+  ada([[vim.v.errmsg = '']])
+  vim.rpcrequest(ada_chan, 'nvim_input', ':SelvageFollow Grace<CR>')
+  reach(':SelvageFollow Grace follows her', function()
     return ada([[return require('selvage').following() == 'Grace']])
   end)
-  reach('  landing on her caret beside the panel, which stays open', function()
+  reach('  landing on her caret', function()
     return ada([[
-      local panel = require('selvage.panel').buffer()
-      local open = false
-      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        open = open or vim.api.nvim_win_get_buf(win) == panel
-      end
       local here = table.concat(vim.api.nvim_win_get_cursor(0), ',')
-      return (open and vim.bo.filetype ~= 'selvage' and here == '3,2') or (tostring(open) .. ' ' .. vim.bo.filetype .. ' ' .. here)
+      return here == '3,2' or here
     ]])
   end)
 
@@ -227,11 +213,6 @@ local function main()
     )
   end)
   check('  with no error on the way', ada([[return vim.v.errmsg]]), '')
-  check(
-    '  and the panel still not a buffer to type into',
-    ada([[return vim.bo[require('selvage.panel').buffer()].modifiable]]),
-    false
-  )
   check('Ada holds the keystroke', ada([[return vim.api.nvim_buf_get_lines(0, 2, 3, false)[1] ]]), 'prxint(x)')
   reach('Grace receives it', function()
     local line = grace([[return vim.api.nvim_buf_get_lines(0, 2, 3, false)[1] ]])

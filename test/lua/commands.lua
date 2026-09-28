@@ -914,8 +914,7 @@ check(
 )
 check(
   '  and says so',
-  said_since(before, 'the room is open. Send this link') ~= nil
-    and said_since(before, 'on the clipboard.') ~= nil,
+  said_since(before, 'hosting, invite link copied.') ~= nil,
   true
 )
 
@@ -1036,9 +1035,9 @@ check('a guest that joined by wire copies the wire link', registers['+'], wire_i
 -- -- a session that stands but holds no link to hand on -----------------------------
 --
 -- A room is open and this connection has no invite for it, because the server that seated it
--- sent no token. `host or join a room first` is the sentence for a window in no session at all
--- — said here it is a contradiction, and one that sends the person looking for the room they
--- are already in. Each of the three moments says what actually happened.
+-- sent no token. `not in a session` is the sentence for a window in no session at all — said
+-- here it is a contradiction, and one that sends the person looking for the room they are
+-- already in. Each of the three moments says what actually happened.
 
 selvage.leave()
 before = #notices
@@ -1046,7 +1045,7 @@ vim.cmd('SelvageHost ws://127.0.0.1:51')
 report_status('hosting', 'r-noinvite')
 check(
   'a room that opens with no link in hand says what is missing',
-  said_since(before, 'the room is open, but this connection holds no invite link to send.') ~= nil,
+  said_since(before, 'no invite link for this session.') ~= nil,
   true
 )
 registers = {}
@@ -1054,12 +1053,12 @@ before = #notices
 vim.cmd('SelvageCopyInvite')
 check(
   '  and copying says the same rather than that there is no room',
-  said_since(before, 'this session holds no invite link to copy.') ~= nil,
+  said_since(before, 'no invite link for this session.') ~= nil,
   true
 )
 check(
   '  and never the sentence for a window in no session',
-  said_since(before, 'host or join a room first'),
+  said_since(before, 'not in a session'),
   nil
 )
 check('  and nothing was copied', registers['+'], nil)
@@ -1067,8 +1066,7 @@ before = #notices
 vim.cmd('SelvageHost ws://127.0.0.1:52')
 check(
   '  and hosting again says what is missing too',
-  said_since(before, 'you are already hosting this session, but this connection holds no invite link to send.')
-    ~= nil,
+  said_since(before, 'no invite link for this session.') ~= nil,
   true
 )
 
@@ -1081,7 +1079,7 @@ vim.cmd('SelvageHost ws://127.0.0.1:53')
 report_status('hosting', 'r-noclip', 'ws://127.0.0.1:53/session?room=r-noclip&token=t5')
 check(
   'a clipboard that refuses the link is reported, not claimed',
-  said_since(before, 'the invite link could not be copied (') ~= nil,
+  said_since(before, 'invite link is in register " (clipboard failed: ') ~= nil,
   true
 )
 check(
@@ -1091,7 +1089,7 @@ check(
 )
 check(
   '  and the notice never says the link is on the clipboard',
-  said_since(before, 'it is on the clipboard'),
+  said_since(before, 'invite link copied'),
   nil
 )
 check(
@@ -1103,12 +1101,12 @@ before = #notices
 vim.cmd('SelvageCopyInvite')
 check(
   '  and copying says the same',
-  said_since(before, 'the invite link could not be copied (') ~= nil,
+  said_since(before, 'invite link is in register " (clipboard failed: ') ~= nil,
   true
 )
 check(
   '  and does not claim it either',
-  said_since(before, 'the invite link is on the clipboard'),
+  said_since(before, 'invite link copied'),
   nil
 )
 clipboard_refuses = false
@@ -1121,7 +1119,7 @@ before = #notices
 vim.cmd('SelvageCopyInvite')
 check(
   'copying with no session says there is none',
-  said_since(before, 'there is no invite link; host or join a room first.') ~= nil,
+  said_since(before, 'not in a session.') ~= nil,
   true
 )
 

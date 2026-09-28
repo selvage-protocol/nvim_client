@@ -137,9 +137,8 @@ selvage.host('ws://127.0.0.1:1')
 local before_host_confirm = #notices
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check(
-  'the host confirm says the room is open',
-  said_since(before_host_confirm, 'the room is open, but this connection holds no invite link to send.')
-    ~= nil,
+  'the host confirm says there is no invite link',
+  said_since(before_host_confirm, 'no invite link for this session.') ~= nil,
   true
 )
 
@@ -985,15 +984,16 @@ check('    with no sign to explain', peers[2] and peers[2].sign, nil)
 check('    and no colour of its own', peers[2] and peers[2].highlight, nil)
 check('    and the role the room gave it', peers[2] and peers[2].role, 'host')
 
--- `:SelvagePeers` opens the room's panel over the same room: both peers, the one it cannot draw
--- saying so. `test/lua/panel.lua` covers the panel itself.
+-- `:SelvagePeers` lists the same room, one line each, and opens nothing: both peers, the one
+-- it cannot draw saying so.
+local windows_before = #vim.api.nvim_list_wins()
+vim.cmd('messages clear')
 vim.cmd('SelvagePeers')
-local listed = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
-check('  and :SelvagePeers opens a panel naming each', vim.bo.filetype, 'selvage')
-check('    the drawn one', listed:find('thisismylongusername', 1, true) ~= nil, true)
+local listed = vim.api.nvim_exec2('messages', { output = true }).output
+check('  and :SelvagePeers opens no window', #vim.api.nvim_list_wins(), windows_before)
+check('    and lists the drawn one', listed:match('thisismylongusername%s+%.tmp/lua%-presence%.txt') ~= nil, true)
 check('    and the undrawn one', listed:find('Ann', 1, true) ~= nil, true)
-check('    saying it is not in a file yet', listed:find('not in a file yet', 1, true) ~= nil, true)
-vim.cmd('close')
+check('    saying they have no file open', listed:match('Ann%s+no file open') ~= nil, true)
 
 -- End of the session: every mark goes with it, whatever buffer it was on.
 marks = draw({
@@ -2181,39 +2181,33 @@ room({})
 check("`'always'` is the always-on row too", row(), ALONE)
 vim.g.selvage_indicator = nil
 
--- -- the invite control ------------------------------------------------------------------
+-- -- the invite, copied ------------------------------------------------------------------
 --
--- The web page's bar carries the invite link as a control, and so does this one once the session
--- holds a link and the companion has said its words. A click copies it and the control reads
--- `Copied` for as long as the web page's does, with nothing notified: the control said it. The
--- command copies the same way.
+-- The bar carries no invite control: the command copies the link and a notification says so.
+--
+-- Whether this machine has a system clipboard is its business, not a session's, so the `+`
+-- write is stubbed to succeed and go nowhere: the sentence this section is about is the one a
+-- copy that worked says. What a Neovim with no provider says is `test/lua/commands.lua`'s.
+local real_setreg = vim.fn.setreg
+vim.fn.setreg = function(register, value)
+  if register == '+' then
+    return 0
+  end
+  return real_setreg(register, value)
+end
 handlers().on_message({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers', invite = 'ws://127.0.0.1:1/session?room=r-peers&token=t' })
 room({})
-local INVITE = '%#SelvageSession# Sharing “notes” %#SelvageInvite#%0@SelvageCopyInvite@ Copy invite link %X%*%=%#SelvageCrown#♛%#SelvageYou# Te %* '
-check('a session holding an invite link offers it on the row', row(), INVITE)
-local before_click = #notices
-vim.fn.SelvageCopyInvite(0, 1, 'l', '    ')
-check('  and a click copies it', vim.fn.getreg('"'):find('r-peers', 1, true) ~= nil, true)
-check('  saying so on the control', row(), (INVITE:gsub('Copy invite link', 'Copied')))
-check('  and nowhere else', #notices, before_click)
-local turned_back = vim.wait(4000, function()
-  return row() == INVITE
-end, 20)
-check('  until it turns back', turned_back, true)
+check('a session holding an invite link keeps it off the row', row(), ALONE)
 local before_command = #notices
 vim.cmd('SelvageCopyInvite')
-check('the command turns the control to Copied too', row(), (INVITE:gsub('Copy invite link', 'Copied')))
-check('  and says nothing either', #notices, before_command)
-check(
-  '  until it turns back',
-  vim.wait(4000, function()
-    return row() == INVITE
-  end, 20),
-  true
-)
+check('  and the command copies it', vim.fn.getreg('"'):find('r-peers', 1, true) ~= nil, true)
+check('  saying so once', #notices, before_command + 1)
+check('  in a notification', notices[#notices].message, 'selvage: invite link copied.')
+check('  and leaves the row as it was', row(), ALONE)
+vim.fn.setreg = real_setreg
 selvage.leave()
-check('leaving takes the control with the row', row(), own_winbar)
+check('leaving takes the row with it', row(), own_winbar)
 vim.cmd('edit! ' .. path)
 selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers' })

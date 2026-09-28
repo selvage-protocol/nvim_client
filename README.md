@@ -168,7 +168,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 | `refused {what, roomId}` | A `host` or `join` this process did not carry out, because a session is live and ending it is the front-end's to ask about; the room named is the one still standing. |
 | `report {report}` | The bridge's own report: the room's documents, its grant (with `unsafe` naming the listed paths the grant's rules would never let a host publish, which a guest's mirror does not put on disk), peers, a divergence, a refusal, a dropped socket being retried (`reconnecting`), or a connection the engine gave up re-establishing — and one of this process's own, `role {role}`, sent when the room's state gives this connection a different role than the seat's status carried. |
 | `presence {cursors}` | The remote carets this replica can resolve, each in its seat's colour. |
-| `words {words}` | The fixed words the plugin shows and says, sent once as the process starts: the invite control's `Copy invite link` and `Copied` and how long `Copied` stands, `Reconnecting…`, the four ways a follow ends, and a host's leave question with its two buttons. They are the web client's own, from `vendor/bridge`; a `%s` is where a name goes. `test/lua/words.json` is a copy the Lua tests read, and `npm test` keeps it equal. |
+| `words {words}` | The fixed words the plugin shows and says, sent once as the process starts: `Reconnecting…`, the four ways a follow ends, and a host's leave question with its two buttons. They are the web client's own, from `vendor/bridge`; a `%s` is where a name goes. `test/lua/words.json` is a copy the Lua tests read, and `npm test` keeps it equal. |
 
 Some reports carry more than the bridge put in them, so the plugin has nothing to work out:
 
@@ -248,9 +248,9 @@ cursor is on rather than on its character.
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. Two
 cells is all `sign_text` takes, so a peer called `thisismylongusername` is `th` there and the
-gutter cannot say who that is: the name reads from `vim.g.selvage_file_peers` and from the panel
-`:SelvagePeers` opens (below), where everyone in the room is listed by name beside their initials
-in their seat's colour. Nothing is put over the document when a peer moves. Every mark is cleared
+gutter cannot say who that is: the name reads from `vim.g.selvage_file_peers` and from
+`:SelvagePeers` (below), which lists everyone in the room by name beside their initials in their
+seat's colour. Nothing is put over the document when a peer moves. Every mark is cleared
 and recreated when presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
@@ -266,9 +266,7 @@ why a local edit of a shared document ends the follow while a remote edit only r
 that ends by itself says why in the web page's words: `Stopped following <name> because you
 started typing.`, `… because you moved.`, `… because the file is gone.`, or `<name> left the room,
 so following stopped.`. Starting a follow says nothing, and neither does going somewhere or
-stopping it yourself, as on the web. Looking at the room's panel leaves it standing, and a rename
-keeps it. While a
-follow stands, the session bar carries a `Following <name> ✕` chip in the peer's own colour and
+stopping it yourself, as on the web. A rename keeps it. While a follow stands, the session bar carries a `Following <name> ✕` chip in the peer's own colour and
 marks their face with `◉`; clicking the chip stops the follow, where the editor takes a mouse.
 Every buffer's own row is saved as the bar arrives and put back as it leaves, so re-targeting
 across documents leaves nothing behind. `vim.g.selvage_following` holds the followed peer's id meanwhile, and
@@ -280,8 +278,7 @@ anything else says `could not open <path> from the room: <reason>`.
 
 The session is on screen without any statusline configuration: the window's `winbar` is the web
 page's session bar. It opens with what the session is called, `Sharing “notes”` for a host and
-`In Hana’s session` (or `In a shared session`) for a guest, then a `Copy invite link` control that
-reads `Copied` for a moment after any copy (a click, the panel's `y` or `:SelvageCopyInvite`), and at the right everyone's face as their initials in
+`In Hana’s session` (or `In a shared session`) for a guest, and at the right everyone's face as their initials in
 their seat's colour, in the web page's order: yours first, underlined, then the others as the room
 lists them, the host crowned with `♛`.
 The states that are not a healthy session say so on the same row: `Connecting…`, `Reconnecting…`,
@@ -302,27 +299,22 @@ leaves.
 them somewhere else, `Following <name>` while a follow stands, and `[not fetched]` after them for a
 file holding no fetched content, so a search over the mirror reads as the partial thing it is.
 
-The bar and the panel draw with these highlight groups, each set with `default` so a colour scheme
+The bar and `:SelvagePeers` draw with these highlight groups, each set with `default` so a colour scheme
 or your config can set its own:
 
 | Group | Default | Where |
 |---|---|---|
 | `SelvageSession` | links to `Title` | the session bar |
 | `SelvageWarn` | links to `WarningMsg` | the host away and `Reconnecting…` |
-| `SelvageInvite` | links to `TabLineSel` | the `Copy invite link` control |
 | `SelvageCrown` | yellow, bold | the host's crown |
 | `SelvageFollowed` | mauve, bold | the mark on the face you follow |
-| `SelvagePanelName` | bold | a name in the panel |
-| `SelvagePanelMuted` | links to `Comment` | where someone is, and `· Host` |
-| `SelvagePanelFolder` | links to `Directory` | a folder in the panel's tree |
-| `SelvagePanelHere` | bold | the file you are in |
 
 `SelvageYou` (your face) and `SelvageFollow` (the follow chip) are painted with a seat's colour, as
 are the `SelvagePeer<n>` groups a peer's caret, sign and face wear.
 
 Whose caret is in the file in front of the person is the gutter's fact and not the row's: the
-caret wears a block in the peer's own colour, the sign column their initials, and the panel
-names them in full with a badge on the file they are in. The same peers are published for everyone else as
+caret wears a block in the peer's own colour, the sign column their initials, and
+`:SelvagePeers` names them in full with the file they are in. The same peers are published for everyone else as
 `vim.g.selvage_file_peers`, a map of room path to
 `{ initials, colour, label, peerId }`, with a `User SelvagePresence` autocmd fired whenever it
 changes. netrw, oil.nvim, nvim-tree, telescope, lualine and heirline each decorate from that one
@@ -406,9 +398,9 @@ key, so a link given wherever an address is asked for is refused and nothing is 
 | `:SelvageDisplayName [name]` | Set the name other participants see: sent to the room now when a session is live, and used by the next host or join. With no name it reports the one in force, or says there is none. |
 | `:SelvageOpen [path]` | Put one of the room's documents in the current window. With no argument it opens the only one the room offers, or asks which when there are several. `path` completes over what the room offers, its grant and the documents it holds, and may be the room path or any suffix of it: `:SelvageOpen README.md` reaches `workspace/README.md`. A path nobody has opened yet is offered too, and opening it is what makes the host read that file. A host is refused: its own files are already in its buffer list. |
 | `:SelvageFetch [path]` | Download a file from the room: the path, every path under it, or the whole listing. A path nobody has fetched is an empty file, and a project-wide search is partial until the paths it covers have been fetched; this is the one command that fills them in. Fetching *opens* what it names in the room, so every peer receives those paths and materialises them: a whole-listing fetch shares a whole project, and the command says so before it does it. A host is refused: the room's files are already on its disk. |
-| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. The bar's `Copy invite link` reads `Copied` for a moment, and nothing else is said. A session the server gave no invite to says so, and a clipboard that refuses the link says why. A host copies the page its own server serves, carrying the room and its token: one address for the page and the socket both. A guest holds the token it joined with, because the invite *is* the permission, so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. The unnamed register (and register `0`) is cleared of the link when the session ends or Neovim quits, unless something else was yanked since, and a link typed into `:SelvageJoin` or its prompt is removed from the command-line and input histories once read: ShaDa writes both to disk, and an invite is the room's permission and its key (`PROTOCOL.md` §12). |
+| `:SelvageCopyInvite` | Put the session's invite on the clipboard and the unnamed register. A notification says it was copied. A session the server gave no invite to says so, and a clipboard that refuses the link says why. A host copies the page its own server serves, carrying the room and its token: one address for the page and the socket both. A guest holds the token it joined with, because the invite *is* the permission, so it copies the link it joined by: that same page link, or the `ws://` link where that is how the room was reached. The unnamed register (and register `0`) is cleared of the link when the session ends or Neovim quits, unless something else was yanked since, and a link typed into `:SelvageJoin` or its prompt is removed from the command-line and input histories once read: ShaDa writes both to disk, and an invite is the room's permission and its key (`PROTOCOL.md` §12). |
 | `:SelvageLeave` | Leave the session and stop the companion. A host is asked first, `Leaving ends the room for everyone and stops the invite link.`, with `Leave anyway` and `Cancel`; a guest leaves at once. With no session it says so. |
-| `:SelvagePeers` | Open the room's panel on the left: everyone in the room with their initials in their seat's colour, you first and then the others as the room lists them, the host crowned, each with the file they are in, and below them the room's files as a tree with a badge for each person in a file. `<CR>` on a person in a file goes to them and on a file opens it, `r` or `<CR>` on your own row renames you, `f` follows someone or stops, `y` copies the invite link and `q` closes it. While you are in it, the others still see your caret where you left it, and a follow keeps landing in the window beside it. The panel keeps up with the room and closes when the session ends. |
+| `:SelvagePeers` | List everyone in the room, one line each: their initials in their seat's colour, their name and the file they are in. You come first and then the others as the room lists them; the host is crowned with `♛` and the person you follow marked with `◉`. |
 | `:SelvageGoTo [name]` | Go to a participant: show their document and put the cursor on their caret. With no name it goes to the only participant, or asks which when there are several. `name` completes over display names and may be a peer id; a name two peers share is refused with both told apart, and a typed name whose caret has not arrived yet waits for it. |
 | `:SelvageFollow [name]` | Follow a participant: land where they are and keep landing there as they move, across documents, until something ends it. Typing or moving yourself stops it. Takes its name the way `:SelvageGoTo` does. |
 | `:SelvageStopFollowing` | Stop following, or say there is nothing to stop. |
