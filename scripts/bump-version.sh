@@ -9,8 +9,8 @@
 #
 #   package.json       the companion's manifest (`selvage-nvim-companion`, private), which
 #                      `release.yml` asserts the tag name against. The plugin has no version
-#                      string of its own: `lua/` and `plugin/` carry none, the README names no
-#                      release, and the identity the companion sends in `session.hello` is
+#                      string of its own: `lua/`, `plugin/`, the README and `docs/` carry none,
+#                      and the identity the companion sends in `session.hello` is
 #                      `selvage-nvim`, which carries no version.
 #   package-lock.json  the root `version` and the same key under `packages.""`, which npm copies
 #                      from the manifest

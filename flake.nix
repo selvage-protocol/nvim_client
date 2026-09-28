@@ -48,7 +48,8 @@
             # loads the plugin. Whichever way the plugin reaches a nixpkgs Neovim wrapper —
             # home-manager's `programs.neovim.plugins`, or `pkgs.neovim.override` with
             # `configure.packages.…` — the wrapper reads this and puts Node on its own PATH; a
-            # plugin manager that does not is why the README still asks for Node separately.
+            # plugin manager that does not is why the install instructions still ask for Node
+            # separately.
             runtimeDeps = [ node ];
 
             meta = {

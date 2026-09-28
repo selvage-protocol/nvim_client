@@ -3,7 +3,7 @@
  * both directions, over the companion's stdin and stdout.
  *
  * `DESIGN.md` §4.4 names a non-network transport for the editor-adapter ↔ sync-engine
- * boundary and leaves its shape open; this is that shape, and `README.md` documents it for
+ * boundary and leaves its shape open; this is that shape, and `docs/ipc.md` documents it for
  * anyone writing a different front-end against the same companion.
  *
  * **Every offset here is a UTF-16 code unit**, counted in the document's text as Neovim
