@@ -18,6 +18,16 @@ local M = {}
 --- web client's own, so this client says the same sentence as the others by construction.
 local words = nil
 
+--- The leave question's own words until the companion's arrive, the same ones it sends: a host is
+--- never let go without it.
+local LEAVE_WORDS = {
+  leave = {
+    question = 'Leaving ends the room for everyone and stops the invite link.',
+    confirm = 'Leave anyway',
+    cancel = 'Cancel',
+  },
+}
+
 local state = {
   process = nil,
   status = 'idle',
@@ -4058,8 +4068,9 @@ local function confirm_leave(question, button)
     notify(question, vim.log.levels.WARN)
     return false
   end
+  local cancel = (words or LEAVE_WORDS).leave.cancel
   -- Opened with a line break: a command line taller than one line drops a question that fits it.
-  return vim.fn.confirm('\n' .. question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
+  return vim.fn.confirm('\n' .. question, ('&%s\n&%s'):format(button, cancel), 2, 'Warning') == 1
 end
 
 --- The box the first-run question and `:SelvageChangeServer`'s change both ask through: the
@@ -4524,8 +4535,9 @@ function M.leave()
   end
   -- A host leaving ends the room for everyone in it, so the host is asked first, the way the web
   -- page asks. A guest leaves at once, and so does a host with nobody there to answer.
-  if state.status == 'hosting' and words ~= nil and can_prompt() then
-    if not confirm_leave(words.leave.question, words.leave.confirm) then
+  if state.status == 'hosting' and can_prompt() then
+    local leave = (words or LEAVE_WORDS).leave
+    if not confirm_leave(leave.question, leave.confirm) then
       return
     end
   end

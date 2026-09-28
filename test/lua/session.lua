@@ -51,6 +51,12 @@ end
 local sent, handlers = stub_companion()
 local selvage = require('selvage')
 
+-- A host is asked before leaving whenever there is someone to ask, and this file's hosts all mean
+-- to go: the question itself is `test/lua/commands.lua`'s.
+vim.fn.confirm = function()
+  return 1
+end
+
 vim.fn.mkdir('.tmp', 'p')
 local path = '.tmp/lua-session.txt'
 vim.fn.writefile({ 'one' }, path)

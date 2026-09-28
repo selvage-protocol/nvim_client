@@ -1132,6 +1132,21 @@ check(
 -- is in its own buffers, which stay, and nothing is written behind its back.
 do
   answer_with('unused')
+  -- The words arrive first from the companion, and a host who leaves before they have is asked all
+  -- the same.
+  selvage.host('ws://127.0.0.1:1')
+  report_status('hosting', 'r-leave-early', 'ws://127.0.0.1:1/session?room=r-leave-early&token=t')
+  local early = count_type('leave')
+  confirmations = 0
+  confirmation = 2
+  selvage.leave()
+  check('a host leaving before the words arrive is asked too', confirmations, 1)
+  check('  the same question', question and question.text, 'Leaving ends the room for everyone and stops the invite link.')
+  check('  with the same buttons', question and question.choices, '&Leave anyway\n&Cancel')
+  check('  and a cancel leaves nothing', count_type('leave'), early)
+  confirmation = 1
+  selvage.leave()
+
   selvage.host('ws://127.0.0.1:1')
   handlers().on_message({
     type = 'words',
@@ -1152,6 +1167,16 @@ do
   check('  offering to leave anyway', question and question.choices, '&Leave anyway\n&Cancel')
   check('  and a cancel leaves nothing', count_type('leave'), leaves)
   check('  and the session stands', selvage.session().status, 'hosting')
+  -- Both buttons are the room's words, so a change there is a change here.
+  local renamed = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n'))
+  renamed.leave.confirm, renamed.leave.cancel = 'Go', 'Stay'
+  handlers().on_message({ type = 'words', words = renamed })
+  selvage.leave()
+  check('  both buttons in the words the companion sent', question and question.choices, '&Go\n&Stay')
+  handlers().on_message({
+    type = 'words',
+    words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')),
+  })
   confirmation = 1
   selvage.leave()
   check('  and leaving anyway leaves', count_type('leave'), leaves + 1)
