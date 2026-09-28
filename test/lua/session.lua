@@ -1595,7 +1595,7 @@ check(
 )
 check(
   '  and the person is told it was kept',
-  said_since(before_land, '1 buffers with unsaved changes were kept') ~= nil,
+  said_since(before_land, '1 buffer with unsaved changes was kept; :ls lists it.') ~= nil,
   true
 )
 check('  and the session is over', selvage.session().status, 'idle')

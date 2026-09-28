@@ -397,7 +397,7 @@ check('  and what is past it is not materialised', vim.fn.filereadable(root .. '
 check('  and the client does not hold it', mirror.granted('f05001.txt'), false)
 check(
   '  and the person is told',
-  said_since(before, 'could not be mirrored, starting with f05001.txt') ~= nil,
+  said_since(before, "one of the room's files could not be mirrored: f05001.txt.") ~= nil,
   true
 )
 selvage.leave()
@@ -1150,7 +1150,7 @@ root = join({}, { 'quiet.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('quiet.txt')
-check('a fetch the room never answers reports what arrived', fetched_since(before, 'these had not arrived within 0s: quiet.txt') ~= nil, true)
+check('a fetch the room never answers reports what arrived', fetched_since(before, 'fetched the files; quiet.txt had not arrived within 0s.') ~= nil, true)
 check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
 
 -- The room answering late is not a lost fetch: the document is still held, so the text arriving
@@ -1181,7 +1181,7 @@ check(
 )
 check(
   '  but reports what had not arrived',
-  fetched_since(before, 'these had not arrived within 0s: unwritten.txt') ~= nil,
+  fetched_since(before, 'fetched the files; unwritten.txt had not arrived within 0s.') ~= nil,
   true
 )
 

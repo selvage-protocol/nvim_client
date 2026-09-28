@@ -1521,13 +1521,20 @@ function M.fetch(path)
       return
     end
     if uv.hrtime() >= deadline then
-      notify(
-        ('fetched the files; these had not arrived within %ds: %s.'):format(
-          seconds(timeout),
-          table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
-        ),
-        vim.log.levels.WARN
-      )
+      if #left == 1 then
+        notify(
+          ('fetched the files; %s had not arrived within %ds.'):format(left[1], seconds(timeout)),
+          vim.log.levels.WARN
+        )
+      else
+        notify(
+          ('fetched the files; these had not arrived within %ds: %s.'):format(
+            seconds(timeout),
+            table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
+          ),
+          vim.log.levels.WARN
+        )
+      end
       return
     end
     vim.defer_fn(revisit, 50)
@@ -2944,7 +2951,9 @@ local function land_room_buffers(held)
       end
     end
   end
-  if kept > 0 then
+  if kept == 1 then
+    notify('1 buffer with unsaved changes was kept; :ls lists it.', vim.log.levels.WARN)
+  elseif kept > 1 then
     notify(
       ('%d buffers with unsaved changes were kept; :ls lists them.'):format(kept),
       vim.log.levels.WARN
@@ -3346,7 +3355,13 @@ local function on_report(report)
         state.join_empty = true
         local mirror_summary = state.join_mirror
         state.join_listed = mirror_summary ~= nil
-        if mirror_summary ~= nil then
+        if mirror_summary ~= nil and mirror_summary.count == 1 then
+          notify(
+            ('joined the room; the room has no open documents yet; 1 file mirrored at %s.'):format(
+              mirror_summary.root
+            )
+          )
+        elseif mirror_summary ~= nil then
           notify(
             ('joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
               mirror_summary.count,
@@ -3398,11 +3413,16 @@ local function on_report(report)
         -- sentence is the only place the room's files reach them, and it is said once here.
         if state.join_said and state.join_empty and not state.join_listed and #state.grant > #blocked then
           state.join_listed = true
-          notify(
-            ('%d files are mirrored at %s; :SelvageOpen opens one.'):format(#state.grant - #blocked, root)
-          )
+          local count = #state.grant - #blocked
+          if count == 1 then
+            notify(('1 file is mirrored at %s; :SelvageOpen opens it.'):format(root))
+          else
+            notify(('%d files are mirrored at %s; :SelvageOpen opens one.'):format(count, root))
+          end
         end
-        if #blocked > 0 then
+        if #blocked == 1 then
+          notify(("one of the room's files could not be mirrored: %s."):format(blocked[1]), vim.log.levels.WARN)
+        elseif #blocked > 1 then
           notify(
             ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
               #blocked,
