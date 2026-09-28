@@ -91,7 +91,7 @@ end
 --- extensions — ripgrep, ctags, a language server — read for themselves, so it has to be
 --- filled. The other client has the twin command since its room became a real directory too,
 --- and the phrase for it is this one in both: `Download a file from the room`, which says what
---- the command does rather than naming the mirror it fills. The README says why; `AGENTS.md`
+--- the command does rather than naming the mirror it fills. `docs/mirror.md` says why; `AGENTS.md`
 --- §4 is the rule.
 local TITLES = {
   SelvageHost = 'Host a session',

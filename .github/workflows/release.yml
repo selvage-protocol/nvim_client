@@ -1,10 +1,10 @@
 name: release
 
 # A release is the git tag. Neovim plugins are consumed by plugin managers
-# straight from a tag (`lazy.nvim`, `vim-plug`, `packer` per the README) plus
-# `npm ci` for the companion, so there is nothing to build and nothing to
-# attach: the tag plus a GitHub Release with notes IS the release. Adding a
-# bundle nobody consumes would be machinery for its own sake.
+# straight from a tag (`lazy.nvim`, `vim-plug` and `packer`, per the install
+# snippets in the README) plus `npm ci` for the companion, so there is nothing to
+# build and nothing to attach: the tag plus a GitHub Release with notes IS the
+# release. Adding a bundle nobody consumes would be machinery for its own sake.
 #
 # The owner triggers a release from this workflow. `workflow_dispatch` (with a
 # required `bump` input naming `patch`, `minor` or `major`) is the manual button;
@@ -60,6 +60,11 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      # The same pinned checker `ci.yml` installs, so the gate below reads links with the binary the
+      # pull request does. The checksum is the one published beside the archive.
+      LYCHEE_VERSION: "0.24.2"
+      LYCHEE_SHA256: "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -191,6 +196,23 @@ jobs:
       - if: inputs.dry_run != true
         run: npm test
 
+      # The link check, as the same gate runs it. The runner has no nix, so the pinned release is
+      # installed the way ci.yml installs it.
+      - name: install lychee
+        if: inputs.dry_run != true
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/lychee.tar.gz" \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${LYCHEE_SHA256}  $RUNNER_TEMP/lychee.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/lychee.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+          sudo install -m 0755 "$RUNNER_TEMP/lychee" /usr/local/bin/lychee
+          lychee --version
+
+      # Every relative link in the reader-facing prose, and every URL it carries.
+      - name: links over the README and docs
+        if: inputs.dry_run != true
+        run: lychee --config lychee.toml --no-progress README.md docs
+
       # The one push this workflow makes to `main`, and the reason this job holds
       # `contents: write`. A bump pull request would carry no checks at all — an event created with
       # this workflow's own `GITHUB_TOKEN` starts no run — so the gate above runs here instead, on
@@ -244,7 +266,8 @@ jobs:
           # Selvage for Neovim v${RELEASE_VERSION}
 
           Install with Neovim 0.12's built-in \`vim.pack\` (needs no third-party
-          dependency), then \`npm ci\` for the companion (see the README):
+          dependency), then \`npm ci\` for the companion (see the install section
+          in the README):
 
           \`\`\`lua
           -- vim.pack (Neovim 0.12+)

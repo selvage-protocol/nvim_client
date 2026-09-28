@@ -1,0 +1,28 @@
+# What the link check covers, and what it cannot fetch.
+#
+# The scope is the reader-facing front matter: `README.md` and `docs/`. It is
+# those two deliberately, not every Markdown file this repository holds.
+# `vendor/` is a copy of another repository's tree, so a link that only exists
+# there belongs to the repository that writes it, and a release note generated
+# from a heredoc inside a workflow is not a file anybody edits here.
+# `scripts/ci-local.sh links`, the `checks` job of `.github/workflows/ci.yml`
+# and the gate steps of `release.yml` pass this file and the same two
+# arguments, so the checker reads here what the runner reads.
+#
+# `exclude` holds the addresses the check cannot fetch, each with its reason.
+# It was built from a real run over those two arguments: every relative link in
+# them lands on a file that is here, and `https://github.com/selvage-protocol/
+# specification` resolves. Nothing in either file prints a loopback address
+# (the addresses the prose carries are `wss://` hosts and the demo domain), so
+# there is none of that kind to exclude. A URL that needs an entry gets one
+# here with its reason beside it, and a link that answers nowhere is a link to
+# fix rather than one to exclude.
+exclude = [
+  # The README prints no address to write to, so nothing in scope is a
+  # `mailto:` today. It is named anyway: the check runs without
+  # `--include-mail`, so a `mailto:` is counted as excluded whether or not it
+  # is named, and naming it keeps that a stated choice for the day the README
+  # carries a contact address, which is also the day it stops being a link the
+  # check could follow to a live destination.
+  "^mailto:",
+]

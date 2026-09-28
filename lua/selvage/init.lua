@@ -3387,7 +3387,7 @@ local function on_report(report)
         end
         -- A first listing that arrives after the join was said stays silent: the summary already
         -- went out, and one summary plus errors is the whole of the join's news. The mirror stays
-        -- discoverable without a notice (`require('selvage').session().mirror`, the README,
+        -- discoverable without a notice (`require('selvage').session().mirror`, `docs/mirror.md`,
         -- `:SelvageFetch` completion). The exception is a join the room had nothing open in: that
         -- guest has no document to watch and no tree to read, so a listing that arrives after the
         -- sentence is the only place the room's files reach them, and it is said once here.

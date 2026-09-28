@@ -1,6 +1,6 @@
 -- The companion process: one per Neovim instance, started on the first command that needs it.
 --
--- Newline-delimited JSON both ways (`README.md`, "The local IPC"). Neovim hands `on_stdout` a
+-- Newline-delimited JSON both ways (`docs/ipc.md`). Neovim hands `on_stdout` a
 -- list of strings split on `\n` where the last element is a partial line, so a line is
 -- reassembled here the way `companion/ipc.ts` reassembles the other direction's: to the same
 -- byte bound, and with the chunks of a line kept apart until the newline that ends it arrives.
