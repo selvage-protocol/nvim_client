@@ -407,6 +407,11 @@ export class NvimEditorHost implements EditorHost {
         if (host !== undefined && host.display_name !== '') {
           this.hostName = host.display_name;
         }
+        // A room that names its host again has the host back, even when the frame that said so
+        // was missed while this connection was down.
+        if (host !== undefined) {
+          this.stopHostAway();
+        }
         const room = this.room();
         const own = this.self?.();
         this.emit({

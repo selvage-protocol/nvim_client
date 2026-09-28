@@ -164,6 +164,15 @@ test("the host's absence is said once and counted down until the host is back", 
   assert.equal(it.sent.length, count, 'the countdown stops when the host is back');
 });
 
+test('the countdown stops when the room names its host again', () => {
+  const it = editor(guest('p-me', 'Me'));
+  it.host.report({ kind: 'hostDetached', graceMs: 30_000 });
+  it.host.report({ kind: 'peers', peers: [{ peer_id: 'p-host', display_name: 'Hana', role: 'host' }] });
+  const count = it.sent.length;
+  it.clock.advance(1000);
+  assert.equal(it.sent.length, count);
+});
+
 test('the countdown stops when the room is gone, and says why in a sentence', () => {
   const it = editor(guest('p-me', 'Me'));
   it.host.report({ kind: 'hostDetached', graceMs: 30_000 });
