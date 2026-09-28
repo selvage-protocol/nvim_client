@@ -1521,7 +1521,10 @@ function M.fetch(path)
       return
     end
     if uv.hrtime() >= deadline then
-      if #left == 1 then
+      if #targets == 1 then
+        -- The one file asked for is the whole fetch, so nothing was fetched.
+        notify(('%s did not arrive within %ds.'):format(left[1], seconds(timeout)), vim.log.levels.WARN)
+      elseif #left == 1 then
         notify(
           ('fetched the files; %s had not arrived within %ds.'):format(left[1], seconds(timeout)),
           vim.log.levels.WARN

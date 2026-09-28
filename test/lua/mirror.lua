@@ -1150,7 +1150,8 @@ root = join({}, { 'quiet.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 200
 selvage.fetch('quiet.txt')
-check('a fetch the room never answers reports what arrived', fetched_since(before, 'fetched the files; quiet.txt had not arrived within 0s.') ~= nil, true)
+check('a fetch of one file the room never answers says it did not arrive', fetched_since(before, 'quiet.txt did not arrive within 0s.') ~= nil, true)
+check('  and claims nothing was fetched', said_since(before, 'fetched the files'), nil)
 check('  and the file is left as it was', read(root .. '/quiet.txt'), '')
 
 -- The room answering late is not a lost fetch: the document is still held, so the text arriving
@@ -1161,6 +1162,21 @@ before = #notices
 selvage.fetch('quiet.txt')
 check('a fetch of a path whose file arrived late finds it at once', said_since(before, 'fetched the files') ~= nil, true)
 vim.g.selvage_fetch_timeout_ms = nil
+
+-- Of two files, one arrives: the fetch did fetch, and names the one that is missing.
+root = join({}, { 'heard.txt', 'unheard.txt' })
+responder = room_holding({ ['heard.txt'] = 'heard\n' })
+before = #notices
+vim.g.selvage_fetch_timeout_ms = 200
+selvage.fetch()
+check(
+  'a fetch that misses one file of several names it',
+  fetched_since(before, 'fetched the files; unheard.txt had not arrived within 0s.') ~= nil,
+  true
+)
+check('  and the other is written', read(root .. '/heard.txt'), 'heard\n')
+vim.g.selvage_fetch_timeout_ms = nil
+responder = nil
 
 -- A `:w` on a file the room has not answered is not a fetch: the empty buffer written over
 -- the empty placeholder leaves no trace of the room, so the fetch must report the file had
@@ -1181,7 +1197,7 @@ check(
 )
 check(
   '  but reports what had not arrived',
-  fetched_since(before, 'fetched the files; unwritten.txt had not arrived within 0s.') ~= nil,
+  fetched_since(before, 'unwritten.txt did not arrive within 0s.') ~= nil,
   true
 )
 
@@ -1255,7 +1271,7 @@ vim.g.selvage_fetch_timeout_ms = 300
 selvage.fetch('slow.txt')
 check(
   'a file closed mid-fetch is reported as not arrived',
-  fetched_since(before, 'had not arrived within') ~= nil,
+  fetched_since(before, 'slow.txt did not arrive within') ~= nil,
   true
 )
 check('  and the close reached the room', sent_since('close', opened) ~= nil, true)

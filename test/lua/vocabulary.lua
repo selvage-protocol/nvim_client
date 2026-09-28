@@ -235,6 +235,7 @@ local MESSAGES = {
   { 'INFO', 'fetched the files.' },
   { 'WARN', 'fetched the files; these had not arrived within %ds: %s.' },
   { 'WARN', 'fetched the files; %s had not arrived within %ds.' },
+  { 'WARN', '%s did not arrive within %ds.' },
   { 'WARN', 'the session ended before the files were fetched.' },
 }
 
