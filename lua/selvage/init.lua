@@ -1043,6 +1043,9 @@ local function share(bufnr, path)
     end
   end
   local document = Document.new(bufnr, path, function(message)
+    -- The change goes first: the document's version has already moved, so nothing after this
+    -- line may stand between the edit and the room.
+    state.process:send(message)
     -- A local edit of a shared document ends a follow: with the caret moved by the follow,
     -- typing and following are in direct conflict, and the keystroke has already chosen the
     -- place. A remote edit never reaches this closure — `Document:apply` writes the buffer
@@ -1050,7 +1053,6 @@ local function share(bufnr, path)
     if message.type == 'change' and state.following ~= nil then
       end_follow('typed')
     end
-    state.process:send(message)
   end)
   state.documents[path] = document
   document:attach()
@@ -2267,18 +2269,31 @@ end_follow = function(why)
   end
   state.following = nil
   state.follow_landed = nil
-  clear_indicator()
-  -- The row is the window's, and the session's words are what stands on it with no follow:
-  -- ending one puts the other back on every window, not only the one in front.
-  if why ~= 'silent' then
-    refresh_indicators()
-  end
+  vim.g.selvage_following = nil
   if why == 'silent' then
+    clear_indicator()
     return
   end
-  local ended = words ~= nil and FOLLOW_ENDED[why] ~= nil and words.followEnded[FOLLOW_ENDED[why]] or nil
-  if ended ~= nil then
-    notify(ended:format(following.label))
+  local function show()
+    -- The row is the window's, and the session's words are what stands on it with no follow:
+    -- ending one puts the other back on every window, not only the one in front. A follow
+    -- started again before this ran has drawn its own row already.
+    if state.following == nil then
+      clear_indicator()
+      refresh_indicators()
+    end
+    local ended = words ~= nil and FOLLOW_ENDED[why] ~= nil and words.followEnded[FOLLOW_ENDED[why]] or nil
+    if ended ~= nil then
+      notify(ended:format(following.label))
+    end
+  end
+  if why == 'typed' then
+    -- Typing ends a follow from inside the buffer's change callback, where Neovim refuses to
+    -- change another buffer's text or open a window: redrawing the panel there fails with E565,
+    -- and a notifier that draws a float would too. Both wait for the next turn.
+    vim.schedule(show)
+  else
+    show()
   end
 end
 

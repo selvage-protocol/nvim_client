@@ -321,8 +321,37 @@ local function settle()
   end, 10)
 end
 
+-- -- drawn from inside another buffer's change -----------------------------------------
+--
+-- A change callback is where Neovim refuses to change any other buffer's text, and typing that
+-- ends a follow redraws the panel from one. The panel waits for the next turn there, and its
+-- buffer stays one nobody can type into.
 vim.cmd('SelvagePeers')
 settle()
+vim.bo[panel_buf()].modifiable = true
+vim.api.nvim_buf_set_lines(panel_buf(), 0, -1, false, { 'stale' })
+vim.bo[panel_buf()].modifiable = false
+local scratch = vim.api.nvim_create_buf(false, true)
+local raised = nil
+vim.api.nvim_buf_attach(scratch, false, {
+  on_bytes = function()
+    local ok, err = pcall(require('selvage.panel').refresh)
+    raised = ok and raised or err
+    return true
+  end,
+})
+vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { 'typed' })
+check('the panel drawn from inside a change raises nothing', raised, nil)
+check('  and stays a buffer nobody types into', vim.bo[panel_buf()].modifiable, false)
+check(
+  '  and is drawn on the next turn',
+  vim.wait(1000, function()
+    return lines()[1] ~= 'stale'
+  end, 10),
+  true
+)
+vim.api.nvim_buf_delete(scratch, { force = true })
+
 vim.fn.confirm = function()
   return 1
 end

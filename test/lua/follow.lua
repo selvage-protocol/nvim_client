@@ -68,6 +68,18 @@ local function said_since(from, needle)
   return nil
 end
 
+--- Lets what is queued for the next turn run: typing ends a follow from inside the buffer's change
+--- callback, and the row and the sentence come on the turn after it.
+local function turn()
+  local turned = false
+  vim.schedule(function()
+    turned = true
+  end)
+  vim.wait(1000, function()
+    return turned
+  end, 10)
+end
+
 local function last_of(kind)
   for index = #sent, 1, -1 do
     if sent[index].type == kind then
@@ -837,6 +849,7 @@ presence({ cursor_for('p-ada', 'g/one.txt', 13) })
 check('the follow comes back with the peer', vim.fn.bufname('%'), 'selvage://g/one.txt')
 local before_other_edit = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/two.txt'), 0, 0, false, { 'ONE' })
+turn()
 check('the edit reached the room', last_of('change') and last_of('change').path, 'g/two.txt')
 check(
   'a local edit in another shared document ends the follow',
@@ -854,6 +867,7 @@ selvage.follow('Ada')
 check('following again says so again', said_since(before_refollow, 'following Ada') ~= nil, true)
 local before_own_edit = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/one.txt'), 0, 0, false, { 'ALPHA' })
+turn()
 check(
   'a local edit in the followed document ends the follow',
   said_since(before_own_edit, 'Stopped following Ada because you started typing.') ~= nil,
@@ -884,6 +898,7 @@ check('  and the follow stands through it', selvage.following(), 'Ada')
 check('  saying nothing', #notices, before_crlf_remote)
 local before_crlf_local = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/two.txt'), -1, -1, true, { 'x\r', 'y' })
+turn()
 check(
   'typing CRLF locally ends it all the same',
   said_since(before_crlf_local, 'Stopped following Ada because you started typing.') ~= nil,
