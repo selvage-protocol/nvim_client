@@ -34,15 +34,15 @@ The sign column carries the first two characters of a peer's name, coloured with
 highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. Two
 cells is all `sign_text` takes, so a peer called `thisismylongusername` is `th` there and the
 gutter cannot say who that is: the name reads from `vim.g.selvage_file_peers` and from
-`:SelvagePeers`, which lists everyone in the room by name beside their initials in their seat's
-colour. Nothing is put over the document when a peer moves. Every mark is cleared and recreated
-when presence changes, and every one goes when the session ends.
+[`:SelvagePeers`](../README.md), which lists everyone in the room by name beside their initials in
+their seat's colour. Nothing is put over the document when a peer moves. Every mark is cleared and
+recreated when presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
-entering a buffer), coalesced into one `selection` per 100 ms, and once more when the room's own
-edit lands in the buffer: a buffer for a room document exists before the document's text does, so
-the caret published in between is one the companion had no document for, and a write the room
-makes fires no `TextChanged` to publish it again. `selectionCleared` goes out when there is no
+entering a buffer), coalesced into one [`selection`](ipc.md) per 100 ms, and once more when the
+room's own edit lands in the buffer: a buffer for a room document exists before the document's text
+does, so the caret published in between is one the companion had no document for, and a write the
+room makes fires no `TextChanged` to publish it again. `selectionCleared` goes out when there is no
 shared document in front of the user.
 
 Following moves the follower's caret: Neovim has no viewport-only state that survives a redraw, so
@@ -83,7 +83,8 @@ read `The host ended the session.` there instead. The row is window-local and th
 is saved and put back as it arrives and leaves.
 `%{v:lua.require'selvage'.statusline()}` returns the session's words for a statusline that wants
 them somewhere else, `Following <name>` while a follow stands, and `[not fetched]` after them for a
-file holding no fetched content, so a search over the mirror reads as the partial thing it is.
+file holding no fetched content, so a search over [the mirror](mirror.md) reads as the partial
+thing it is.
 
 The bar and `:SelvagePeers` draw with these highlight groups, each set with `default` so a colour
 scheme or your config can set its own:

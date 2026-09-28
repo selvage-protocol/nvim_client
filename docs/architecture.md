@@ -10,4 +10,5 @@ editor adapter (buffers, paths, decorations). This repository is the adapter:
 | Plugin | `lua/selvage/`, `plugin/` | Commands, `nvim_buf_attach`, `nvim_buf_set_text`, and the conversion between byte positions and UTF-16 code units. |
 
 One Neovim instance runs one companion process, started on the first `:SelvageHost` or
-`:SelvageJoin` and stopped on `:SelvageLeave`.
+`:SelvageJoin` and stopped on `:SelvageLeave`. What the two of them say to each other is
+[the local IPC](ipc.md).

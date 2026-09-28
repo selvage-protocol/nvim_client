@@ -3,7 +3,8 @@
 A guest keeps the room's documents and materialises the room as a real directory, so that the
 tools a person already uses (fzf and Telescope, ripgrep, ctags, a language server, a tree plugin,
 `fd`, `:find`) see the room as a project. Those programs are separate processes; they read the
-filesystem and cannot see a buffer name, a URI scheme or an in-process source.
+filesystem and cannot see a buffer name, a URI scheme or an in-process source. The paths it
+materialises are [the room's grant](grant.md).
 
 The **shape** is materialised, the **content** is not. Every path the room's listing names exists
 in the mirror, with the directories on the way to it, so a tree plugin walks the whole room; a

@@ -4,8 +4,8 @@
   bundle.
 - An edit that lands on the same characters a peer's edit is landing on is superseded by the
   room rather than merged with it. A keystroke elsewhere in the document is moved rather than
-  lost (see `docs/ipc.md`); when the two are about the same text there is no position to move it
-  to, and the room's text is what the buffer ends on.
+  lost (see [the local IPC](ipc.md)); when the two are about the same text there is no position to
+  move it to, and the room's text is what the buffer ends on.
 - A guest's buffer is created and shown as soon as the handshake names the room's documents,
   which is before the sync carrying their text. A keystroke made in that window is superseded by
   the room's text: the two are counted together once it lands, and the room's text is what the
@@ -16,8 +16,8 @@
   was empty at the join.
 - A peer's selection is the colour blended with the editor's background: a buffer highlight has no
   alpha.
-- A guest's mirror holds the room's listing as real files, and that is what a language server,
-  `rg`, ctags and a tree plugin see. What it does not hold is content nobody has fetched: a file
+- [A guest's mirror](mirror.md) holds the room's listing as real files, and that is what a language
+  server, `rg`, ctags and a tree plugin see. What it does not hold is content nobody has fetched: a file
   whose path has not been opened or fetched is empty, and the window marks it `[not fetched]`,
   so a search over the mirror is visibly partial until the paths it covers have been fetched
   (`DESIGN.md` §4.2). A file a tool creates in the mirror is not part of the room, and a mutation

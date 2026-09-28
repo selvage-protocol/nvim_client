@@ -80,12 +80,12 @@ Hosting starts outside the editor: start `selvaged`, note the address it prints,
 address to `:SelvageHost`, or set `vim.g.selvage_server_url` to always use it. The address is asked
 for once and remembered across restarts, so later bare `:SelvageHost` calls reuse it without asking.
 With none of the three, the one question starts from the demo server
-`selvage-demo.dontblameme.dev` (a domain on its own, which the completion below reads as
-`wss://selvage-demo.dontblameme.dev`).
+`selvage-demo.dontblameme.dev` — a domain on its own, which the completion below reads as
+`wss://selvage-demo.dontblameme.dev`.
 `:SelvageChangeServer` reports or changes the address without hosting first.
 
-Everywhere a *server* address is typed (the argument, the question's answer, the setting, a
-remembered one) the host on its own is enough, and it means the published shape: a bare host is
+Everywhere a *server* address is typed — the argument, the question's answer, the setting, a
+remembered one — the host on its own is enough, and it means the published shape: a bare host is
 completed to `wss://<host>`, because the room is dialled over TLS. The `/session` path every
 Selvage server answers belongs to the engine, which adds it to whatever base it is given:
 `wss://host` and `wss://host/session` both reach `wss://host/session`, and any other path is kept.

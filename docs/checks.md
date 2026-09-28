@@ -11,12 +11,13 @@ nix flake check             # the same three suites, the built package and the w
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
 ```
 
-`scripts/ci-local.sh checks` is what the workflow runs; `scripts/ci-local.sh all` adds actionlint
-and the end-to-end proof, which needs a real Neovim and a built `selvaged` and so cannot run on a
-runner. `scripts/test-lua.sh` is not in `all`: it needs a Neovim too, and `nix flake check` runs the
-same files in a sandbox. Run it by hand after changing `lua/`. Its last file is the checkout as the
-installed plugin, and it starts its Neovim with no plugin of its own, so a machine whose editor
-arrives with a `selvage` installed cannot answer for the checkout.
+[`scripts/ci-local.sh checks`](../scripts/ci-local.sh) is what the workflow runs;
+`scripts/ci-local.sh all` adds actionlint and the end-to-end proof, which needs a real Neovim and a
+built `selvaged` and so cannot run on a runner.
+[`scripts/test-lua.sh`](../scripts/test-lua.sh) is not in `all`: it needs a Neovim too, and
+`nix flake check` runs the same files in a sandbox. Run it by hand after changing `lua/`. Its last
+file is the checkout as the installed plugin, and it starts its Neovim with no plugin of its own, so
+a machine whose editor arrives with a `selvage` installed cannot answer for the checkout.
 
 `nix flake check` runs `typecheck`, the companion suite and the thirteen files under `test/lua/`,
 each in its own Neovim, with no network and no editor session, and then the `plugin` check, which is
@@ -24,7 +25,7 @@ the only one that starts Neovim against the built package rather than a checkout
 `packages.<system>.default` is, on the runtime path of the wrapped Neovim that
 `packages.<system>.neovim-selvage` is, with the real companion started from it. `dry-run-gating` is
 the fourth: it reads `.github/workflows` back and refuses a workflow that declares a `dry_run` input
-and leaves a step below its plan step without a condition that excludes a dry run: the defect
+and leaves a step below its plan step without a condition that excludes a dry run — the defect
 `actionlint` cannot see, because it is the condition a step does not carry. `ci.yml` runs the same
 two files, with pip's PyYAML. The two-instance proof is not one of them: it needs a `selvaged` from
 the sibling `reference_server` checkout, which a sandboxed build cannot see, so `SELVAGE_SELVAGED`
@@ -35,11 +36,11 @@ is the seam. `nix run .#e2e` runs that proof with the flake's Node and Neovim an
 SELVAGE_SELVAGED=/path/to/reference_server/target/debug/selvaged nix run .#e2e
 ```
 
-The two-instance proof (`scripts/e2e/run-two-instance.sh`, or `nix run .#e2e`) needs a built
-`selvaged`, and finds one through `SELVAGE_SELVAGED` when that is set and otherwise under
-`../reference_server/target/{debug,release}`, a path relative to this checkout. From a git
-worktree under `.worktrees/` that sibling does not exist, so point it at the main checkout's
-binary:
+The two-instance proof ([`scripts/e2e/run-two-instance.sh`](../scripts/e2e/run-two-instance.sh), or
+`nix run .#e2e`) needs a built `selvaged`, and finds one through `SELVAGE_SELVAGED` when that is set
+and otherwise under `../reference_server/target/{debug,release}`, a path relative to this checkout.
+From a git worktree under `.worktrees/` that sibling does not exist, so point it at the main
+checkout's binary:
 
 ```
 SELVAGE_SELVAGED=/path/to/reference_server/target/debug/selvaged scripts/e2e/run-two-instance.sh
@@ -84,6 +85,6 @@ and the other joining the link it hands on. It proves what a session is: the pag
 edit made in either window ends up in both, the host's working copy on disk holds the guest's own
 edit, and the companion's trace of that run holds the invite with its fragment redacted out. It also
 opens a granted path the host's own window never opened, so the text can only be the host's working
-copy read on the guest's hold, and (unless `SELVAGE_E2E_RECONNECT=0`) cuts the guest's socket and
+copy read on the guest's hold, and — unless `SELVAGE_E2E_RECONNECT=0` — cuts the guest's socket and
 checks that both windows re-converge once it has re-established. It is not part of `npm test` or CI,
 because it needs a `nvim` and a built `selvaged`.
