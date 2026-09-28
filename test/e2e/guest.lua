@@ -151,7 +151,7 @@ if harness.control_file ~= nil then
     'the orchestrator to signal the network blip is over',
     harness.reconnect_deadline_ms,
     function()
-      if not saw_reconnecting and harness.row():find('Selvage: reconnecting…', 1, true) ~= nil then
+      if not saw_reconnecting and harness.row():find('Reconnecting…', 1, true) ~= nil then
         saw_reconnecting = true
         harness.log('the window said the connection was being re-established')
       end
@@ -165,7 +165,8 @@ if harness.control_file ~= nil then
     harness.fail('the dropped socket was never said on the window; the reconnect was invisible')
   end
   harness.wait('the window to name the session again after the blip', harness.reconnect_deadline_ms, function()
-    return harness.row():find('Selvage: guest — ', 1, true) ~= nil
+    local row = harness.row()
+    return row:find('’s session', 1, true) ~= nil and row:find('Reconnecting…', 1, true) == nil
   end, function()
     return 'the window holds ' .. vim.inspect(harness.row())
   end)
@@ -190,9 +191,21 @@ if harness.control_file ~= nil then
 end
 
 -- The host waits for this before it leaves: a host that goes takes the room with it, and the
--- phases above are this side's to finish.
+-- phases above are this side's to finish. Its leave closes the room, so this window hears at once
+-- that the host ended it, well inside the host's away window, and is told where its copy is kept.
+local heard = {}
+local notify = vim.notify
+vim.notify = function(message, ...)
+  heard[#heard + 1] = message
+  return notify(message, ...)
+end
 harness.write_file(vim.env.SELVAGE_E2E_GUEST_DONE_FILE, 'go')
 
-selvage.leave()
-vim.wait(500)
+harness.wait('the room to end when the host leaves', harness.deadline_ms, function()
+  return selvage.session().status == 'idle'
+end, function()
+  return 'the window heard ' .. vim.inspect(heard)
+end)
+harness.record('ended', heard[#heard] or '')
+harness.write_file(vim.env.SELVAGE_E2E_GUEST_ENDED_FILE, 'heard')
 harness.done()

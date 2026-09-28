@@ -144,5 +144,9 @@ harness.wait_for_file(
 )
 
 selvage.leave()
-vim.wait(500)
+-- The window stays until the guest has heard the room end: an editor that quit at once would take
+-- its companion down before the closing went out.
+vim.wait(harness.deadline_ms, function()
+  return harness.read_file(vim.env.SELVAGE_E2E_GUEST_ENDED_FILE) ~= nil
+end, 50)
 harness.done()

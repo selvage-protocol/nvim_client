@@ -27,7 +27,7 @@ import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { enumerateGrant } from '../companion/grant.ts';
-import { Companion, realEngines } from '../companion/session.ts';
+import { CLOSING_WAIT_MS, Companion, realEngines } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/index.ts';
 
@@ -386,9 +386,12 @@ test("a joining client is told the room's peers the handshake carried", async ()
   const reports = it.sent
     .filter((notification) => notification.type === 'report')
     .map((notification) => notification.report as { kind: string });
+  const report = reports.find((report) => report.kind === 'peers') as
+    | { peers: Array<PeerInfo & { roster: string }> }
+    | undefined;
   assert.deepEqual(
-    reports.find((report) => report.kind === 'peers'),
-    { kind: 'peers', peers },
+    report?.peers.map(({ peer_id, display_name, role }) => ({ peer_id, display_name, role })),
+    peers,
     'who is in the room arrives with the rest of the handshake, not only when someone moves',
   );
 });
@@ -437,7 +440,14 @@ test('a room that is gone ends the session', async () => {
   assert.deepEqual(
     it.sent.slice(before),
     [
-      { type: 'report', report: { kind: 'roomGone', reason: 'host did not return' } },
+      {
+        type: 'report',
+        report: {
+          kind: 'roomGone',
+          reason: 'host did not return',
+          sentence: 'The session ended (host did not return).',
+        },
+      },
       { type: 'status', state: 'idle' },
     ],
     'the reason reaches the front-end, and then the session is over rather than only reported',
@@ -945,6 +955,29 @@ test('a mid-session rename reaches the engine and moves no document', async () =
   );
 });
 
+test("a host's room is told with its own seat and the folder it shares", async () => {
+  const it = harness('host', [], [{ peer_id: 'p-bob', display_name: 'Bob', role: 'guest' }]);
+  const root = mkdtempSync(join(SCRATCH, 'named-'));
+  try {
+    await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+    const rooms = () =>
+      it.sent.flatMap((notification) =>
+        notification.type === 'report' && (notification.report as { kind: string }).kind === 'peers'
+          ? [notification.report as { self?: { roster: string; colour: string }; identity: string }]
+          : [],
+      );
+    assert.equal(rooms().at(-1)?.self?.colour, '#cba6f7');
+    assert.equal(rooms().at(-1)?.identity, `Sharing “${root.split('/').at(-1)}”`);
+
+    await it.companion.handle({ type: 'rename', displayName: 'Ada' });
+    await settle();
+    assert.equal(rooms().at(-1)?.self?.roster, 'Ada', 'the new name is on the roster the front-end draws');
+  } finally {
+    await it.companion.leave();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a refused rename is reported and leaves the session running', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
@@ -991,6 +1024,41 @@ test('leaving disconnects and forgets the documents', async () => {
   it.engine.remote('notes.txt', 'changed\n');
   await settle();
   assert.equal(it.sent.length, before);
+});
+
+test("a host's leave closes the room before it disconnects", async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await it.companion.handle({ type: 'leave' });
+  assert.deepEqual(it.engine.endings, ['closeRoom', 'disconnect'], 'every guest hears the room end at once');
+  assert.equal(it.sent.at(-1)?.type, 'status');
+});
+
+test('a closing that never answers holds the leave for a second at most', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  it.engine.closingStalls = true;
+  const started = Date.now();
+  const left = await Promise.race([
+    it.companion.handle({ type: 'leave' }).then(() => true),
+    delay(CLOSING_WAIT_MS + 800).then(() => false),
+  ]);
+  assert.equal(left, true, 'the leave finished inside the two seconds the front-end waits');
+  assert.ok(Date.now() - started >= CLOSING_WAIT_MS - 50, 'after giving the closing its second');
+  assert.deepEqual(it.engine.endings, ['closeRoom', 'disconnect']);
+});
+
+test('the pipe closing or the room ending disconnects without closing the room', async () => {
+  const piped = harness('host');
+  await piped.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  await piped.companion.leave();
+  assert.deepEqual(piped.engine.endings, ['disconnect'], 'a host whose editor went can still come back');
+
+  const gone = harness('host');
+  await gone.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  gone.engine.emit({ type: 'roomGone', reason: 'host did not return' });
+  await until('the session to be given up', () => gone.engine.disconnected);
+  assert.deepEqual(gone.engine.endings, ['disconnect']);
 });
 
 test('the line reader reassembles a message split across chunks', () => {

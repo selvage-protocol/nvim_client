@@ -14,6 +14,20 @@ local uv = vim.uv or vim.loop
 
 local M = {}
 
+--- The fixed words the companion sends once as it starts (`words` in `companion/room.ts`): the
+--- web client's own, so this client says the same sentence as the others by construction.
+local words = nil
+
+--- The leave question's own words until the companion's arrive, the same ones it sends: a host is
+--- never let go without it.
+local LEAVE_WORDS = {
+  leave = {
+    question = 'Leaving ends the room for everyone and stops the invite link.',
+    confirm = 'Leave anyway',
+    cancel = 'Cancel',
+  },
+}
+
 local state = {
   process = nil,
   status = 'idle',
@@ -113,15 +127,18 @@ local state = {
   --- Whether the caret is being placed by the follow itself. Neovim gives no reason for a cursor
   --- change, so the follow's own landing is what the move handler must not read as the user's.
   applying_follow = false,
-  --- The host's absence, while the room waits out its grace: the name to say and the deadline the
-  --- countdown is derived from. Nil while the host is present.
+  --- The host's absence, while the room waits out its grace: `line` is what the session bar reads,
+  --- counted down by the companion once a second. Nil while the host is present.
   host_away = nil,
-  --- The repeating timer that redraws the host-away countdown, or nil when none is running.
-  host_away_timer = nil,
-  --- The display name of the room's host, remembered from a peers report so the sentence that says
-  --- they left can name them: `host.detached` carries no name, and `peer.left` has already removed
-  --- them from the room by the time it arrives.
-  host_name = nil,
+  --- This connection's own seat as the companion sent it: `peer_id`, `display_name`, `role`,
+  --- `roster`, `initials` and `colour`, the room's peers carrying the same.
+  self_seat = nil,
+  --- What the session is called at the start of the bar: the folder the host shares, or whose
+  --- session a guest is in.
+  identity = nil,
+  --- Whether the invite control reads `Copied`, and the timer that turns it back.
+  copied = false,
+  copied_timer = nil,
   --- Whether the session highlight is set for the current colorscheme. A colorscheme runs
   --- `highlight clear`, which takes it, so the flag is dropped there and the group is made again.
   session_painted = false,
@@ -247,21 +264,6 @@ end
 --- deadlines are named in and the one the other client shows.
 local function seconds(ms)
   return math.max(0, math.floor((tonumber(ms) or 0) / 1000 + 0.5))
-end
-
---- The whole seconds left before `deadline`, rounded up: a deadline twelve and a half seconds away
---- still has thirteen seconds to run and reads so, and a passed one reads zero rather than a
---- negative count. Derived from the deadline on every read, so the number a person sees is the
---- room's clock rather than a value printed once when the countdown started.
----
---- @param deadline number a `uv.now()` millisecond timestamp
---- @return integer
-local function until_seconds(deadline)
-  local left = (tonumber(deadline) or 0) - uv.now()
-  if left <= 0 then
-    return 0
-  end
-  return math.ceil(left / 1000)
 end
 
 --- How long after the first caret event a selection reaches the companion.
@@ -418,6 +420,14 @@ end
 --- draw that reaches every window — a row names no peer, and that is the frame it has to survive.
 --- Declared here so the draw can call it; assigned where the row is drawn.
 local refresh_indicators
+
+--- Draws the room's panel again, when it has been opened: it shows what the row shows and more.
+local function refresh_panel()
+  local panel = package.loaded['selvage.panel']
+  if panel ~= nil then
+    panel.refresh()
+  end
+end
 
 --- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
 --- (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is `{ [room_path] = { { initials,
@@ -586,6 +596,9 @@ function M.peers()
     peers[#peers + 1] = {
       peerId = peer.peer_id,
       label = name ~= '' and name or tostring(peer.peer_id),
+      roster = peer.roster,
+      initials = peer.initials,
+      seat = peer.colour,
       role = peer.role,
       path = mine and mine.path or nil,
       sign = mine and mine.sign or nil,
@@ -603,37 +616,13 @@ function M.peers()
   return peers
 end
 
---- Lists the session's participants: each sign beside the whole name it stands for, in the
---- colour both are drawn in. Echoed rather than notified, because a notification provider may
---- render a message as plain text and the colour is the point. A peer this client holds no
---- document for has no sign and no colour, and is listed by name and role alone.
+--- Opens the room's panel: everyone in it, then the files the room offers (`selvage.panel`).
 function M.list_peers()
   if not in_session() then
     notify('join a session first.', vim.log.levels.WARN)
     return
   end
-  local peers = M.peers()
-  if #peers == 0 then
-    notify('no other participants yet.', vim.log.levels.WARN)
-    return
-  end
-  local chunks = {}
-  for _, peer in ipairs(peers) do
-    if #chunks > 0 then
-      chunks[#chunks + 1] = { '\n' }
-    end
-    if peer.sign ~= nil then
-      chunks[#chunks + 1] = { peer.sign, peer.highlight }
-    end
-    chunks[#chunks + 1] = {
-      ('  %s  (%s, %s)'):format(
-        peer.label,
-        tostring(peer.role or 'participant'),
-        tostring(peer.path or 'not in a document')
-      ),
-    }
-  end
-  api.nvim_echo(chunks, true, {})
+  require('selvage.panel').open()
 end
 
 --- The shared document whose buffer is `bufnr`, or nil when this session does not share it.
@@ -714,9 +703,10 @@ end
 
 --- Publishes where the caret is now, or clears it when the user is not in a shared document.
 --- The state is read at flush time, so a burst of movement costs one look and one message.
+--- Looking at the room's panel leaves the caret where it was, as the web's sidebar does.
 local function publish_selection()
   state.selection_armed = false
-  if state.process == nil then
+  if state.process == nil or vim.bo.filetype == 'selvage' then
     return
   end
   local document = current_document()
@@ -810,9 +800,10 @@ end
 
 --- Says, once per buffer, that a buffer with no file is not the room's to share. Hosting from
 --- an untitled buffer and typing is the newcomer's silence: the room never hears it, and
---- nothing else here says so.
+--- nothing else here says so. A buffer that was never meant to be a file, such as help or the
+--- room's own panel, is not one a person types into for the room, so it is left unsaid.
 local function refuse_unfiled(bufnr)
-  if state.unfiled[bufnr] ~= nil then
+  if state.unfiled[bufnr] ~= nil or vim.bo[bufnr].buftype ~= '' then
     return
   end
   local root = state.root
@@ -1057,7 +1048,7 @@ local function share(bufnr, path)
     -- place. A remote edit never reaches this closure — `Document:apply` writes the buffer
     -- under its own flag and sends nothing — so only an edit made here ends one.
     if message.type == 'change' and state.following ~= nil then
-      end_follow('stopped')
+      end_follow('typed')
     end
     state.process:send(message)
   end)
@@ -1211,12 +1202,26 @@ local function share_current()
   end
 end
 
---- Puts a buffer in the window the user is looking at.
+--- Whether a window is the room's panel, which is somewhere to look at the room from and never
+--- holds a file.
+local function in_panel(win)
+  return vim.bo[api.nvim_win_get_buf(win or 0)].filetype == 'selvage'
+end
+
+--- Puts a buffer in the window the user is looking at, or while that is the room's panel, in the
+--- window beside it the panel acts in. Answers the window, or nil when it could not.
 local function show(bufnr)
   if bufnr == nil or not api.nvim_buf_is_valid(bufnr) then
-    return false
+    return nil
   end
-  return pcall(api.nvim_win_set_buf, 0, bufnr)
+  local win = api.nvim_get_current_win()
+  if in_panel(win) then
+    win = require('selvage.panel').target_window()
+  end
+  if not pcall(api.nvim_win_set_buf, win, bufnr) then
+    return nil
+  end
+  return win
 end
 
 --- The room path a user's words name: the room path, its `selvage://` buffer name, its file in
@@ -1263,11 +1268,11 @@ end
 local function reveal(path)
   local document = state.documents[path]
   if document ~= nil then
-    return show(document.bufnr)
+    return show(document.bufnr) ~= nil
   end
   local bufnr = guest_buffer(path)
   share(bufnr, path)
-  return show(bufnr)
+  return show(bufnr) ~= nil
 end
 
 local function choose(paths)
@@ -1739,18 +1744,29 @@ local function land(peer_id)
       return false, 'missing'
     end
   end
-  if not show(document.bufnr) then
+  local win = show(document.bufnr)
+  if win == nil then
     return false, 'missing'
   end
   local row, col = document:position(cursor.head)
   -- The follow's own placement is not a move the user made: Neovim reports no reason for a cursor
   -- change, so the flag is what tells the move handler this caret is the follow's, not theirs.
   state.applying_follow = true
-  local placed = pcall(api.nvim_win_set_cursor, 0, { row + 1, col })
+  local placed = pcall(api.nvim_win_set_cursor, win, { row + 1, col })
   state.applying_follow = false
   if not placed then
     return false, 'unresolvable'
   end
+  -- An editor with a UI fires `CursorMoved` for this placement later, from its main loop, when the
+  -- flag above is long down: the place it landed is what tells that event from a move of the
+  -- person's own.
+  local landed = api.nvim_win_get_cursor(win)
+  state.follow_landed = {
+    win = win,
+    buf = document.bufnr,
+    row = landed[1],
+    col = landed[2],
+  }
   -- The landing moved the caret, so the room hears it through the coalesced publish
   -- rather than through whatever event the editor may or may not fire for a programmatic
   -- move: headless Neovim fires none for anything, and the interval drops the duplicate
@@ -1767,21 +1783,29 @@ local function row_text(text)
   return tostring(text or ''):gsub('%%', '%%%%')
 end
 
---- The indicator's own row for `label`: the peer's name and the way to stop, clickable
---- where the editor takes a mouse. The `%0@...@ ... %X` label is what makes a click stop
---- the follow, through the stop command's own handler; a click needs `'mouse'` set, while
---- the command stops the follow regardless.
-local function indicator_text(label)
-  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s — click or :SelvageStopFollowing to stop %%X%%*'):format(row_text(label))
+--- The marks the bar draws beside a face, each one cell wide whatever `ambiwidth` says: the host's
+--- crown, the face this window follows, and the way to stop following.
+local CROWN = '♛'
+local FOLLOWED_MARK = '◉'
+local STOP_MARK = '✕'
+
+--- The follow's chip: the peer's name and the way to stop, clickable where the editor takes a
+--- mouse. The `%0@...@ ... %X` label is what makes a click stop the follow, through the stop
+--- command's own handler; a click needs `'mouse'` set, while the command stops the follow
+--- regardless.
+local function follow_chip(label)
+  return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s %s %%X%%*'):format(row_text(label), STOP_MARK)
 end
 
--- What the indicator's click label calls: a Vim function by name. A Lua `_G` function is
--- invisible to that lookup (`exists('*name')` is 0 for one), so this thin wrapper exists
--- to hand the click to the stop command's handler. Defined once, when the module loads:
--- with no follow standing the handler only says there is nothing to stop, and no clickable
--- row stands then anyway.
+-- What the bar's click labels call: a Vim function by name. A Lua `_G` function is invisible to
+-- that lookup (`exists('*name')` is 0 for one), so these thin wrappers hand the click to the
+-- commands' own handlers. Defined once, when the module loads: with no session the handlers only
+-- say there is nothing to act on, and no clickable row stands then anyway.
 vim.cmd([[function! SelvageStopFollowing(minwid, clicks, button, mods) abort
   call v:lua.require('selvage').stop_following()
+endfunction
+function! SelvageCopyInvite(minwid, clicks, button, mods) abort
+  call v:lua.require('selvage').copy_invite(v:true)
 endfunction]])
 
 --- Which saved row a window's buffer reads and writes: the window and the buffer together,
@@ -1813,11 +1837,21 @@ end
 local SESSION_HIGHLIGHT = 'SelvageSession'
 local SESSION_FRAME = '%#' .. SESSION_HIGHLIGHT .. '#'
 
---- The sentence a room waiting out its host's absence says, with the leaving host's name and the
---- whole seconds left before the server's deadline. One home: the row and the one announcement
---- both read it, so the countdown a person watches and the notice they were given agree. The
---- deadline is the server's (`host.detached`); nothing here can move it.
-local HOST_DISCONNECTED = 'Host disconnected. %s left — if they return within %ds the session continues, otherwise this room closes and your local copy is kept.'
+--- Sets the bar's own groups. Linked with `default` where a colorscheme may style them; your own
+--- face is your seat's colour, so it is set again when that moves.
+local function paint_bar()
+  local you = state.self_seat ~= nil and tostring(state.self_seat.colour or '#888888') or '#888888'
+  if state.session_painted == you then
+    return
+  end
+  state.session_painted = you
+  pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
+  pcall(api.nvim_set_hl, 0, 'SelvageWarn', { link = 'WarningMsg', default = true })
+  pcall(api.nvim_set_hl, 0, 'SelvageInvite', { link = 'TabLineSel', default = true })
+  pcall(api.nvim_set_hl, 0, 'SelvageCrown', { fg = '#f9e2af', bold = true, default = true })
+  pcall(api.nvim_set_hl, 0, 'SelvageFollowed', { fg = '#cba6f7', bold = true, default = true })
+  pcall(api.nvim_set_hl, 0, 'SelvageYou', { fg = '#000000', bg = you, bold = true, underline = true })
+end
 
 --- How the session row is shown: `always` for `true`, `'always'` and the default — the row stands
 --- for as long as the session does, the way the VS Code client's status bar does, so whoever has
@@ -1834,35 +1868,26 @@ local function indicator_mode()
   return 'always'
 end
 
---- The session's own words: which side of the session the person is on, how many are in the
---- room, and whether the connection is being re-established — the words the VS Code client's own
---- status bar carries, so a person reading either client reads the session the same way. Nil when
---- there is no session to speak of, and nil while the row is turned off, which is also what
---- silences a statusline built on the same words.
----
---- These are the three facts a window otherwise says nothing about: hosting is one notice,
---- and after it the session, its people and its liveness are only in `:messages`.
+--- The session's own words, the way the web page's session bar opens: what the session is called,
+--- or while the host is away, who left and how long the room has; and whether the connection is
+--- being re-established. Nil when there is no session to speak of, and nil while the row is turned
+--- off, which is also what silences a statusline built on the same words.
 local function session_words()
   if indicator_mode() == 'never' then
     return nil
   end
-  if state.reconnecting then
-    return 'Selvage: reconnecting…'
-  end
   if state.status == 'connecting' then
-    return 'Selvage: connecting…'
+    return 'Connecting…'
   end
-  if state.host_away ~= nil then
-    return 'Selvage: ' .. HOST_DISCONNECTED:format(state.host_away.name, until_seconds(state.host_away.deadline))
+  if not in_session() then
+    return nil
   end
-  if in_session() then
-    local here = #state.room_peers + 1
-    return ('Selvage: %s — %s'):format(
-      state.status == 'hosting' and 'hosting' or 'guest',
-      here == 1 and '1 person in the room' or ('%d people in the room'):format(here)
-    )
+  local said = state.host_away ~= nil and state.host_away.line or state.identity or ''
+  if state.reconnecting then
+    local reconnecting = words ~= nil and words.reconnecting or 'Reconnecting…'
+    said = said == '' and reconnecting or (said .. ' · ' .. reconnecting)
   end
-  return nil
+  return said
 end
 
 --- Whether a buffer stands for a room file whose content this session has not fetched: the
@@ -1895,51 +1920,140 @@ local function row_wanted(bufnr)
   if state.reconnecting or state.status == 'connecting' or state.host_away ~= nil then
     return true
   end
-  if unfetched_buffer(bufnr) then
+  if state.following ~= nil or unfetched_buffer(bufnr) then
     return true
   end
   return mode == 'always' and session_words() ~= nil
 end
 
---- The session's own row for a buffer: the words the VS Code client's status bar carries, and the
---- mark a file holding no fetched content wears. Nil when the buffer has no row to wear —
---- `row_wanted` is that question.
----
---- The peers in the file are not named here, which is the one thing this row does not carry: a
---- sign is two cells and cannot spell anyone, so whose caret that is reads from the gutter's own
---- colour, from `vim.g.selvage_file_peers`, and from `:SelvagePeers`, which lists each of them
---- with the document they are in.
-local function session_text(bufnr)
+--- Everyone in the room in the order the web page draws their faces: the host first, then your
+--- own face, then the others in the order the room lists them.
+local function seat_order()
+  local own = state.self_seat
+  local host = own ~= nil and own.role == 'host' and own or nil
+  for _, peer in ipairs(state.room_peers) do
+    if host == nil and peer.role == 'host' then
+      host = peer
+    end
+  end
+  local seats = { host }
+  if own ~= nil and own ~= host then
+    seats[#seats + 1] = own
+  end
+  for _, peer in ipairs(state.room_peers) do
+    if peer ~= host then
+      seats[#seats + 1] = peer
+    end
+  end
+  return seats
+end
+
+--- The faces at the right of the bar: each person's initials in their seat's colour, the host's
+--- crowned, your own underlined, and the one this window follows marked.
+local function faces_text()
+  local own = state.self_seat ~= nil and state.self_seat.peer_id or nil
+  local followed = state.following ~= nil and state.following.peerId or nil
+  local faces = {}
+  for _, seat in ipairs(seat_order()) do
+    local face = ''
+    if seat.role == 'host' then
+      face = '%#SelvageCrown#' .. CROWN
+    end
+    if seat.peer_id == followed then
+      face = face .. '%#SelvageFollowed#' .. FOLLOWED_MARK
+    end
+    local group = seat.peer_id == own and 'SelvageYou'
+      or peer_highlight({ peerId = seat.peer_id, colour = seat.colour })
+    local initials = seat.initials or peer_sign(seat.display_name)
+    faces[#faces + 1] = ('%s%%#%s# %s %%*'):format(face, group, row_text(initials))
+  end
+  return table.concat(faces, ' ')
+end
+
+--- The room as `:SelvagePeers` draws it: everyone in the order of the faces, each with the
+--- highlight their face wears and the file they are in, and the files the room offers. Your own
+--- file is the one `win` shows, the current window by default.
+function M.room(win)
+  paint_bar()
+  local own = state.self_seat ~= nil and state.self_seat.peer_id or nil
+  local followed = state.following ~= nil and state.following.peerId or nil
+  local where = {}
+  for _, peer in ipairs(state.peers) do
+    where[peer.peerId] = peer.path
+  end
+  local here = document_for_buf(api.nvim_win_get_buf(win or 0))
+  local people = {}
+  for _, seat in ipairs(seat_order()) do
+    local you = seat.peer_id == own
+    local label = tostring(seat.display_name or '')
+    label = label ~= '' and label or tostring(seat.peer_id)
+    people[#people + 1] = {
+      peerId = seat.peer_id,
+      label = label,
+      name = seat.roster or label,
+      initials = seat.initials or peer_sign(label),
+      host = seat.role == 'host',
+      you = you,
+      followed = seat.peer_id == followed,
+      highlight = you and 'SelvageYou' or peer_highlight({ peerId = seat.peer_id, colour = seat.colour }),
+      path = you and (here and here.path or nil) or where[seat.peer_id],
+    }
+  end
+  return {
+    role = state.role,
+    root = state.root,
+    here = here and here.path or nil,
+    files = M.offered(),
+    people = people,
+  }
+end
+
+--- The bar a buffer wears, the web page's session bar in a winbar: the session's name, the invite
+--- control, the follow, and the faces at the right. Under `never` a follow still shows its own
+--- chip, because it is the way to stop. Nil when the buffer has no row to wear.
+local function indicator_row(bufnr)
+  if vim.bo[bufnr].filetype == 'selvage' then
+    return nil
+  end
+  local mode = indicator_mode()
+  if mode == 'never' then
+    if state.following == nil then
+      return nil
+    end
+    return SESSION_FRAME .. ' ' .. follow_chip(state.following.label)
+  end
   if not row_wanted(bufnr) then
     return nil
   end
-  if not state.session_painted then
-    pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
-    state.session_painted = true
+  paint_bar()
+  local parts = {}
+  if state.host_away ~= nil then
+    parts[#parts + 1] = '%#SelvageWarn#' .. row_text(state.host_away.line) .. '%*'
+  elseif state.status == 'connecting' then
+    parts[#parts + 1] = 'Connecting…'
+  elseif state.identity ~= nil then
+    parts[#parts + 1] = row_text(state.identity)
   end
-  return ('%s%s%s%%*'):format(
-    SESSION_FRAME,
-    row_text(session_words()),
-    unfetched_buffer(bufnr) and ' [not fetched]' or ''
-  )
-end
-
---- The row a window's buffer should wear: the follow's while one stands, the session's
---- otherwise. A follow is what the person asked to watch and changes with every frame; the
---- session's words are standing background underneath it.
-local function indicator_row(bufnr)
+  if state.reconnecting then
+    parts[#parts + 1] = '%#SelvageWarn#' .. row_text(words ~= nil and words.reconnecting or 'Reconnecting…') .. '%*'
+  end
+  if in_session() and state.invite ~= nil and words ~= nil then
+    local label = state.copied and words.copied or words.copyInvite
+    parts[#parts + 1] = ('%%#SelvageInvite#%%0@SelvageCopyInvite@ %s %%X%%*'):format(row_text(label))
+  end
   if state.following ~= nil then
-    return indicator_text(state.following.label)
+    parts[#parts + 1] = follow_chip(state.following.label)
   end
-  return session_text(bufnr)
+  if unfetched_buffer(bufnr) then
+    parts[#parts + 1] = SESSION_FRAME .. '[not fetched]%*'
+  end
+  return SESSION_FRAME .. ' ' .. table.concat(parts, ' ') .. '%=' .. faces_text() .. ' '
 end
 
---- Whether `text` is one of the indicators' own rows: only they write those framings, so a
---- buffer showing one with no row saved for it is residue rather than someone's own row.
+--- Whether `text` is one of the indicators' own rows: only they write that framing, so a buffer
+--- showing one with no row saved for it is residue rather than someone's own row.
 local function is_indicator_row(text)
-  text = tostring(text)
-  return text:find('%#SelvageFollow#%0@SelvageStopFollowing@ Following ', 1, true) == 1
-    or text:find(SESSION_FRAME, 1, true) == 1
+  return tostring(text):find(SESSION_FRAME, 1, true) == 1
 end
 
 --- Puts back the winbar rows the indicators replaced, wherever they stand: every window
@@ -1959,7 +2073,7 @@ local function restore_indicators()
         if not floating(win) then
           pcall(api.nvim_set_option_value, 'winbar', prev, { win = win })
         end
-      elseif state.following == nil then
+      else
         local ok, current = pcall(api.nvim_get_option_value, 'winbar', { win = win })
         if ok and is_indicator_row(current) then
           pcall(api.nvim_set_option_value, 'winbar', '', { win = win })
@@ -2010,20 +2124,15 @@ local function show_indicator(win)
 end
 
 --- Draws the wanted row again on every window: what a session transition needs, and what a
---- room whose membership moved needs — the session's words are the same in every window, and
---- each window keeps its own saved row.
----
---- While a follow stands nothing moves: the row is the follow's, the membership report does not
---- change its words, and the follow's own paths are what re-label it.
+--- room whose membership moved needs. The bar is the same in every window, and each window keeps
+--- its own saved row.
 refresh_indicators = function()
-  if state.following ~= nil then
-    return
-  end
   for _, win in ipairs(api.nvim_list_wins()) do
     if api.nvim_win_is_valid(win) then
       show_indicator(win)
     end
   end
+  refresh_panel()
 end
 --- Draws the row again in the windows showing `bufnr`: what one buffer holds is the one
 --- thing the row says that changes without a session event — the mark a file wears while the
@@ -2036,23 +2145,6 @@ local function refresh_indicator_for(bufnr)
   end
 end
 
---- Stops the timer that redraws the host-away countdown, if one is running.
-local function stop_host_away_timer()
-  if state.host_away_timer ~= nil then
-    pcall(vim.fn.timer_stop, state.host_away_timer)
-    state.host_away_timer = nil
-  end
-end
-
---- Redraws the host-away countdown once a second while it stands. The number is derived from the
---- deadline on each read, so this is what makes it tick rather than a value stored once.
-local function start_host_away_timer()
-  stop_host_away_timer()
-  state.host_away_timer = vim.fn.timer_start(1000, function()
-    refresh_indicators()
-  end, { ['repeat'] = -1 })
-end
-
 --- Shows the follow in the window, in their own colour. Called wherever the follow moves or
 --- re-labels, so the row follows it.
 local function set_indicator()
@@ -2060,13 +2152,13 @@ local function set_indicator()
   if following == nil then
     return
   end
-  show_indicator()
   pcall(api.nvim_set_hl, 0, 'SelvageFollow', {
     fg = '#000000',
     bg = following.colour or '#888888',
     bold = true,
   })
   vim.g.selvage_following = following.peerId
+  refresh_indicators()
 end
 
 --- Takes the indicators down, wherever they stand.
@@ -2121,6 +2213,16 @@ local function forget_winbar_stash(event)
   end
 end
 
+--- Whether the caret is where the follow last put it, in the window and buffer it put it in.
+local function still_landed()
+  local landed = state.follow_landed
+  if landed == nil or api.nvim_get_current_win() ~= landed.win or api.nvim_get_current_buf() ~= landed.buf then
+    return false
+  end
+  local here = api.nvim_win_get_cursor(0)
+  return here[1] == landed.row and here[2] == landed.col
+end
+
 --- Watches the window for the indicators: the switches that swap which buffer's row they
 --- show are the ones that save and put back each buffer's own.
 local function watch_follow_window()
@@ -2135,7 +2237,8 @@ local function watch_follow_window()
   api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
     group = state.follow_group,
     callback = function()
-      if state.applying_follow or state.following == nil then
+      -- Looking at the room's panel is not a move away from the person followed.
+      if state.applying_follow or state.following == nil or still_landed() or in_panel() then
         return
       end
       end_follow('moved')
@@ -2151,26 +2254,31 @@ local function watch_follow_window()
   })
 end
 
---- Ends the follow, saying so as `why` asks: 'stopped' for the user and for an edit, 'left'
---- for a peer that went, and silence for the session going with it.
+--- Why a follow ended, in the web page's words, keyed by the reason `end_follow` is given.
+local FOLLOW_ENDED = { typed = 'typing', moved = 'moving', left = 'leaving', gone = 'fileGone' }
+
+--- Ends the follow, saying so as `why` asks: 'typed', 'moved', 'left' and 'gone' in the web
+--- page's words, and nothing for 'stopped', which the person did themselves, as the web does. A
+--- follow the session takes with it is 'silent' and leaves the row to the session's end.
 end_follow = function(why)
   local following = state.following
   if following == nil then
     return
   end
   state.following = nil
+  state.follow_landed = nil
   clear_indicator()
   -- The row is the window's, and the session's words are what stands on it with no follow:
   -- ending one puts the other back on every window, not only the one in front.
   if why ~= 'silent' then
     refresh_indicators()
   end
-  if why == 'stopped' then
-    notify(('stopped following %s.'):format(following.label))
-  elseif why == 'moved' then
-    notify(('Stopped following %s — you moved.'):format(following.label), vim.log.levels.WARN)
-  elseif why == 'left' then
-    notify(('%s left the room, so following stopped.'):format(following.label), vim.log.levels.WARN)
+  if why == 'silent' then
+    return
+  end
+  local ended = words ~= nil and FOLLOW_ENDED[why] ~= nil and words.followEnded[FOLLOW_ENDED[why]] or nil
+  if ended ~= nil then
+    notify(ended:format(following.label))
   end
 end
 
@@ -2275,6 +2383,8 @@ local function begin_follow(row)
   local ok, reason, err = land_follow()
   if not ok then
     state.following = previous
+    -- A window the landing attempt entered drew the bar with the refused follow on it.
+    refresh_indicators()
     if reason == 'open-failed' then
       local cursor = cursor_for(row.peerId)
       local path = cursor ~= nil and cursor.path or row.path
@@ -2509,16 +2619,16 @@ end
 function M.statusline()
   local following = state.following
   if following ~= nil then
-    return 'following ' .. tostring(following.label or '')
+    return 'Following ' .. tostring(following.label or '')
   end
-  local words = session_words()
-  if words == nil then
+  local said = session_words()
+  if said == nil then
     return ''
   end
   if unfetched_buffer(api.nvim_get_current_buf()) then
-    return words .. ' [not fetched]'
+    return said .. ' [not fetched]'
   end
-  return words
+  return said
 end
 
 
@@ -2853,6 +2963,15 @@ end
 ---
 --- @param paths string[] held paths
 local function drop_documents(paths)
+  if state.following ~= nil then
+    local row = peer_row(state.following.peerId)
+    for _, path in ipairs(paths) do
+      if row ~= nil and row.path == path then
+        end_follow('gone')
+        break
+      end
+    end
+  end
   local wiped = {}
   for _, path in ipairs(paths) do
     local document = state.documents[path]
@@ -2945,10 +3064,16 @@ local function reset(land, keep_mirror)
   -- back here rather than left for a window that may never be entered again.
   state.status = 'idle'
   state.reconnecting = false
-  stop_host_away_timer()
   state.host_away = nil
-  state.host_name = nil
+  state.self_seat = nil
+  state.identity = nil
+  if state.copied_timer ~= nil then
+    pcall(vim.fn.timer_stop, state.copied_timer)
+    state.copied_timer = nil
+  end
+  state.copied = false
   clear_indicator()
+  refresh_panel()
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
   clear_presence()
@@ -3306,15 +3431,15 @@ local function on_report(report)
     -- The room's own list of who is in it: everyone, not only the peers this client holds a
     -- document for and can draw a caret for.
     state.room_peers = report.peers or {}
-    -- The host's name is remembered here, while they are in the room: the detach frame names no
-    -- one, and the departure has already taken them out of this list by the time it arrives.
+    state.self_seat = type(report.self) == 'table' and report.self or nil
+    if type(report.identity) == 'string' then
+      state.identity = report.identity
+    end
     local host_present = false
     for _, peer in ipairs(state.room_peers) do
-      if peer.role == 'host' then
-        host_present = true
-        if type(peer.display_name) == 'string' and peer.display_name ~= '' then
-          state.host_name = peer.display_name
-        end
+      host_present = host_present or peer.role == 'host'
+      if peer.colour ~= nil then
+        peer_highlight({ peerId = peer.peer_id, colour = peer.colour })
       end
     end
     -- Membership is the all-clear as well as the departure. `host.attached` is the only frame
@@ -3322,7 +3447,6 @@ local function on_report(report)
     -- otherwise keep a countdown — and then a deadline that has already passed — standing for
     -- the rest of the session. A report that names the host means the host is here.
     if host_present and state.host_away ~= nil then
-      stop_host_away_timer()
       state.host_away = nil
     end
     -- The report is the room's own membership, so a peer it no longer names is gone even
@@ -3385,33 +3509,30 @@ local function on_report(report)
     -- it rather than leaving buffers, marks and a statusline behind for a room nobody is in.
     -- The window is part of that: a buffer still shown for the dead room reads as one that is
     -- still there, so the room's buffers are landed as well.
-    notify(('the room is gone (%s).'):format(tostring(report.reason)), vim.log.levels.WARN)
+    --
     -- The mirror is kept: it is a cache of the room, but whatever the person did in it during the
     -- grace is not in the room and has nowhere else to be recovered from, so the directory stays
-    -- and they are told where.
+    -- and they are told where, in the same notice.
+    local sentence = tostring(report.sentence or report.reason or '')
     local kept = reset(true, true)
     if kept ~= nil then
-      notify(('The room closed. Your copy is kept at %s.'):format(kept), vim.log.levels.WARN)
+      notify(('%s Your copy is kept at %s.'):format(sentence, kept), vim.log.levels.WARN)
+    else
+      notify(sentence, vim.log.levels.WARN)
     end
   elseif report.kind == 'hostDetached' then
-    -- The deadline is the server's: `grace_ms` is how long the room has before the host's absence
-    -- destroys it, and the countdown here is only an echo of it, redrawn from the deadline rather
-    -- than printed once. The name is the one remembered from membership, since this frame carries
-    -- none.
-    local name = state.host_name or 'the host'
-    state.host_away = {
-      name = name,
-      deadline = uv.now() + math.max(0, tonumber(report.graceMs) or 0),
-    }
-    notify((HOST_DISCONNECTED):format(name, seconds(report.graceMs)), vim.log.levels.WARN)
-    start_host_away_timer()
+    -- Said once; the bar keeps the countdown, which the companion ticks as `hostAway` reports.
+    state.host_away = { line = tostring(report.line or '') }
+    notify(tostring(report.sentence or ''), vim.log.levels.WARN)
     refresh_indicators()
+  elseif report.kind == 'hostAway' then
+    if state.host_away ~= nil then
+      state.host_away.line = tostring(report.line or '')
+      refresh_indicators()
+    end
   elseif report.kind == 'hostAttached' then
-    local name = tostring((report.peer or {}).display_name or state.host_name or 'the host')
-    state.host_name = name
-    stop_host_away_timer()
     state.host_away = nil
-    notify(('%s is back — the session continues.'):format(name))
+    notify(tostring(report.sentence or ''))
     refresh_indicators()
   elseif report.kind == 'sessionError' then
     -- The report's own sentence, and its code is not shown: a refusal the protocol named and
@@ -3547,6 +3668,10 @@ local function on_message(message)
       on_report(message.report)
     else
       notify('unreadable report from the companion.', vim.log.levels.WARN)
+    end
+  elseif message.type == 'words' then
+    if type(message.words) == 'table' then
+      words = message.words
     end
   elseif message.type == 'presence' then
     draw_presence(message.cursors)
@@ -3959,7 +4084,9 @@ local function confirm_leave(question, button)
     notify(question, vim.log.levels.WARN)
     return false
   end
-  return vim.fn.confirm(question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
+  local cancel = (words or LEAVE_WORDS).leave.cancel
+  -- Opened with a line break: a command line taller than one line drops a question that fits it.
+  return vim.fn.confirm('\n' .. question, ('&%s\n&%s'):format(button, cancel), 2, 'Warning') == 1
 end
 
 --- The box the first-run question and `:SelvageChangeServer`'s change both ask through: the
@@ -4373,11 +4500,25 @@ function M.join(invite)
   resolve_invite(with_invite)
 end
 
+--- Turns the bar's invite control to `Copied` for as long as the web page shows it.
+local function show_copied()
+  if state.copied_timer ~= nil then
+    pcall(vim.fn.timer_stop, state.copied_timer)
+  end
+  state.copied = true
+  refresh_indicators()
+  state.copied_timer = vim.fn.timer_start(tonumber(words ~= nil and words.copiedMs) or 1800, function()
+    state.copied_timer = nil
+    state.copied = false
+    refresh_indicators()
+  end)
+end
+
 --- Puts the invite on the clipboard and the unnamed register, and says where it is. A session
 --- that stands without a link to hand on is not a session that is absent: the sentence for the
 --- one says what was missing, and `host or join a room first` is left for the window that is
---- in no session at all.
-function M.copy_invite()
+--- in no session at all. From the bar the control itself says `Copied`, so nothing is notified.
+function M.copy_invite(from_bar)
   local handed, why = hand_on_invite()
   if handed == 'no-session' then
     notify('there is no invite link; host or join a room first.', vim.log.levels.WARN)
@@ -4389,6 +4530,10 @@ function M.copy_invite()
   end
   if handed == 'register' then
     notify(('the invite link could not be copied (%s).'):format(why), vim.log.levels.WARN)
+    return
+  end
+  if from_bar then
+    show_copied()
     return
   end
   notify('the invite link is on the clipboard.')
@@ -4403,6 +4548,14 @@ function M.leave()
   if not in_session() then
     notify('not in a session.', vim.log.levels.WARN)
     return
+  end
+  -- A host leaving ends the room for everyone in it, so the host is asked first, the way the web
+  -- page asks. A guest leaves at once, and so does a host with nobody there to answer.
+  if state.status == 'hosting' and can_prompt() then
+    local leave = (words or LEAVE_WORDS).leave
+    if not confirm_leave(leave.question, leave.confirm) then
+      return
+    end
   end
   local process = state.process
   state.process = nil

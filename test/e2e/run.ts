@@ -57,6 +57,8 @@ interface Outcome {
   granted?: { text: string; heldBeforeGuest?: boolean };
   /** The text both windows end on after the guest's socket was cut and came back. */
   phase2?: { text: string };
+  /** What the guest was told when the host left. */
+  ended?: { text: string };
 }
 
 /**
@@ -241,6 +243,7 @@ async function main(): Promise<void> {
   const grantedAckFile = resolve(RUN_DIR, 'granted-ack.txt');
   const phase2AckFile = resolve(RUN_DIR, 'phase2-ack.txt');
   const guestDoneFile = resolve(RUN_DIR, 'guest-done.txt');
+  const guestEndedFile = resolve(RUN_DIR, 'guest-ended.txt');
   const controlFile = RECONNECT ? resolve(RUN_DIR, 'blip-over.txt') : undefined;
   const hostResultFile = resolve(RUN_DIR, 'host-result.json');
   const guestResultFile = resolve(RUN_DIR, 'guest-result.json');
@@ -265,6 +268,7 @@ async function main(): Promise<void> {
     SELVAGE_E2E_GRANTED_ACK_FILE: grantedAckFile,
     SELVAGE_E2E_PHASE2_ACK_FILE: phase2AckFile,
     SELVAGE_E2E_GUEST_DONE_FILE: guestDoneFile,
+    SELVAGE_E2E_GUEST_ENDED_FILE: guestEndedFile,
     SELVAGE_E2E_DEADLINE_MS: String(DEADLINE_MS),
     SELVAGE_E2E_RECONNECT_DEADLINE_MS: String(RECONNECT_DEADLINE_MS),
     ...(controlFile === undefined ? {} : { SELVAGE_E2E_CONTROL_FILE: controlFile }),
@@ -428,6 +432,14 @@ async function main(): Promise<void> {
     log('the guest reconnected after its socket was cut, and both sides re-converged');
   }
 
+  // A host's leave is `§7.1`'s closing: the guest is told the host ended it, where waiting out the
+  // host's away window would have said the host was away too long.
+  const ended = guest.ended?.text ?? '';
+  if (!/^selvage: The host ended the session\. Your copy is kept at \S.*\.$/.test(ended)) {
+    throw new Error(`the guest was not told the host ended the session: ${JSON.stringify(ended)}`);
+  }
+  log('the host left, and the guest heard at once that the host ended the session');
+
   // `§5.1`: the fragment is the room key every frame is sealed under and the host's public key, and
   // a client **MUST NOT** log it. The host's companion ran with `SELVAGE_COMPANION_LOG` set to a
   // file in this run, so what is read here is the file a trace really is rather than one a test
@@ -452,8 +464,9 @@ async function main(): Promise<void> {
 
   log(
     'PASSED: two real Neovim instances minted and joined one room through a real server, converged'
-      + ' in both directions, a guest read a path the host never opened, and'
-      + (RECONNECT ? ' a guest whose socket was cut reconnected and re-converged' : ' no blip was made'),
+      + ' in both directions, a guest read a path the host never opened,'
+      + (RECONNECT ? ' a guest whose socket was cut reconnected and re-converged,' : ' no blip was made,')
+      + " and the host's leave ended the room for the guest at once",
   );
 }
 

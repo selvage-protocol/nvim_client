@@ -49,7 +49,7 @@ export interface ListingSource {
   replace(paths: readonly string[]): void;
 }
 
-/** The engine this companion drives, plus the four things it needs of its own. */
+/** The engine this companion drives, plus the things it needs of its own. */
 function adapter(engine: PeerEngine): CompanionEngine {
   return {
     session: () => engine.session(),
@@ -66,6 +66,7 @@ function adapter(engine: PeerEngine): CompanionEngine {
     on: (listener) => engine.on(listener),
     inviteUrl: () => engine.inviteUrl(),
     disconnect: () => engine.disconnect(),
+    closeRoom: () => engine.closeRoom(),
     rename: (name) => engine.rename(name),
     grant: (paths) => engine.grant(paths),
     grantedPaths: () => engine.grantedPaths(),

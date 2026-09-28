@@ -47,10 +47,21 @@ const GRANT_SETTLE_MS = 250;
  */
 const HANDSHAKE_GRANT_MS = 250;
 
+/**
+ * How long a host's leave waits for its closing to go out before it disconnects anyway. The
+ * front-end gives the process two seconds after `leave` to be gone, and this fits inside them.
+ */
+export const CLOSING_WAIT_MS = 1000;
+
 /** The engine, plus the members the lifecycle needs and the bridge does not. */
 export interface CompanionEngine extends Engine {
   inviteUrl(): string | undefined;
   disconnect(): Promise<void>;
+  /**
+   * `§7.1`'s closing, which ends the room for every guest at once. False when this connection is
+   * not the host.
+   */
+  closeRoom(): Promise<boolean>;
   /**
    * Changes this connection's display name (§5). The bridge's `Engine` slice has no use for it
    * — a name is not a document — so it is here, on the adapter's own extension of the seam.
@@ -206,7 +217,7 @@ export class Companion {
         break;
       }
       case 'leave': {
-        await this.leave();
+        await this.leave(true);
         break;
       }
       case 'rename': {
@@ -251,8 +262,12 @@ export class Companion {
     }
   }
 
-  /** Ends the session, if there is one. */
-  async leave(): Promise<void> {
+  /**
+   * Ends the session, if there is one. `closing` is the person leaving: a host's leave then closes
+   * the room, as the web page's does, where the room ending or the front-end going away only
+   * disconnects and leaves the host its window to come back.
+   */
+  async leave(closing = false): Promise<void> {
     this.bridge?.dispose();
     this.bridge = undefined;
     this.stopListening?.();
@@ -266,6 +281,9 @@ export class Companion {
     this.engine = undefined;
     this.editor.reset();
     if (engine !== undefined) {
+      if (closing) {
+        await closeWithin(engine, CLOSING_WAIT_MS);
+      }
       await engine.disconnect();
     }
     this.send({ type: 'status', state: 'idle' });
@@ -282,7 +300,11 @@ export class Companion {
     if (engine === undefined) {
       return;
     }
-    void engine.rename(displayName).catch((error: unknown) => {
+    void engine.rename(displayName).then(() => {
+      if (this.engine === engine) {
+        this.editor.renamed(displayName);
+      }
+    }, (error: unknown) => {
       this.send({
         type: 'report',
         report: {
@@ -593,7 +615,9 @@ export class Companion {
       type: 'report',
       report: { kind: 'documents', documents: session.documents },
     });
-    this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
+    // The seats are worked out by the editor host from this connection's own seat and the room's.
+    this.editor.seated(() => engine.session().peer, session.role === 'host' ? root : undefined);
+    this.editor.report({ kind: 'peers', peers: session.peers });
     // The room's shape is the host's to publish: the folder the session was started in is the
     // grant, read off the working copy as the session starts and read again whenever the folder
     // changes under it — a later change to which buffers are open is not a statement about the
@@ -903,4 +927,16 @@ function sameListing(left: readonly string[], right: readonly string[]): boolean
 /** A failure as a sentence: the message of an Error, or whatever was thrown instead. */
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Sends a host's closing, giving it `ms` to go; a guest's engine answers false at once. */
+async function closeWithin(engine: CompanionEngine, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    engine.closeRoom().catch(() => false),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  clearTimeout(timer);
 }

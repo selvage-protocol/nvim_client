@@ -111,7 +111,9 @@ local confirmation = 0
 local confirmations = 0
 vim.fn.confirm = function(text, choices, default, kind)
   confirmations = confirmations + 1
-  question = { text = text, choices = choices, default = default, kind = kind }
+  -- A question asked as its own first line is what a command line taller than one keeps on
+  -- screen; `own_line` says it was, and `text` is the question itself.
+  question = { text = text:gsub('^\n', ''), own_line = text:sub(1, 1) == '\n', choices = choices, default = default, kind = kind }
   return confirmation
 end
 
@@ -1122,6 +1124,71 @@ check(
   said_since(before, 'there is no invite link; host or join a room first.') ~= nil,
   true
 )
+
+-- -- a host leaving is asked first -----------------------------------------------------
+--
+-- Leaving ends the room for everyone in it, so a host is asked, in the web page's words, and a
+-- guest leaves at once. The question leaves out the web's clause about keystrokes: a host's typing
+-- is in its own buffers, which stay, and nothing is written behind its back.
+do
+  answer_with('unused')
+  -- The words arrive first from the companion, and a host who leaves before they have is asked all
+  -- the same.
+  selvage.host('ws://127.0.0.1:1')
+  report_status('hosting', 'r-leave-early', 'ws://127.0.0.1:1/session?room=r-leave-early&token=t')
+  local early = count_type('leave')
+  confirmations = 0
+  confirmation = 2
+  selvage.leave()
+  check('a host leaving before the words arrive is asked too', confirmations, 1)
+  check('  the same question', question and question.text, 'Leaving ends the room for everyone and stops the invite link.')
+  check('  with the same buttons', question and question.choices, '&Leave anyway\n&Cancel')
+  check('  and a cancel leaves nothing', count_type('leave'), early)
+  confirmation = 1
+  selvage.leave()
+
+  selvage.host('ws://127.0.0.1:1')
+  handlers().on_message({
+    type = 'words',
+    words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')),
+  })
+  report_status('hosting', 'r-leave', 'ws://127.0.0.1:1/session?room=r-leave&token=t')
+  local leaves = count_type('leave')
+  confirmations = 0
+  confirmation = 2
+  selvage.leave()
+  check('a host leaving is asked first', confirmations, 1)
+  check(
+    '  in the web page\'s words',
+    question and question.text,
+    'Leaving ends the room for everyone and stops the invite link.'
+  )
+  check('  on a line of its own, which a taller command line keeps on screen', question and question.own_line, true)
+  check('  offering to leave anyway', question and question.choices, '&Leave anyway\n&Cancel')
+  check('  and a cancel leaves nothing', count_type('leave'), leaves)
+  check('  and the session stands', selvage.session().status, 'hosting')
+  -- Both buttons are the room's words, so a change there is a change here.
+  local renamed = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n'))
+  renamed.leave.confirm, renamed.leave.cancel = 'Go', 'Stay'
+  handlers().on_message({ type = 'words', words = renamed })
+  selvage.leave()
+  check('  both buttons in the words the companion sent', question and question.choices, '&Go\n&Stay')
+  handlers().on_message({
+    type = 'words',
+    words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')),
+  })
+  confirmation = 1
+  selvage.leave()
+  check('  and leaving anyway leaves', count_type('leave'), leaves + 1)
+
+  selvage.join('ws://127.0.0.1:1/session?room=r-leave-guest&token=t')
+  report_status('joined', 'r-leave-guest')
+  confirmations = 0
+  selvage.leave()
+  check('a guest leaves at once', confirmations, 0)
+  check('  and is gone', count_type('leave'), leaves + 2)
+  vim.ui.input = builtin_input
+end
 
 vim.notify = notify
 vim.ui.input = builtin_input

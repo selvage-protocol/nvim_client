@@ -43,6 +43,10 @@ export class FakeEngine implements CompanionEngine {
   presences: Presence[] = [];
   readonly resolved = new Map<string, OffsetSelection>();
   disconnected = false;
+  /** How the session ended, in order: `closeRoom` and `disconnect` as they were called. */
+  readonly endings: string[] = [];
+  /** When set, a host's `closeRoom` never answers, the way a closing on a stalled socket does. */
+  closingStalls = false;
 
   private readonly listeners = new Set<EngineEventListener>();
   private readonly info: SessionInfo;
@@ -123,7 +127,16 @@ export class FakeEngine implements CompanionEngine {
 
   disconnect(): Promise<void> {
     this.disconnected = true;
+    this.endings.push('disconnect');
     return Promise.resolve();
+  }
+
+  closeRoom(): Promise<boolean> {
+    this.endings.push('closeRoom');
+    if (this.info.role !== 'host') {
+      return Promise.resolve(false);
+    }
+    return this.closingStalls ? new Promise(() => {}) : Promise.resolve(true);
   }
 
   text(path: string): string {
