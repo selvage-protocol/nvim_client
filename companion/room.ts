@@ -14,6 +14,7 @@ import {
   HOST_LEAVE_QUESTION,
   LEAVE_ASKING_LABEL,
   LEAVE_CANCEL_LABEL,
+  SHARED_SESSION_IDENTITY,
   disconnectingReading,
   followEndedByFileGone,
   followEndedByLeaving,
@@ -63,10 +64,10 @@ export function seatViews(
   return { self: self === undefined ? undefined : view(self), peers: others.map(view) };
 }
 
-/** The identity the session bar opens with. */
+/** The identity the session bar opens with. A host sharing no named folder is in a shared session, as in VS Code. */
 export function identity(role: string, folder: string | undefined, hostName: string | undefined): string {
   if (role === 'host') {
-    return hostingIdentity(folder ?? '');
+    return folder === undefined || folder === '' ? SHARED_SESSION_IDENTITY : hostingIdentity(folder);
   }
   return guestIdentity(hostName === undefined || hostName === '' ? undefined : hostName);
 }

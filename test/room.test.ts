@@ -126,6 +126,15 @@ test("the session is named after the host's folder, or the host", () => {
   assert.equal(lastRoom(joined.reports()).identity, 'In Hana’s session', 'the host is still named once away');
 });
 
+test('a host sharing no named folder is in a shared session, as in VS Code', () => {
+  // Neovim started in `/` sends the root as '' once its trailing slash is dropped.
+  for (const folder of [undefined, '', '/']) {
+    const hosting = editor({ peer_id: 'p-host', display_name: 'Hana', role: 'host' }, folder);
+    hosting.host.report({ kind: 'peers', peers: [] });
+    assert.equal(lastRoom(hosting.reports()).identity, 'In a shared session', `for ${String(folder)}`);
+  }
+});
+
 test("a caret is drawn in its seat's colour", () => {
   const it = editor({ peer_id: 'p-host', display_name: 'Hana', role: 'host' });
   it.host.report({ kind: 'peers', peers: [guest('p-ann', 'Ann')] });
