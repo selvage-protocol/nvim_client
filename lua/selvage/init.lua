@@ -1928,24 +1928,16 @@ local function row_wanted(bufnr)
   return mode == 'always' and session_words() ~= nil
 end
 
---- Everyone in the room in the order the web page draws their faces: the host first, then your
---- own face, then the others in the order the room lists them.
+--- Everyone in the room in the order the web page draws their faces: your own first, then the
+--- others in the order the room lists them. The host is crowned wherever it sits; order says
+--- nothing about seats, whose colours the companion hands out.
 local function seat_order()
-  local own = state.self_seat
-  local host = own ~= nil and own.role == 'host' and own or nil
-  for _, peer in ipairs(state.room_peers) do
-    if host == nil and peer.role == 'host' then
-      host = peer
-    end
-  end
-  local seats = { host }
-  if own ~= nil and own ~= host then
-    seats[#seats + 1] = own
+  local seats = {}
+  if state.self_seat ~= nil then
+    seats[1] = state.self_seat
   end
   for _, peer in ipairs(state.room_peers) do
-    if peer ~= host then
-      seats[#seats + 1] = peer
-    end
+    seats[#seats + 1] = peer
   end
   return seats
 end

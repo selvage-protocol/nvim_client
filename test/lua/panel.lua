@@ -179,7 +179,7 @@ check('  as a buffer of its own kind', vim.bo[panel_buf()].filetype, 'selvage')
 check('  which the session bar leaves alone', vim.wo[panel_win()].winbar, '')
 
 local folder = path1:match('^(.*)/notes/one%.txt$')
-check('the host comes first, crowned, as you', lines()[1], '♛  Te  Test User (you) · Host')
+check('you come first, crowned when you host', lines()[1], '♛  Te  Test User (you) · Host')
 check('  your initials in your own face', highlight_on(1, ' Te '), 'SelvageYou')
 check('  the crown in its colour', highlight_on(1, '♛'), 'SelvageCrown')
 check('then the others, with no line saying where you are', lines()[2], '   Ad  Ada Lovelace')
@@ -379,8 +379,8 @@ local HANA = { peer_id = 'p-hana', display_name = 'Hana', role = 'host', roster 
 local GUEST = { peer_id = 'p-me', display_name = 'Test User', role = 'guest', roster = 'Test User', initials = 'Te', colour = '#94e2d5' }
 room({ HANA }, GUEST)
 vim.cmd('SelvagePeers')
-check('a guest sees the host first', lines()[1], '♛  Ha  Hana · Host')
-check('  then themself', lines()[3], '   Te  Test User (you)')
+check('a guest sees themself first, as on the web', lines()[1], '   Te  Test User (you)')
+check('  then the host, crowned', lines()[2], '♛  Ha  Hana · Host')
 check('  and no files yet', lines()[5], '  The host has not shared any files yet.')
 selvage.leave()
 

@@ -2066,7 +2066,8 @@ vim.g.selvage_indicator = true
 room({ ADA })
 check('  and comes back when it is turned on again', shape(row()), WITH_ADA)
 
--- A guest's row names whose session it is, and the host's face comes first.
+-- A guest's row names whose session it is, and draws the faces as the web page does: your own
+-- first, then everyone else in the order the room lists them, the host crowned wherever it sits.
 selvage.leave()
 check('leaving puts the person\'s own row back', row(), own_winbar)
 check('  and the statusline with it', selvage.statusline(), '')
@@ -2078,9 +2079,9 @@ room(
   'In Hana’s session'
 )
 check(
-  'a guest reads whose session it is, the host first and then their own face',
+  'a guest reads whose session it is, their own face first and then the room in its order',
   shape(row()),
-  '%#SelvageSession# In Hana’s session%=%#SelvageCrown#♛%#SelvagePeerN# Ha %* %#SelvageYou# Te %* %#SelvagePeerN# Ad %* '
+  '%#SelvageSession# In Hana’s session%=%#SelvageYou# Te %* %#SelvagePeerN# Ad %* %#SelvageCrown#♛%#SelvagePeerN# Ha %* '
 )
 selvage.leave()
 

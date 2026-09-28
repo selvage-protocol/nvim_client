@@ -45,8 +45,9 @@ function nameOf(peer: PeerInfo): string {
 }
 
 /**
- * Everyone in the room with their seat: the host first, then this connection's own seat, then
- * the others in the order the room lists them, which is the order the web page draws its faces.
+ * Everyone in the room with their seat: this connection's own, then the others in the order the
+ * room lists them, which is the order the web page draws its faces. The colours are the web page's
+ * own seating, which is not that order: the host's colour first, then yours, then the others'.
  */
 export function seatViews(
   self: PeerInfo | undefined,
