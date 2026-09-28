@@ -457,8 +457,8 @@ presence({
 })
 local select_nodoc = vim.ui.select
 local nodoc_choice = nil
-vim.ui.select = function(items, _, on_choice)
-  nodoc_choice = { items = items, on_choice = on_choice }
+vim.ui.select = function(items, opts, on_choice)
+  nodoc_choice = { items = items, format_item = opts.format_item, on_choice = on_choice }
 end
 selvage.go_to('')
 vim.ui.select = select_nodoc
@@ -469,6 +469,11 @@ for _, item in ipairs(nodoc_choice.items) do
   end
 end
 check('a bare go-to still offers the peer in no document', nodoc_row ~= nil, true)
+check(
+  "  whose row reads the panel's words for it",
+  nodoc_row ~= nil and nodoc_choice.format_item(nodoc_row):match(' — not in a file yet$') ~= nil,
+  true
+)
 local before_nodoc_pick = #notices
 nodoc_choice.on_choice(nodoc_row)
 check(
