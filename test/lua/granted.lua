@@ -225,7 +225,7 @@ before = #notices
 selvage.open()
 check(
   'a room that offers nothing says so',
-  said_since(before, 'the room has no open documents yet') ~= nil,
+  said_since(before, 'no one in the room has a file open yet.') ~= nil,
   true
 )
 
@@ -263,14 +263,14 @@ before = #notices
 join({}, GRANT)
 check(
   'an empty join counts the files mirrored',
-  said_since(before, ('joined the room; the room has no open documents yet; 4 files mirrored at %s.'):format(selvage.session().mirror)) ~= nil,
+  said_since(before, ('joined the room. No one has a file open yet, and 4 files are mirrored at %s.'):format(selvage.session().mirror)) ~= nil,
   true
 )
 before = #notices
 join({}, { 'README.md' })
 check(
   '  and one file as one',
-  said_since(before, ('joined the room; the room has no open documents yet; 1 file mirrored at %s.'):format(selvage.session().mirror)) ~= nil,
+  said_since(before, ('joined the room. No one has a file open yet, and 1 file is mirrored at %s.'):format(selvage.session().mirror)) ~= nil,
   true
 )
 join({}, {})

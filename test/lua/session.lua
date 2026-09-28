@@ -314,7 +314,7 @@ check('the room document is shown in the window', vim.fn.bufname('%'), 'selvage:
 check('  and shared under its room path', sent[#sent].path, 'workspace/README.md')
 check(
   '  and the join says the landing',
-  said_since(before_join, 'joined the room — opening workspace/README.md') ~= nil,
+  said_since(before_join, 'joined the room, opening workspace/README.md') ~= nil,
   true
 )
 
@@ -366,7 +366,7 @@ handlers().on_message({
 check('the first of several is shown', vim.fn.bufname('%'), 'selvage://a/one.lua')
 check(
   '  and said so, counting the others',
-  said_since(before, 'joined the room — opening a/one.lua; 1 more in the room') ~= nil,
+  said_since(before, 'joined the room, opening a/one.lua. 1 more file is open.') ~= nil,
   true
 )
 check(
@@ -388,7 +388,7 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('an empty room leaves the window alone', vim.fn.bufname('%'), unrelated)
 check(
   '  and the join says the room has nothing in it yet',
-  said_since(before_empty, 'joined the room; the room has no open documents yet') ~= nil,
+  said_since(before_empty, 'joined the room. No one has a file open yet.') ~= nil,
   true
 )
 local before_late = #notices
@@ -1089,31 +1089,38 @@ check('  and it names the next session too', last_of('host') and last_of('host')
 
 -- Dismissing the prompt is not a name, and nothing else is: the suggestion it started from is
 -- not an answer, so no session is opened and the global is left unset, ready to be asked for
--- again. A name an earlier check answered is forgotten first, so this one is asked.
+-- again. It says nothing, as Escape in VS Code's box does. A name an earlier check answered is
+-- forgotten first, so this one is asked.
 vim.g.selvage_display_name = nil
 forget_remembered()
 vim.ui.input = function(_, on_confirm)
   prompted = prompted + 1
   on_confirm(nil)
 end
-local before_dismissal = #notices
 selvage.leave()
+local before_dismissal = #notices
 local hosts_before_dismissal = count_type('host')
 selvage.host('ws://127.0.0.1:1')
 check('a dismissed prompt starts no session', count_type('host'), hosts_before_dismissal)
 check('  and does not configure a name', vim.g.selvage_display_name, nil)
-check('  and says A name is needed', said_since(before_dismissal, 'a name is needed') ~= nil, true)
+check('  and says nothing', #notices, before_dismissal)
 
--- An emptied box is the same answer as a dismissed one.
-vim.ui.input = function(_, on_confirm)
+-- An emptied box is asked again, with the refusal leading the prompt, the way VS Code's box stays
+-- open under `a name is needed.`; dismissing the second prompt then starts nothing.
+local blank_prompts = {}
+vim.ui.input = function(opts, on_confirm)
   prompted = prompted + 1
-  on_confirm('   ')
+  blank_prompts[#blank_prompts + 1] = opts.prompt
+  on_confirm(#blank_prompts == 1 and '   ' or nil)
 end
 local before_blank = #notices
 local hosts_before_blank = count_type('host')
 selvage.host('ws://127.0.0.1:1')
-check('an emptied prompt starts no session', count_type('host'), hosts_before_blank)
-check('  and says A name is needed', said_since(before_blank, 'a name is needed') ~= nil, true)
+check('an emptied prompt is asked again', #blank_prompts, 2)
+check('  leading with A name is needed', vim.startswith(blank_prompts[2] or '', 'A name is needed. The name other participants see'), true)
+check('  and the first ask has no lead', vim.startswith(blank_prompts[1] or '', 'The name other participants see'), true)
+check('  and starts no session', count_type('host'), hosts_before_blank)
+check('  and says nothing besides', #notices, before_blank)
 check('  and does not configure a name', vim.g.selvage_display_name, nil)
 
 -- No input at all: the built-in `vim.ui.input` reads a terminal a headless process does not

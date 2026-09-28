@@ -421,9 +421,9 @@ what the command would have done and leaves the session alone.
 
 The name other participants see is resolved when a session starts, in this order:
 `vim.g.selvage_display_name`, the `SELVAGE_DISPLAY_NAME` environment variable, the remembered
-answer, then a prompt pre-filled with the login name. The pre-fill is a suggestion: a cancelled or
-emptied prompt refuses the session, and a process with nobody to ask refuses it too, saying how to
-configure one.
+answer, then a prompt pre-filled with the login name. The pre-fill is a suggestion: an emptied prompt
+asks again, leading with `A name is needed.`, a cancelled one starts nothing and says nothing, and
+a process with nobody to ask refuses the session, saying how to configure one.
 `require('selvage').display_name()` is `nil` until one is set or remembered. `:SelvageDisplayName`
 sets the global and writes it down, and a prompted answer is written down too, so neither this
 Neovim nor the next one asks again. It renames a live session; a direct write to the global is
@@ -456,8 +456,8 @@ whatever order that override resolves); with none installed, Neovim's builtin nu
 instead. `test/lua/pickers.lua` pins both halves: no fzf or picker reference in the shipped code,
 and every chooser completing on plain `vim.ui.select`.
 
-A join says one summary sentence plus errors: `joined the room`, then `opening <path>; <n> more in
-the room.` The exception is a room that had nothing open at the join and grants files afterwards:
+A join says one summary sentence plus errors: `joined the room, opening <path>. <n> more files are
+open.` The exception is a room that had nothing open at the join and grants files afterwards:
 that guest landed no document and has no tree to read, so the listing is said once. The mirror's
 location is `require('selvage').session().mirror`. Pinned by `test/lua/join.lua` (listing first),
 `test/lua/joinorder.lua` (documents first) and `test/lua/granted.lua` (a listing after an empty
