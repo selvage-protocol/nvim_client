@@ -22,6 +22,12 @@ local function check(name, got, want)
   end
 end
 
+-- A real prompt would read the end of stdin and quit with 0, hiding every failure before it.
+local function unasked(opts)
+  check('nothing asks what it was not meant to', opts.prompt, nil)
+end
+vim.ui.input = unasked
+
 local sent = {}
 local handlers = nil
 package.loaded['selvage.companion'] = {
@@ -267,7 +273,6 @@ check('<CR> on a file opens it in that window', vim.api.nvim_get_current_buf(), 
 check('  which is the window it acts in', vim.api.nvim_get_current_win(), editing)
 
 local asked = nil
-local input = vim.ui.input
 vim.ui.input = function(opts, on_confirm)
   asked = opts
   on_confirm('Grace')
@@ -282,7 +287,7 @@ check('  starting from the one you have', asked and asked.default, 'Test User')
 check('  and renames you', last_of('rename') and last_of('rename').displayName, 'Grace')
 asked = nil
 press('<CR>')
-vim.ui.input = input
+vim.ui.input = unasked
 check('<CR> on yourself asks for the name too', asked and asked.prompt, 'Set the name other participants see: ')
 check('  and stays in the panel', vim.api.nvim_get_current_win(), panel_win())
 
