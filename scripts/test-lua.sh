@@ -43,4 +43,12 @@ nvim --headless -l test/lua/follow.lua
 nvim --headless -l test/lua/followloop.lua
 # The checkout as the installed plugin, which is what `SELVAGE_PLUGIN_ROOT` names: the file
 # asserts that it is what Neovim loaded before it starts the companion for real.
-SELVAGE_PLUGIN_ROOT="$repo_root" nvim --headless -l test/lua/installed.lua
+#
+# The assertion is about the plugin Neovim loaded, so this one run needs an editor with no plugin
+# of its own: a host whose Neovim is started with a `selvage` already installed — a plugin
+# manager's pack directory, a distribution's wrapper — has that copy ahead of the checkout on the
+# runtime path, and the file would report it as the caller's. `-l` skips the user config already;
+# these two options are sent back to Neovim's own runtime for the rest. Every other file finds the
+# plugin through the working directory and needs none of this.
+SELVAGE_PLUGIN_ROOT="$repo_root" nvim --headless --cmd 'set packpath=$VIMRUNTIME runtimepath=$VIMRUNTIME' \
+  -l test/lua/installed.lua

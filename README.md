@@ -591,8 +591,9 @@ nix develop                 # Node 22 and a Neovim of a named version; no git ho
 `scripts/ci-local.sh checks` is what the workflow runs; `scripts/ci-local.sh all` adds actionlint
 and the end-to-end proof, which needs a real Neovim and a built `selvaged` and so cannot run on a
 runner. `scripts/test-lua.sh` is not in `all`: it needs a Neovim too, and `nix flake check` runs the
-same files in a sandbox. Run it by hand after changing `lua/` — it also reads the plugin the machine
-has installed, and says so rather than testing that one instead when the two are not the same.
+same files in a sandbox. Run it by hand after changing `lua/`. Its last file is the checkout as the
+installed plugin, and it starts its Neovim with no plugin of its own, so a machine whose editor
+arrives with a `selvage` installed cannot answer for the checkout.
 
 `nix flake check` runs `typecheck`, the companion suite and the thirteen files under `test/lua/`,
 each in its own Neovim, with no network and no editor session, and then the `plugin` check, which is
