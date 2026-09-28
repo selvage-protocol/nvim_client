@@ -1043,6 +1043,9 @@ local function share(bufnr, path)
     end
   end
   local document = Document.new(bufnr, path, function(message)
+    -- The change goes first: the document's version has already moved, so nothing after this
+    -- line may stand between the edit and the room.
+    state.process:send(message)
     -- A local edit of a shared document ends a follow: with the caret moved by the follow,
     -- typing and following are in direct conflict, and the keystroke has already chosen the
     -- place. A remote edit never reaches this closure — `Document:apply` writes the buffer
@@ -1050,7 +1053,6 @@ local function share(bufnr, path)
     if message.type == 'change' and state.following ~= nil then
       end_follow('typed')
     end
-    state.process:send(message)
   end)
   state.documents[path] = document
   document:attach()
@@ -1519,13 +1521,23 @@ function M.fetch(path)
       return
     end
     if uv.hrtime() >= deadline then
-      notify(
-        ('fetched the files; these had not arrived within %ds: %s.'):format(
-          seconds(timeout),
-          table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
-        ),
-        vim.log.levels.WARN
-      )
+      if #targets == 1 then
+        -- The one file asked for is the whole fetch, so nothing was fetched.
+        notify(('%s did not arrive within %ds.'):format(left[1], seconds(timeout)), vim.log.levels.WARN)
+      elseif #left == 1 then
+        notify(
+          ('fetched the files; %s had not arrived within %ds.'):format(left[1], seconds(timeout)),
+          vim.log.levels.WARN
+        )
+      else
+        notify(
+          ('fetched the files; these had not arrived within %ds: %s.'):format(
+            seconds(timeout),
+            table.concat(vim.list_slice(left, 1, math.min(#left, FETCH_NAMES)), ', ')
+          ),
+          vim.log.levels.WARN
+        )
+      end
       return
     end
     vim.defer_fn(revisit, 50)
@@ -1805,7 +1817,7 @@ vim.cmd([[function! SelvageStopFollowing(minwid, clicks, button, mods) abort
   call v:lua.require('selvage').stop_following()
 endfunction
 function! SelvageCopyInvite(minwid, clicks, button, mods) abort
-  call v:lua.require('selvage').copy_invite(v:true)
+  call v:lua.require('selvage').copy_invite()
 endfunction]])
 
 --- Which saved row a window's buffer reads and writes: the window and the buffer together,
@@ -1926,24 +1938,16 @@ local function row_wanted(bufnr)
   return mode == 'always' and session_words() ~= nil
 end
 
---- Everyone in the room in the order the web page draws their faces: the host first, then your
---- own face, then the others in the order the room lists them.
+--- Everyone in the room in the order the web page draws their faces: your own first, then the
+--- others in the order the room lists them. The host is crowned wherever it sits; order says
+--- nothing about seats, whose colours the companion hands out.
 local function seat_order()
-  local own = state.self_seat
-  local host = own ~= nil and own.role == 'host' and own or nil
-  for _, peer in ipairs(state.room_peers) do
-    if host == nil and peer.role == 'host' then
-      host = peer
-    end
-  end
-  local seats = { host }
-  if own ~= nil and own ~= host then
-    seats[#seats + 1] = own
+  local seats = {}
+  if state.self_seat ~= nil then
+    seats[1] = state.self_seat
   end
   for _, peer in ipairs(state.room_peers) do
-    if peer ~= host then
-      seats[#seats + 1] = peer
-    end
+    seats[#seats + 1] = peer
   end
   return seats
 end
@@ -2267,24 +2271,38 @@ end_follow = function(why)
   end
   state.following = nil
   state.follow_landed = nil
-  clear_indicator()
-  -- The row is the window's, and the session's words are what stands on it with no follow:
-  -- ending one puts the other back on every window, not only the one in front.
-  if why ~= 'silent' then
-    refresh_indicators()
-  end
+  vim.g.selvage_following = nil
   if why == 'silent' then
+    clear_indicator()
     return
   end
-  local ended = words ~= nil and FOLLOW_ENDED[why] ~= nil and words.followEnded[FOLLOW_ENDED[why]] or nil
-  if ended ~= nil then
-    notify(ended:format(following.label))
+  local function show()
+    -- The row is the window's, and the session's words are what stands on it with no follow:
+    -- ending one puts the other back on every window, not only the one in front. A follow
+    -- started again before this ran has drawn its own row already.
+    if state.following == nil then
+      clear_indicator()
+      refresh_indicators()
+    end
+    local ended = words ~= nil and FOLLOW_ENDED[why] ~= nil and words.followEnded[FOLLOW_ENDED[why]] or nil
+    if ended ~= nil then
+      notify(ended:format(following.label))
+    end
+  end
+  if why == 'typed' then
+    -- Typing ends a follow from inside the buffer's change callback, where Neovim refuses to
+    -- change another buffer's text or open a window: redrawing the panel there fails with E565,
+    -- and a notifier that draws a float would too. Both wait for the next turn.
+    vim.schedule(show)
+  else
+    show()
   end
 end
 
---- Attempts one landing of the standing follow. Says and indicates only on success — a
---- miss leaves every one of those where they were, so refusing an establishment touches
---- nothing a standing follow owns. Returns what `land` returned.
+--- Attempts one landing of the standing follow. Indicates only on success: a miss leaves the
+--- indicator where it was, so refusing an establishment touches nothing a standing follow owns.
+--- Nothing is said when a follow begins, as on the web: the window's `Following` chip shows it.
+--- Returns what `land` returned.
 local function land_follow()
   local following = state.following
   if following == nil then
@@ -2299,11 +2317,6 @@ local function land_follow()
   local ok, reason, err = land(following.peerId)
   if ok then
     set_indicator()
-    -- The first landing is said out loud.
-    if not following.said then
-      following.said = true
-      notify(('following %s.'):format(following.label))
-    end
   end
   return ok, reason, err
 end
@@ -2376,8 +2389,6 @@ local function begin_follow(row)
     peerId = row.peerId,
     label = row.label,
     colour = row.colour,
-    -- Following the peer already followed re-lands, idempotent: said once.
-    said = previous ~= nil and previous.peerId == row.peerId and previous.said or false,
     open_warned_for = nil,
   }
   local ok, reason, err = land_follow()
@@ -2943,7 +2954,9 @@ local function land_room_buffers(held)
       end
     end
   end
-  if kept > 0 then
+  if kept == 1 then
+    notify('1 buffer with unsaved changes was kept; :ls lists it.', vim.log.levels.WARN)
+  elseif kept > 1 then
     notify(
       ('%d buffers with unsaved changes were kept; :ls lists them.'):format(kept),
       vim.log.levels.WARN
@@ -3345,7 +3358,13 @@ local function on_report(report)
         state.join_empty = true
         local mirror_summary = state.join_mirror
         state.join_listed = mirror_summary ~= nil
-        if mirror_summary ~= nil then
+        if mirror_summary ~= nil and mirror_summary.count == 1 then
+          notify(
+            ('joined the room; the room has no open documents yet; 1 file mirrored at %s.'):format(
+              mirror_summary.root
+            )
+          )
+        elseif mirror_summary ~= nil then
           notify(
             ('joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
               mirror_summary.count,
@@ -3397,11 +3416,16 @@ local function on_report(report)
         -- sentence is the only place the room's files reach them, and it is said once here.
         if state.join_said and state.join_empty and not state.join_listed and #state.grant > #blocked then
           state.join_listed = true
-          notify(
-            ('%d files are mirrored at %s; :SelvageOpen opens one.'):format(#state.grant - #blocked, root)
-          )
+          local count = #state.grant - #blocked
+          if count == 1 then
+            notify(('1 file is mirrored at %s; :SelvageOpen opens it.'):format(root))
+          else
+            notify(('%d files are mirrored at %s; :SelvageOpen opens one.'):format(count, root))
+          end
         end
-        if #blocked > 0 then
+        if #blocked == 1 then
+          notify(("one of the room's files could not be mirrored: %s."):format(blocked[1]), vim.log.levels.WARN)
+        elseif #blocked > 1 then
           notify(
             ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
               #blocked,
@@ -4514,11 +4538,12 @@ local function show_copied()
   end)
 end
 
---- Puts the invite on the clipboard and the unnamed register, and says where it is. A session
---- that stands without a link to hand on is not a session that is absent: the sentence for the
---- one says what was missing, and `host or join a room first` is left for the window that is
---- in no session at all. From the bar the control itself says `Copied`, so nothing is notified.
-function M.copy_invite(from_bar)
+--- Puts the invite on the clipboard and the unnamed register, and turns the bar's control to
+--- `Copied`, as the web page's button does: that is all a copy that worked says, from the bar, the
+--- panel or the command. A session that stands without a link to hand on is not a session that is
+--- absent: the sentence for the one says what was missing, and `host or join a room first` is left
+--- for the window that is in no session at all.
+function M.copy_invite()
   local handed, why = hand_on_invite()
   if handed == 'no-session' then
     notify('there is no invite link; host or join a room first.', vim.log.levels.WARN)
@@ -4532,11 +4557,7 @@ function M.copy_invite(from_bar)
     notify(('the invite link could not be copied (%s).'):format(why), vim.log.levels.WARN)
     return
   end
-  if from_bar then
-    show_copied()
-    return
-  end
-  notify('the invite link is on the clipboard.')
+  show_copied()
 end
 
 --- Leaves the session and stops the companion.

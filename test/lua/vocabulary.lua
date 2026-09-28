@@ -132,6 +132,7 @@ local MESSAGES = {
   { 'INFO', 'joined the room.' },
   { 'INFO', 'joined the room; the room has no open documents yet.' },
   { 'INFO', 'joined the room; the room has no open documents yet; %d files mirrored at %s.' },
+  { 'INFO', 'joined the room; the room has no open documents yet; 1 file mirrored at %s.' },
   { 'WARN', 'you are hosting this session; joining another session ends this room for everyone.' },
   { 'WARN', 'you are in this session; joining another session leaves it.' },
   { 'WARN', 'you are in this session; hosting a session means leaving it first.' },
@@ -141,7 +142,6 @@ local MESSAGES = {
   { 'WARN', 'join a session first.' },
   { 'WARN', 'no shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
-  { 'INFO', 'the invite link is on the clipboard.' },
   { 'WARN', 'the invite link could not be copied (%s).' },
   { 'WARN', 'this session holds no invite link to copy.' },
   { 'WARN', 'there is no invite link; host or join a room first.' },
@@ -149,7 +149,6 @@ local MESSAGES = {
   { 'INFO', 'left the session.' },
   { 'WARN', 'not in a session.' },
   -- Going to a participant, and following one.
-  { 'INFO', 'following %s.' },
   { 'INFO', '%s is not in a document; still following.' },
   { 'WARN', '%s Your copy is kept at %s.' },
   { 'WARN', 'not following anyone.' },
@@ -181,6 +180,7 @@ local MESSAGES = {
   { 'WARN', 'you are a viewer in this room, so its documents are read-only.' },
   -- What the room's own reports say.
   { 'WARN', '%d buffers with unsaved changes were kept; :ls lists them.' },
+  { 'WARN', '1 buffer with unsaved changes was kept; :ls lists it.' },
   { 'ERROR', 'the editor would not apply the room\'s change to %s; the file may be read-only.' },
   { 'WARN', '%s was out of step with the room; the room\'s copy has been put back.' },
   { 'ERROR', 'could not save %s; the file on disk is behind the room%s.' },
@@ -216,7 +216,9 @@ local MESSAGES = {
   -- `require('selvage').session().mirror`.)
   { 'INFO', 'this file is empty until fetched; :SelvageFetch %s fills it.' },
   { 'INFO', '%d files are mirrored at %s; :SelvageOpen opens one.' },
+  { 'INFO', '1 file is mirrored at %s; :SelvageOpen opens it.' },
   { 'WARN', "%d of the room's files could not be mirrored, starting with %s." },
+  { 'WARN', "one of the room's files could not be mirrored: %s." },
   { 'WARN', "%s is not in the room, so it is not shared; the mirror holds the room's files and is removed when the session ends." },
   { 'WARN', '%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it.' },
   { 'WARN', 'the room carries no file mutations yet.' },
@@ -232,6 +234,8 @@ local MESSAGES = {
   { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them.' },
   { 'INFO', 'fetched the files.' },
   { 'WARN', 'fetched the files; these had not arrived within %ds: %s.' },
+  { 'WARN', 'fetched the files; %s had not arrived within %ds.' },
+  { 'WARN', '%s did not arrive within %ds.' },
   { 'WARN', 'the session ended before the files were fetched.' },
 }
 

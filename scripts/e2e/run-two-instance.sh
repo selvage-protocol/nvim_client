@@ -4,7 +4,9 @@
 # starting its own real companion, one hosting and one joining over a real `selvaged`, proving
 # the room's link admits the guest, that the documents converge in both directions, that a guest
 # reads a granted path the host's own window never opened, and — unless `SELVAGE_E2E_RECONNECT=0`
-# — that a guest whose socket is cut reconnects and re-converges.
+# — that a guest whose socket is cut reconnects and re-converges. Then `test/e2e/followtyping.lua`:
+# two editors whose event loops turn, where typing ends a follow started from the `:SelvagePeers`
+# panel with the panel still open, and the keystroke reaches the other copy.
 #
 # This is not part of `npm test` or CI: it needs a `nvim` on PATH and a real `selvaged`, which
 # it builds from the sibling `reference_server` checkout if there is not one already.
@@ -27,4 +29,5 @@ if [[ -z "${SELVAGE_SELVAGED:-}" && ! -x "$reference_server/target/debug/selvage
   nix develop "$reference_server" -c sh -c "cd '$reference_server' && cargo build -p selvaged"
 fi
 
-exec node test/e2e/run.ts
+node test/e2e/run.ts
+nvim --headless -l test/e2e/followtyping.lua

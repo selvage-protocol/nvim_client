@@ -179,7 +179,7 @@ check('  as a buffer of its own kind', vim.bo[panel_buf()].filetype, 'selvage')
 check('  which the session bar leaves alone', vim.wo[panel_win()].winbar, '')
 
 local folder = path1:match('^(.*)/notes/one%.txt$')
-check('the host comes first, crowned, as you', lines()[1], '♛  Te  Test User (you) · Host')
+check('you come first, crowned when you host', lines()[1], '♛  Te  Test User (you) · Host')
 check('  your initials in your own face', highlight_on(1, ' Te '), 'SelvageYou')
 check('  the crown in its colour', highlight_on(1, '♛'), 'SelvageCrown')
 check('then the others, with no line saying where you are', lines()[2], '   Ad  Ada Lovelace')
@@ -293,8 +293,15 @@ check('  and stays in the panel', vim.api.nvim_get_current_win(), panel_win())
 
 vim.fn.setreg('"', '')
 on_line(1)
+local before_copy = #notices
 press('y')
 check('y copies the invite link', vim.fn.getreg('"'):find('r-panel', 1, true) ~= nil, true)
+check('  saying nothing', #notices, before_copy)
+check(
+  '  while the bar beside it reads Copied',
+  vim.wo[editing].winbar:find('Copied', 1, true) ~= nil,
+  true
+)
 
 on_line(one_line + 2)
 vim.cmd('only')
@@ -321,8 +328,37 @@ local function settle()
   end, 10)
 end
 
+-- -- drawn from inside another buffer's change -----------------------------------------
+--
+-- A change callback is where Neovim refuses to change any other buffer's text, and typing that
+-- ends a follow redraws the panel from one. The panel waits for the next turn there, and its
+-- buffer stays one nobody can type into.
 vim.cmd('SelvagePeers')
 settle()
+vim.bo[panel_buf()].modifiable = true
+vim.api.nvim_buf_set_lines(panel_buf(), 0, -1, false, { 'stale' })
+vim.bo[panel_buf()].modifiable = false
+local scratch = vim.api.nvim_create_buf(false, true)
+local raised = nil
+vim.api.nvim_buf_attach(scratch, false, {
+  on_bytes = function()
+    local ok, err = pcall(require('selvage.panel').refresh)
+    raised = ok and raised or err
+    return true
+  end,
+})
+vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { 'typed' })
+check('the panel drawn from inside a change raises nothing', raised, nil)
+check('  and stays a buffer nobody types into', vim.bo[panel_buf()].modifiable, false)
+check(
+  '  and is drawn on the next turn',
+  vim.wait(1000, function()
+    return lines()[1] ~= 'stale'
+  end, 10),
+  true
+)
+vim.api.nvim_buf_delete(scratch, { force = true })
+
 vim.fn.confirm = function()
   return 1
 end
@@ -343,8 +379,8 @@ local HANA = { peer_id = 'p-hana', display_name = 'Hana', role = 'host', roster 
 local GUEST = { peer_id = 'p-me', display_name = 'Test User', role = 'guest', roster = 'Test User', initials = 'Te', colour = '#94e2d5' }
 room({ HANA }, GUEST)
 vim.cmd('SelvagePeers')
-check('a guest sees the host first', lines()[1], '♛  Ha  Hana · Host')
-check('  then themself', lines()[3], '   Te  Test User (you)')
+check('a guest sees themself first, as on the web', lines()[1], '   Te  Test User (you)')
+check('  then the host, crowned', lines()[2], '♛  Ha  Hana · Host')
 check('  and no files yet', lines()[5], '  The host has not shared any files yet.')
 selvage.leave()
 

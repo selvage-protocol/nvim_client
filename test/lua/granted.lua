@@ -255,6 +255,33 @@ before = #notices
 handlers().on_message({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 check('  and said once, however often the listing is republished', #notices, before)
 
+-- -- counting the files --------------------------------------------------------------------
+--
+-- One file is a file, not `1 files`, in the join's sentence and in the listing's.
+
+before = #notices
+join({}, GRANT)
+check(
+  'an empty join counts the files mirrored',
+  said_since(before, ('joined the room; the room has no open documents yet; 4 files mirrored at %s.'):format(selvage.session().mirror)) ~= nil,
+  true
+)
+before = #notices
+join({}, { 'README.md' })
+check(
+  '  and one file as one',
+  said_since(before, ('joined the room; the room has no open documents yet; 1 file mirrored at %s.'):format(selvage.session().mirror)) ~= nil,
+  true
+)
+join({}, {})
+before = #notices
+handlers().on_message({ type = 'report', report = { kind = 'grant', paths = { 'README.md' } } })
+check(
+  'a listing of one file after an empty join says so',
+  said_since(before, ('1 file is mirrored at %s; :SelvageOpen opens it.'):format(selvage.session().mirror)) ~= nil,
+  true
+)
+
 selvage.leave()
 vim.notify = notify
 

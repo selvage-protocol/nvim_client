@@ -235,8 +235,17 @@ function M.refresh()
   paint()
   local lines, marks, rows = render()
   vim.bo[panel.buf].modifiable = true
-  api.nvim_buf_set_lines(panel.buf, 0, -1, false, lines)
+  local ok, err = pcall(api.nvim_buf_set_lines, panel.buf, 0, -1, false, lines)
   vim.bo[panel.buf].modifiable = false
+  if not ok then
+    -- Asked from inside another buffer's change callback, where no text may change: drawn on the
+    -- next turn instead, and the buffer stays one nobody can type into.
+    if tostring(err):find('E565', 1, true) == nil then
+      error(err, 0)
+    end
+    vim.schedule(M.refresh)
+    return
+  end
   vim.bo[panel.buf].modified = false
   api.nvim_buf_clear_namespace(panel.buf, namespace, 0, -1)
   for lnum, mark in pairs(marks) do

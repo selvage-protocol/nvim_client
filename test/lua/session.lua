@@ -1595,7 +1595,7 @@ check(
 )
 check(
   '  and the person is told it was kept',
-  said_since(before_land, '1 buffers with unsaved changes were kept') ~= nil,
+  said_since(before_land, '1 buffer with unsaved changes was kept; :ls lists it.') ~= nil,
   true
 )
 check('  and the session is over', selvage.session().status, 'idle')
@@ -2066,7 +2066,8 @@ vim.g.selvage_indicator = true
 room({ ADA })
 check('  and comes back when it is turned on again', shape(row()), WITH_ADA)
 
--- A guest's row names whose session it is, and the host's face comes first.
+-- A guest's row names whose session it is, and draws the faces as the web page does: your own
+-- first, then everyone else in the order the room lists them, the host crowned wherever it sits.
 selvage.leave()
 check('leaving puts the person\'s own row back', row(), own_winbar)
 check('  and the statusline with it', selvage.statusline(), '')
@@ -2078,9 +2079,9 @@ room(
   'In Hana’s session'
 )
 check(
-  'a guest reads whose session it is, the host first and then their own face',
+  'a guest reads whose session it is, their own face first and then the room in its order',
   shape(row()),
-  '%#SelvageSession# In Hana’s session%=%#SelvageCrown#♛%#SelvagePeerN# Ha %* %#SelvageYou# Te %* %#SelvagePeerN# Ad %* '
+  '%#SelvageSession# In Hana’s session%=%#SelvageYou# Te %* %#SelvagePeerN# Ad %* %#SelvageCrown#♛%#SelvagePeerN# Ha %* '
 )
 selvage.leave()
 
@@ -2177,7 +2178,8 @@ vim.g.selvage_indicator = nil
 --
 -- The web page's bar carries the invite link as a control, and so does this one once the session
 -- holds a link and the companion has said its words. A click copies it and the control reads
--- `Copied` for as long as the web page's does, with nothing notified: the control said it.
+-- `Copied` for as long as the web page's does, with nothing notified: the control said it. The
+-- command copies the same way.
 handlers().on_message({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers', invite = 'ws://127.0.0.1:1/session?room=r-peers&token=t' })
 room({})
@@ -2192,8 +2194,17 @@ local turned_back = vim.wait(4000, function()
   return row() == INVITE
 end, 20)
 check('  until it turns back', turned_back, true)
+local before_command = #notices
 vim.cmd('SelvageCopyInvite')
-check('the command still says where the link went', notices[#notices].message, 'selvage: the invite link is on the clipboard.')
+check('the command turns the control to Copied too', row(), (INVITE:gsub('Copy invite link', 'Copied')))
+check('  and says nothing either', #notices, before_command)
+check(
+  '  until it turns back',
+  vim.wait(4000, function()
+    return row() == INVITE
+  end, 20),
+  true
+)
 selvage.leave()
 check('leaving takes the control with the row', row(), own_winbar)
 vim.cmd('edit! ' .. path)

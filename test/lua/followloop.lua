@@ -23,7 +23,7 @@ vim.fn.mkdir(root .. '/.tmp', 'p')
 local file = root .. '/.tmp/lua-followloop.txt'
 vim.fn.writefile({ 'alpha', 'beta', 'gamma', 'delta' }, file)
 
-local chan = vim.fn.jobstart({ 'nvim', '--clean', '--embed', '--headless', '-i', 'NONE' }, {
+local chan = vim.fn.jobstart({ 'nvim', '--clean', '--embed', '--headless', '-i', 'NONE', '-n' }, {
   rpc = true,
   cwd = root,
 })
@@ -42,12 +42,24 @@ child(
   _G.notices = {}
   vim.notify = function(message, level)
     table.insert(_G.notices, { message = message, level = level })
+    -- A notifier that draws its message in a float, as nvim-notify and noice do: opening a
+    -- window is what Neovim refuses inside a buffer's change callback.
+    local buf = vim.api.nvim_create_buf(false, true)
+    local win = vim.api.nvim_open_win(buf, false, { relative = 'editor', row = 0, col = 0, width = 1, height = 1 })
+    vim.api.nvim_win_close(win, true)
+    vim.api.nvim_buf_delete(buf, { force = true })
   end
+  _G.sent = {}
   local handlers
   package.loaded['selvage.companion'] = {
     start = function(given)
       handlers = given
-      return { send = function() end, stop = function() end }
+      return {
+        send = function(_, message)
+          table.insert(_G.sent, message)
+        end,
+        stop = function() end,
+      }
     end,
   }
   _G.deliver = function(message)
@@ -253,6 +265,86 @@ child([[_G.presence(..., { { 'p-ada', 'Ada', 13 }, { 'p-bob', 'Bob', 18 } })]], 
 check('a go-to landing while you are in the panel keeps the panel', child('return _G.panel_window() ~= nil'), true)
 check('  and you in it', child('return vim.bo.filetype'), 'selvage')
 check('  and lands on them beside it', child('return _G.file_cursor()'), '4,1')
+
+-- -- typing ends a follow the panel started, with the panel still open ---------------------
+--
+-- `f` on a row keeps the panel and lands in the window beside it, so the next thing a person does
+-- is type there. The keystroke's change arrives inside the buffer's own change callback, where
+-- Neovim refuses to change any other buffer's text: the panel is redrawn after it, not inside it.
+
+--- Waits for `code` to answer true in the second editor, and answers whether it did.
+local function until_child(code)
+  return vim.wait(5000, function()
+    return child(code) == true
+  end, 20)
+end
+
+child([[
+  vim.v.errmsg = ''
+  _G.sent = {}
+]])
+child([[_G.on_row('Ada')]])
+vim.rpcrequest(chan, 'nvim_input', 'f')
+check('f on their row follows them', until_child([[return require('selvage').following() == 'Ada']]), true)
+check('  and keeps the panel open', child('return _G.panel_window() ~= nil'), true)
+check('  and puts you in the file beside it', child([[return vim.bo.filetype ~= 'selvage']]), true)
+check('  on their caret', child('return _G.file_cursor()'), '3,2')
+local said_before_typing = child('return #_G.notices')
+vim.rpcrequest(chan, 'nvim_input', 'ix<Esc>')
+check(
+  'typing there ends the follow',
+  until_child([[return require('selvage').following() == nil and vim.fn.mode() == 'n']]),
+  true
+)
+check(
+  '  saying why, once',
+  until_child(([[
+    local said = {}
+    for index = %d + 1, #_G.notices do
+      said[#said + 1] = _G.notices[index]
+    end
+    return #said == 1
+      and said[1].message == 'selvage: Stopped following Ada because you started typing.'
+      and said[1].level == vim.log.levels.INFO
+  ]]):format(said_before_typing)),
+  true
+)
+check(
+  '  and the edit goes to the room',
+  child([[
+    for _, message in ipairs(_G.sent) do
+      if message.type == 'change' and message.text == 'x' then
+        return true
+      end
+    end
+    return vim.inspect(_G.sent)
+  ]]),
+  true
+)
+check('  with the line as it was typed', child([[return vim.api.nvim_buf_get_lines(0, 2, 3, false)[1] ]]), 'gaxmma')
+check(
+  '  and no error on the way',
+  child([[return vim.v.errmsg .. (vim.fn.execute('messages'):match('E%d+[^\n]*') or '')]]),
+  ''
+)
+check(
+  'the panel buffer is still not yours to edit',
+  child([[return vim.bo[vim.api.nvim_win_get_buf(_G.panel_window())].modifiable]]),
+  false
+)
+check(
+  '  and it is drawn again with nobody followed',
+  until_child([[
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(_G.panel_window()), 0, -1, false)
+    for _, line in ipairs(lines) do
+      if line:find('Ada', 1, true) then
+        return line:find('◉', 1, true) == nil
+      end
+    end
+    return false
+  ]]),
+  true
+)
 
 vim.fn.jobstop(chan)
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
