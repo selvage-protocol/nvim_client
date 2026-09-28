@@ -86,13 +86,30 @@ local function line_of(pieces)
   return text, spans
 end
 
+--- Whether `a` comes before `b` in the web's tree: at each level the folders, then the files.
+local function tree_order(a, b)
+  for index = 1, math.max(#a, #b) do
+    if a[index] ~= b[index] then
+      local a_folder, b_folder = index < #a, index < #b
+      if a_folder ~= b_folder then
+        return a_folder
+      end
+      return (a[index] or '') < (b[index] or '')
+    end
+  end
+  return false
+end
+
 --- The room's paths as a tree: each folder once, before what is in it, and each file under it.
 local function tree(paths)
-  local sorted = vim.deepcopy(paths)
-  table.sort(sorted)
+  local sorted = {}
+  for _, path in ipairs(paths) do
+    sorted[#sorted + 1] = vim.split(path, '/', { plain = true })
+  end
+  table.sort(sorted, tree_order)
   local entries, seen = {}, {}
-  for _, path in ipairs(sorted) do
-    local parts = vim.split(path, '/', { plain = true })
+  for _, parts in ipairs(sorted) do
+    local path = table.concat(parts, '/')
     for depth = 1, #parts - 1 do
       local folder = table.concat(parts, '/', 1, depth)
       if not seen[folder] then

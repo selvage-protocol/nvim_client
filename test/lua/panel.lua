@@ -130,8 +130,10 @@ end
 vim.fn.mkdir('.tmp/panel/notes', 'p')
 local file1 = '.tmp/panel/notes/one.txt'
 local file2 = '.tmp/panel/two.txt'
+local file0 = '.tmp/panel/a.txt'
 vim.fn.writefile({ 'alpha', 'beta' }, file1)
 vim.fn.writefile({ 'one', 'two' }, file2)
+vim.fn.writefile({ 'a' }, file0)
 
 vim.cmd('edit ' .. file2)
 local buf2 = vim.api.nvim_get_current_buf()
@@ -145,6 +147,7 @@ handlers.on_message({
 })
 words()
 local path2 = last_of('open').path
+vim.cmd('edit ' .. file0)
 vim.cmd('edit ' .. file1)
 local buf1 = vim.api.nvim_get_current_buf()
 local path1 = last_of('open').path
@@ -187,7 +190,8 @@ local tree = vim.list_slice(lines(), 6)
 local n = select(2, folder:gsub('/', '')) + 1
 check('  the folders first', tree[n + 1], ('  '):rep(n + 1) .. 'notes/')
 check('  a file under its folder', tree[n + 2], ('  '):rep(n + 2) .. 'one.txt')
-check('  and the next file after', tree[n + 3], ('  '):rep(n + 1) .. 'two.txt')
+check('  then the files beside it, even one named before it', tree[n + 3], ('  '):rep(n + 1) .. 'a.txt')
+check('  in order', tree[n + 4], ('  '):rep(n + 1) .. 'two.txt')
 local one_line = 5 + n + 2
 local badge, badge_group, badge_pos = badges_on(one_line)
 check("  a person's badge on the file they are in", badge, ' Ad ')
@@ -258,7 +262,7 @@ press('f')
 check('f again stops following', selvage.following(), nil)
 check('  and the mark goes', lines()[3], '   Ad  Ada Lovelace')
 
-on_line(one_line + 1)
+on_line(one_line + 2)
 press('<CR>')
 check('<CR> on a file opens it in that window', vim.api.nvim_get_current_buf(), buf2)
 check('  which is the window it acts in', vim.api.nvim_get_current_win(), editing)
@@ -284,7 +288,7 @@ on_line(1)
 press('y')
 check('y copies the invite link', vim.fn.getreg('"'):find('r-panel', 1, true) ~= nil, true)
 
-on_line(one_line + 1)
+on_line(one_line + 2)
 vim.cmd('only')
 press('<CR>')
 check('with no other window left, a file opens in a new one', vim.api.nvim_get_current_buf(), buf2)
