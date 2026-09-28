@@ -1807,7 +1807,7 @@ vim.cmd([[function! SelvageStopFollowing(minwid, clicks, button, mods) abort
   call v:lua.require('selvage').stop_following()
 endfunction
 function! SelvageCopyInvite(minwid, clicks, button, mods) abort
-  call v:lua.require('selvage').copy_invite(v:true)
+  call v:lua.require('selvage').copy_invite()
 endfunction]])
 
 --- Which saved row a window's buffer reads and writes: the window and the buffer together,
@@ -4523,11 +4523,12 @@ local function show_copied()
   end)
 end
 
---- Puts the invite on the clipboard and the unnamed register, and says where it is. A session
---- that stands without a link to hand on is not a session that is absent: the sentence for the
---- one says what was missing, and `host or join a room first` is left for the window that is
---- in no session at all. From the bar the control itself says `Copied`, so nothing is notified.
-function M.copy_invite(from_bar)
+--- Puts the invite on the clipboard and the unnamed register, and turns the bar's control to
+--- `Copied`, as the web page's button does: that is all a copy that worked says, from the bar, the
+--- panel or the command. A session that stands without a link to hand on is not a session that is
+--- absent: the sentence for the one says what was missing, and `host or join a room first` is left
+--- for the window that is in no session at all.
+function M.copy_invite()
   local handed, why = hand_on_invite()
   if handed == 'no-session' then
     notify('there is no invite link; host or join a room first.', vim.log.levels.WARN)
@@ -4541,11 +4542,7 @@ function M.copy_invite(from_bar)
     notify(('the invite link could not be copied (%s).'):format(why), vim.log.levels.WARN)
     return
   end
-  if from_bar then
-    show_copied()
-    return
-  end
-  notify('the invite link is on the clipboard.')
+  show_copied()
 end
 
 --- Leaves the session and stops the companion.

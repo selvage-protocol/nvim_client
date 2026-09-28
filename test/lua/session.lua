@@ -2177,7 +2177,8 @@ vim.g.selvage_indicator = nil
 --
 -- The web page's bar carries the invite link as a control, and so does this one once the session
 -- holds a link and the companion has said its words. A click copies it and the control reads
--- `Copied` for as long as the web page's does, with nothing notified: the control said it.
+-- `Copied` for as long as the web page's does, with nothing notified: the control said it. The
+-- command copies the same way.
 handlers().on_message({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers', invite = 'ws://127.0.0.1:1/session?room=r-peers&token=t' })
 room({})
@@ -2192,8 +2193,17 @@ local turned_back = vim.wait(4000, function()
   return row() == INVITE
 end, 20)
 check('  until it turns back', turned_back, true)
+local before_command = #notices
 vim.cmd('SelvageCopyInvite')
-check('the command still says where the link went', notices[#notices].message, 'selvage: the invite link is on the clipboard.')
+check('the command turns the control to Copied too', row(), (INVITE:gsub('Copy invite link', 'Copied')))
+check('  and says nothing either', #notices, before_command)
+check(
+  '  until it turns back',
+  vim.wait(4000, function()
+    return row() == INVITE
+  end, 20),
+  true
+)
 selvage.leave()
 check('leaving takes the control with the row', row(), own_winbar)
 vim.cmd('edit! ' .. path)

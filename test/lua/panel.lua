@@ -293,8 +293,15 @@ check('  and stays in the panel', vim.api.nvim_get_current_win(), panel_win())
 
 vim.fn.setreg('"', '')
 on_line(1)
+local before_copy = #notices
 press('y')
 check('y copies the invite link', vim.fn.getreg('"'):find('r-panel', 1, true) ~= nil, true)
+check('  saying nothing', #notices, before_copy)
+check(
+  '  while the bar beside it reads Copied',
+  vim.wo[editing].winbar:find('Copied', 1, true) ~= nil,
+  true
+)
 
 on_line(one_line + 2)
 vim.cmd('only')
