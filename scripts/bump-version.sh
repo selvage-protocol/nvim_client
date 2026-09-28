@@ -15,9 +15,13 @@
 #   package-lock.json  the root `version` and the same key under `packages.""`, which npm copies
 #                      from the manifest
 #
-# `test/bump-version.test.ts` holds that file set, so a third home cannot appear without that test
-# failing. `release.yml` carries no version of its own either: its `version` input is required with
-# no default, so nothing in this repository has to be hand-bumped besides these two files.
+# `test/bump-version.test.ts` runs this script on a copy of the checkout and asserts that a bump
+# writes those two files and no others, so a script that started writing a third home fails there.
+# That is a claim about what the bump wrote, not about the tree's contents: the copy is hashed
+# whole, but nothing asserts what the README or a `docs/` page holds, so a version seeded into one
+# of them would go unnoticed. Neither carries one, and `release.yml` carries no version of its own
+# either: its `version` input is required with no default, so nothing in this repository has to be
+# hand-bumped besides these two files.
 #
 # The word is applied to the version `package.json` carries: `patch` moves the last component
 # (0.5.1 -> 0.5.2), `minor` the middle one and zeros the last (0.5.1 -> 0.6.0), and `major` the

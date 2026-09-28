@@ -18,7 +18,7 @@ them into CRLF at write time, so the companion always reports `\n`.
 |---|---|
 | `host {serverUrl, displayName?, autoSave?, root?}` | Mint a room and become its host. Refused while a session is live: see `refused`. `root` is the folder the session shares: the room's listing is sealed from it when the room is minted, the host republishes it when the folder changes, and serves a path from it when a peer asks. |
 | `join {invite, displayName?, autoSave?}` | Join the room an invite link names. Refused while a session is live: see `refused`. |
-| `leave {}` | End the session; the process stays up. A host's leave closes the room first, giving the closing a second to go out. |
+| `leave {}` | End the session; the companion answers `status idle` and does not exit on it. Only `:SelvageLeave` stops the process: the `leave` a new `:SelvageHost` or `:SelvageJoin` sends first (`lua/selvage/init.lua`'s `end_session`) leaves it running for the session that is starting to reuse. A host's leave closes the room first, giving the closing a second to go out. |
 | `rename {displayName}` | Change the name this connection is known by, mid-session. |
 | `open {path, text}` | A buffer is now shared under `path` and holds `text`. |
 | `close {path}` | Stop sharing it. |
