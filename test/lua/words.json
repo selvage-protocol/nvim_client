@@ -1,0 +1,17 @@
+{
+  "copyInvite": "Copy invite link",
+  "copied": "Copied",
+  "copiedMs": 1800,
+  "reconnecting": "Reconnecting…",
+  "followEnded": {
+    "typing": "Stopped following %s because you started typing.",
+    "moving": "Stopped following %s because you moved.",
+    "leaving": "%s left the room, so following stopped.",
+    "fileGone": "Stopped following %s because the file is gone."
+  },
+  "leave": {
+    "question": "Leaving ends the room for everyone and stops the invite link.",
+    "confirm": "Leave anyway",
+    "cancel": "Cancel"
+  }
+}

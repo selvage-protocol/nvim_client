@@ -282,7 +282,11 @@ export class Companion {
     if (engine === undefined) {
       return;
     }
-    void engine.rename(displayName).catch((error: unknown) => {
+    void engine.rename(displayName).then(() => {
+      if (this.engine === engine) {
+        this.editor.renamed(displayName);
+      }
+    }, (error: unknown) => {
       this.send({
         type: 'report',
         report: {
@@ -593,7 +597,9 @@ export class Companion {
       type: 'report',
       report: { kind: 'documents', documents: session.documents },
     });
-    this.send({ type: 'report', report: { kind: 'peers', peers: session.peers } });
+    // The seats are worked out by the editor host from this connection's own seat and the room's.
+    this.editor.seated(() => engine.session().peer, session.role === 'host' ? root : undefined);
+    this.editor.report({ kind: 'peers', peers: session.peers });
     // The room's shape is the host's to publish: the folder the session was started in is the
     // grant, read off the working copy as the session starts and read again whenever the folder
     // changes under it — a later change to which buffers are open is not a statement about the

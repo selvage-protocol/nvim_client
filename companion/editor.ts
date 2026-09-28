@@ -14,6 +14,8 @@
  * is a no-op here.
  */
 
+import { basename } from 'node:path';
+
 import type {
   Cursor,
   EditorHost,
@@ -22,10 +24,18 @@ import type {
   Report,
   TextChange,
 } from '../vendor/bridge/index.ts';
-import { applyChange } from '../vendor/bridge/index.ts';
+import {
+  applyChange,
+  hostAwaySentence,
+  hostBackSentence,
+  roomGoneSentence,
+  translucent,
+} from '../vendor/bridge/index.ts';
+import type { PeerInfo } from '../vendor/engine/index.ts';
 
 import { grantReport, readGrantedFile } from './grant.ts';
 import type { Notification } from './ipc.ts';
+import { hostAwayLine, identity, seatViews } from './room.ts';
 
 interface Document {
   text: string;
@@ -104,9 +114,28 @@ function rebase(change: TextChange, withheld: readonly TextChange[]): TextChange
   return { start, end, text: change.text };
 }
 
+/** The time, and a repeating timer: a test supplies its own to count the host's absence down. */
+export interface Clock {
+  now: () => number;
+  every: (ms: number, tick: () => void) => () => void;
+}
+
+const realClock: Clock = {
+  now: () => Date.now(),
+  every: (ms, tick) => {
+    const timer = setInterval(tick, ms);
+    timer.unref();
+    return () => clearInterval(timer);
+  },
+};
+
+/** How often the host's absence is counted down: the countdown reads whole seconds. */
+const HOST_AWAY_TICK_MS = 1000;
+
 export interface NvimEditorHostOptions {
   /** Writes one message to the front-end. */
   send: (notification: Notification) => void;
+  clock?: Clock;
 }
 
 export class NvimEditorHost implements EditorHost {
@@ -120,9 +149,36 @@ export class NvimEditorHost implements EditorHost {
    * paths are relative to, and the bound every path a peer names is held inside.
    */
   private folder: string | undefined;
+  private readonly clock: Clock;
+  /** This connection's own seat as the room has it now, once a session has one. */
+  private self: (() => PeerInfo) | undefined;
+  /** The folder a host's session is named after. */
+  private named: string | undefined;
+  /** The name this connection asked for, until the room's own record of the seat carries it. */
+  private asked: string | undefined;
+  private others: readonly PeerInfo[] = [];
+  /** The host's name, kept past the host's own seat: a guest still names whose session it is. */
+  private hostName: string | undefined;
+  private stopCountdown: (() => void) | undefined;
 
   constructor(options: NvimEditorHostOptions) {
     this.emit = options.send;
+    this.clock = options.clock ?? realClock;
+  }
+
+  /**
+   * Seats the session: `self` reads this connection's own seat as the room has it, and `folder`
+   * is the one a host's session is named after.
+   */
+  seated(self: () => PeerInfo, folder: string | undefined): void {
+    this.self = self;
+    this.named = folder === undefined || folder === '' ? undefined : basename(folder);
+  }
+
+  /** This connection asked for a new name: the roster shows it from here. */
+  renamed(displayName: string): void {
+    this.asked = displayName;
+    this.report({ kind: 'peers', peers: [...this.others] });
   }
 
   /**
@@ -225,6 +281,12 @@ export class NvimEditorHost implements EditorHost {
   reset(): void {
     this.documents.clear();
     this.folder = undefined;
+    this.self = undefined;
+    this.named = undefined;
+    this.asked = undefined;
+    this.others = [];
+    this.hostName = undefined;
+    this.stopHostAway();
     this.abandon();
   }
 
@@ -310,12 +372,119 @@ export class NvimEditorHost implements EditorHost {
     return readGrantedFile(folder, path);
   }
 
+  /** The carets, each in the colour its seat wears. */
   renderCursors(cursors: Cursor[]): void {
-    this.emit({ type: 'presence', cursors });
+    const colours = new Map<string, string>();
+    const room = this.room();
+    for (const seat of [room.self, ...room.peers]) {
+      if (seat !== undefined) {
+        colours.set(seat.peer_id, seat.colour);
+      }
+    }
+    this.emit({
+      type: 'presence',
+      cursors: cursors.map((cursor) => {
+        const colour = colours.get(cursor.peerId);
+        return colour === undefined ? cursor : { ...cursor, colour, fill: translucent(colour, 0.25) };
+      }),
+    });
   }
 
+  /**
+   * A report, with what the front-end draws and says about it worked out here: the seats and the
+   * session's identity on `peers`, and the sentence on the reports that are said.
+   */
   report(report: Report): void {
-    // The listing is annotated with what the guest's mirror must not materialise (`grantReport`).
-    this.emit({ type: 'report', report: report.kind === 'grant' ? grantReport(report.paths) : report });
+    switch (report.kind) {
+      case 'grant': {
+        // The listing is annotated with what the guest's mirror must not materialise.
+        this.emit({ type: 'report', report: grantReport(report.paths) });
+        return;
+      }
+      case 'peers': {
+        this.others = report.peers;
+        const host = report.peers.find((peer) => peer.role === 'host');
+        if (host !== undefined && host.display_name !== '') {
+          this.hostName = host.display_name;
+        }
+        const room = this.room();
+        const own = this.self?.();
+        this.emit({
+          type: 'report',
+          report: {
+            kind: 'peers',
+            peers: room.peers,
+            ...(room.self === undefined ? {} : { self: room.self }),
+            identity: identity(own?.role ?? 'guest', this.named, this.hostName),
+          },
+        });
+        return;
+      }
+      case 'hostDetached': {
+        const name = this.hostName ?? '';
+        this.startHostAway(report.graceMs);
+        this.emit({
+          type: 'report',
+          report: {
+            ...report,
+            sentence: hostAwaySentence(name, report.graceMs),
+            line: hostAwayLine(name, report.graceMs, report.graceMs),
+          },
+        });
+        return;
+      }
+      case 'hostAttached': {
+        this.stopHostAway();
+        if (report.peer.display_name !== '') {
+          this.hostName = report.peer.display_name;
+        }
+        this.emit({
+          type: 'report',
+          report: { ...report, sentence: hostBackSentence(this.hostName ?? report.peer.display_name) },
+        });
+        return;
+      }
+      case 'roomGone': {
+        this.stopHostAway();
+        this.emit({ type: 'report', report: { ...report, sentence: roomGoneSentence(report.reason) } });
+        return;
+      }
+      default: {
+        this.emit({ type: 'report', report });
+      }
+    }
+  }
+
+  /** Everyone in the room with the seat they have, this connection's own among them. */
+  private room(): ReturnType<typeof seatViews> {
+    const own = this.self?.();
+    const asked = this.asked;
+    if (own !== undefined && asked !== undefined && own.display_name === asked) {
+      this.asked = undefined;
+    }
+    const self = own === undefined || this.asked === undefined ? own : { ...own, display_name: this.asked };
+    return seatViews(self, this.others);
+  }
+
+  /** Counts the host's absence down, once a second, for the session bar. */
+  private startHostAway(graceMs: number): void {
+    this.stopHostAway();
+    const since = this.clock.now();
+    const stop = this.clock.every(HOST_AWAY_TICK_MS, () => {
+      const remaining = Math.max(0, graceMs - (this.clock.now() - since));
+      this.emit({
+        type: 'report',
+        report: { kind: 'hostAway', line: hostAwayLine(this.hostName ?? '', graceMs, remaining) },
+      });
+      if (remaining === 0) {
+        this.stopHostAway();
+      }
+    });
+    this.stopCountdown = stop;
+  }
+
+  private stopHostAway(): void {
+    this.stopCountdown?.();
+    this.stopCountdown = undefined;
   }
 }

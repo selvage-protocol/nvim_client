@@ -386,9 +386,12 @@ test("a joining client is told the room's peers the handshake carried", async ()
   const reports = it.sent
     .filter((notification) => notification.type === 'report')
     .map((notification) => notification.report as { kind: string });
+  const report = reports.find((report) => report.kind === 'peers') as
+    | { peers: Array<PeerInfo & { roster: string }> }
+    | undefined;
   assert.deepEqual(
-    reports.find((report) => report.kind === 'peers'),
-    { kind: 'peers', peers },
+    report?.peers.map(({ peer_id, display_name, role }) => ({ peer_id, display_name, role })),
+    peers,
     'who is in the room arrives with the rest of the handshake, not only when someone moves',
   );
 });
@@ -437,7 +440,14 @@ test('a room that is gone ends the session', async () => {
   assert.deepEqual(
     it.sent.slice(before),
     [
-      { type: 'report', report: { kind: 'roomGone', reason: 'host did not return' } },
+      {
+        type: 'report',
+        report: {
+          kind: 'roomGone',
+          reason: 'host did not return',
+          sentence: 'The session ended (host did not return).',
+        },
+      },
       { type: 'status', state: 'idle' },
     ],
     'the reason reaches the front-end, and then the session is over rather than only reported',
@@ -943,6 +953,29 @@ test('a mid-session rename reaches the engine and moves no document', async () =
     [],
     'an accepted rename is not an error',
   );
+});
+
+test("a host's room is told with its own seat and the folder it shares", async () => {
+  const it = harness('host', [], [{ peer_id: 'p-bob', display_name: 'Bob', role: 'guest' }]);
+  const root = mkdtempSync(join(SCRATCH, 'named-'));
+  try {
+    await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+    const rooms = () =>
+      it.sent.flatMap((notification) =>
+        notification.type === 'report' && (notification.report as { kind: string }).kind === 'peers'
+          ? [notification.report as { self?: { roster: string; colour: string }; identity: string }]
+          : [],
+      );
+    assert.equal(rooms().at(-1)?.self?.colour, '#cba6f7');
+    assert.equal(rooms().at(-1)?.identity, `Sharing “${root.split('/').at(-1)}”`);
+
+    await it.companion.handle({ type: 'rename', displayName: 'Ada' });
+    await settle();
+    assert.equal(rooms().at(-1)?.self?.roster, 'Ada', 'the new name is on the roster the front-end draws');
+  } finally {
+    await it.companion.leave();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a refused rename is reported and leaves the session running', async () => {

@@ -7,6 +7,7 @@
 
 import { appendFileSync } from 'node:fs';
 
+import { words } from './room.ts';
 import { Companion } from './session.ts';
 import { LineReader, isRequest } from './ipc.ts';
 import type { Notification, Request } from './ipc.ts';
@@ -93,6 +94,9 @@ function warn(message: string): void {
 }
 
 const companion = new Companion({ send: write });
+
+// The words the front-end says, before anything it could say them about.
+write({ type: 'words', words: words() });
 
 // One message at a time, in the order they arrived: `open` after `host` is an order the
 // front-end relies on, and two overlapping handlers would not keep it.

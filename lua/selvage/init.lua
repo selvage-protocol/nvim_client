@@ -14,6 +14,10 @@ local uv = vim.uv or vim.loop
 
 local M = {}
 
+--- The fixed words the companion sends once as it starts (`words` in `companion/room.ts`): the
+--- web client's own, so this client says the same sentence as the others by construction.
+local words = nil
+
 local state = {
   process = nil,
   status = 'idle',
@@ -3568,6 +3572,10 @@ local function on_message(message)
       on_report(message.report)
     else
       notify('unreadable report from the companion.', vim.log.levels.WARN)
+    end
+  elseif message.type == 'words' then
+    if type(message.words) == 'table' then
+      words = message.words
     end
   elseif message.type == 'presence' then
     draw_presence(message.cursors)

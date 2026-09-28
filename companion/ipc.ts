@@ -123,7 +123,12 @@ export type Notification =
    */
   | { type: 'report'; report: unknown }
   /** The remote carets this replica can resolve, in buffer offsets. */
-  | { type: 'presence'; cursors: Cursor[] };
+  | { type: 'presence'; cursors: Cursor[] }
+  /**
+   * The fixed words the front-end shows and says, sent once as the process starts. They are the
+   * web client's, from `vendor/bridge/words.ts`; a `%s` in a sentence is where a name goes.
+   */
+  | { type: 'words'; words: Record<string, unknown> };
 
 /**
  * How many UTF-8 bytes a line may hold before it is dropped rather than accumulated
