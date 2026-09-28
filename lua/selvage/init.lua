@@ -1125,7 +1125,7 @@ local function refuse_unlisted(path)
   end
   state.unlisted[path] = true
   notify(
-    ('%s is not in the room, so it is not shared; the mirror holds the room\'s files and is removed when the session ends.'):format(path),
+    ("%s is not in the room, so it is not shared. Save a copy outside the room's folder to keep it."):format(path),
     vim.log.levels.WARN
   )
 end
@@ -1141,7 +1141,7 @@ local function refuse_mirror_write(path)
   end
   state.unwritable[path] = true
   notify(
-    ('%s is not in the room, so the mirror did not write it; save it outside the mirror to keep it.'):format(path),
+    ("%s is not in the room, so this save was not shared. Save a copy outside the room's folder to keep it."):format(path),
     vim.log.levels.WARN
   )
 end
@@ -1305,7 +1305,7 @@ function M.open(path)
   end
   local paths = M.offered()
   if #paths == 0 then
-    notify('the room has no open documents yet.', vim.log.levels.INFO)
+    notify('no one in the room has a file open yet.', vim.log.levels.INFO)
     return
   end
   local wanted = vim.trim(path or '')
@@ -3344,13 +3344,14 @@ local function on_report(report)
             notify('joined the room.')
           elseif #report.documents > 1 then
             notify(
-              ('joined the room — opening %s; %d more in the room.'):format(
+              ('joined the room, opening %s. %s open.'):format(
                 report.documents[1],
-                #report.documents - 1
+                #report.documents == 2 and '1 more file is'
+                  or ('%d more files are'):format(#report.documents - 1)
               )
             )
           else
-            notify(('joined the room — opening %s.'):format(report.documents[1]))
+            notify(('joined the room, opening %s.'):format(report.documents[1]))
           end
         end
       elseif state.auto_open and not state.join_said then
@@ -3360,19 +3361,19 @@ local function on_report(report)
         state.join_listed = mirror_summary ~= nil
         if mirror_summary ~= nil and mirror_summary.count == 1 then
           notify(
-            ('joined the room; the room has no open documents yet; 1 file mirrored at %s.'):format(
+            ('joined the room. No one has a file open yet, and 1 file is mirrored at %s.'):format(
               mirror_summary.root
             )
           )
         elseif mirror_summary ~= nil then
           notify(
-            ('joined the room; the room has no open documents yet; %d files mirrored at %s.'):format(
+            ('joined the room. No one has a file open yet, and %d files are mirrored at %s.'):format(
               mirror_summary.count,
               mirror_summary.root
             )
           )
         else
-          notify('joined the room; the room has no open documents yet.')
+          notify('joined the room. No one has a file open yet.')
         end
       end
     end
@@ -3424,10 +3425,10 @@ local function on_report(report)
           end
         end
         if #blocked == 1 then
-          notify(("one of the room's files could not be mirrored: %s."):format(blocked[1]), vim.log.levels.WARN)
+          notify(("one of the room's files could not be written to disk: %s."):format(blocked[1]), vim.log.levels.WARN)
         elseif #blocked > 1 then
           notify(
-            ('%d of the room\'s files could not be mirrored, starting with %s.'):format(
+            ('%d of the room\'s files could not be written to disk, starting with %s.'):format(
               #blocked,
               blocked[1]
             ),
@@ -3882,16 +3883,25 @@ local function resolve_display_name(callback)
     )
     return
   end
-  local function ask()
+  -- An empty answer is asked again with the refusal leading the prompt, the way VS Code's box
+  -- stays open under `a name is needed.`; a cancelled prompt starts nothing and says nothing,
+  -- as Escape does there.
+  local function ask(lead)
     vim.ui.input(
       {
-        prompt = ('The name other participants see (at most %d characters): '):format(MAX_DISPLAY_NAME),
+        prompt = ('%sThe name other participants see (at most %d characters): '):format(
+          lead or '',
+          MAX_DISPLAY_NAME
+        ),
         default = login_name(),
       },
       function(input)
-      local name = vim.trim(input or '')
+      if input == nil then
+        return
+      end
+      local name = vim.trim(input)
       if name == '' then
-        notify('a name is needed; the session was not started.', vim.log.levels.ERROR)
+        ask('A name is needed. ')
         return
       end
       if utf16.len(name) > MAX_DISPLAY_NAME then

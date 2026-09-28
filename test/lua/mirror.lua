@@ -381,7 +381,7 @@ check(
 )
 check(
   '  and the person is told about both',
-  said_since(before, "2 of the room's files could not be mirrored") ~= nil,
+  said_since(before, "2 of the room's files could not be written to disk") ~= nil,
   true
 )
 check('  and the paths inside the bound are', vim.fn.filereadable(root .. '/notes/deep.txt'), 1)
@@ -397,7 +397,7 @@ check('  and what is past it is not materialised', vim.fn.filereadable(root .. '
 check('  and the client does not hold it', mirror.granted('f05001.txt'), false)
 check(
   '  and the person is told',
-  said_since(before, "one of the room's files could not be mirrored: f05001.txt.") ~= nil,
+  said_since(before, "one of the room's files could not be written to disk: f05001.txt.") ~= nil,
   true
 )
 selvage.leave()
@@ -427,7 +427,7 @@ check('  and its buffer would not be a file', mirror.buffer_name('.git/config'),
 check('  and the path beside it is materialised', vim.fn.filereadable(root .. '/src/main.rs'), 1)
 check(
   '  and the person is told',
-  said_since(before, "2 of the room's files could not be mirrored, starting with .git/HEAD") ~= nil,
+  said_since(before, "2 of the room's files could not be written to disk, starting with .git/HEAD") ~= nil,
   true
 )
 check('  and it is not offered to fetch', vim.tbl_contains(selvage.fetchable(), '.git/config'), false)
@@ -473,7 +473,7 @@ for _, hostile in ipairs(HOSTILE) do
   )
   check(('  and it has no file there (%s)'):format(hostile), mirror.file(hostile), nil)
 end
-check('  and the person is told which one was not', said_since(before, 'could not be mirrored, starting with ../escaped.txt') ~= nil, true)
+check('  and the person is told which one was not', said_since(before, 'could not be written to disk, starting with ../escaped.txt') ~= nil, true)
 
 -- -- which buffer a room path is opened in -----------------------------------------------
 --
@@ -763,7 +763,7 @@ vim.fn.delete(planted .. '/sub', 'rf')
 uv.fs_symlink(planted_outside, planted .. '/sub')
 local before_planted = #notices
 handle({ type = 'report', report = { kind = 'grant', paths = { 'linked.txt', 'sub/inner.txt' } } })
-check('a link where a file goes is refused, not left alone', said_since(before_planted, 'could not be mirrored') ~= nil, true)
+check('a link where a file goes is refused, not left alone', said_since(before_planted, 'could not be written to disk') ~= nil, true)
 check('  and the link is still a link', uv.fs_lstat(planted .. '/linked.txt').type, 'link')
 check('  and a link where a directory goes diverts nothing outside', read(planted_outside .. '/inner.txt'), nil)
 check('  and what was outside is untouched', read(planted_outside .. '/secret.txt'), 'the person keeps this\n')
@@ -873,7 +873,7 @@ before = #notices
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'changed' })
 vim.cmd('write')
 check('  and a save into it is refused rather than written', read(stray), 'mine\n')
-check('  and the person is told why', said_since(before, 'save it outside the mirror to keep it') ~= nil, true)
+check('  and the person is told why', said_since(before, "Save a copy outside the room's folder to keep it") ~= nil, true)
 check('  and the buffer is left with the edit, unsaved', vim.bo.modified, true)
 check('  and the room was never told about it', selvage.text('stray.txt'), nil)
 
