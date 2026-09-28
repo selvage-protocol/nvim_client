@@ -1202,12 +1202,26 @@ local function share_current()
   end
 end
 
---- Puts a buffer in the window the user is looking at.
+--- Whether a window is the room's panel, which is somewhere to look at the room from and never
+--- holds a file.
+local function in_panel(win)
+  return vim.bo[api.nvim_win_get_buf(win or 0)].filetype == 'selvage'
+end
+
+--- Puts a buffer in the window the user is looking at, or while that is the room's panel, in the
+--- window beside it the panel acts in. Answers the window, or nil when it could not.
 local function show(bufnr)
   if bufnr == nil or not api.nvim_buf_is_valid(bufnr) then
-    return false
+    return nil
   end
-  return pcall(api.nvim_win_set_buf, 0, bufnr)
+  local win = api.nvim_get_current_win()
+  if in_panel(win) then
+    win = require('selvage.panel').target_window()
+  end
+  if not pcall(api.nvim_win_set_buf, win, bufnr) then
+    return nil
+  end
+  return win
 end
 
 --- The room path a user's words name: the room path, its `selvage://` buffer name, its file in
@@ -1254,11 +1268,11 @@ end
 local function reveal(path)
   local document = state.documents[path]
   if document ~= nil then
-    return show(document.bufnr)
+    return show(document.bufnr) ~= nil
   end
   local bufnr = guest_buffer(path)
   share(bufnr, path)
-  return show(bufnr)
+  return show(bufnr) ~= nil
 end
 
 local function choose(paths)
@@ -1730,14 +1744,15 @@ local function land(peer_id)
       return false, 'missing'
     end
   end
-  if not show(document.bufnr) then
+  local win = show(document.bufnr)
+  if win == nil then
     return false, 'missing'
   end
   local row, col = document:position(cursor.head)
   -- The follow's own placement is not a move the user made: Neovim reports no reason for a cursor
   -- change, so the flag is what tells the move handler this caret is the follow's, not theirs.
   state.applying_follow = true
-  local placed = pcall(api.nvim_win_set_cursor, 0, { row + 1, col })
+  local placed = pcall(api.nvim_win_set_cursor, win, { row + 1, col })
   state.applying_follow = false
   if not placed then
     return false, 'unresolvable'
@@ -1745,10 +1760,10 @@ local function land(peer_id)
   -- An editor with a UI fires `CursorMoved` for this placement later, from its main loop, when the
   -- flag above is long down: the place it landed is what tells that event from a move of the
   -- person's own.
-  local landed = api.nvim_win_get_cursor(0)
+  local landed = api.nvim_win_get_cursor(win)
   state.follow_landed = {
-    win = api.nvim_get_current_win(),
-    buf = api.nvim_get_current_buf(),
+    win = win,
+    buf = document.bufnr,
     row = landed[1],
     col = landed[2],
   }
@@ -2222,7 +2237,8 @@ local function watch_follow_window()
   api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
     group = state.follow_group,
     callback = function()
-      if state.applying_follow or state.following == nil or still_landed() then
+      -- Looking at the room's panel is not a move away from the person followed.
+      if state.applying_follow or state.following == nil or still_landed() or in_panel() then
         return
       end
       end_follow('moved')

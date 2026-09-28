@@ -291,7 +291,7 @@ local function enter()
         selvage().open(row.file)
       end
     end)
-  elseif row.peerId ~= nil and not row.you then
+  elseif row.peerId ~= nil and row.path ~= nil then
     in_target(function()
       selvage().go_to(row.peerId)
     end)
@@ -393,6 +393,11 @@ function M.open()
 end
 
 M.close = close
+
+--- The window a file goes in while the panel is the current one: the one its keys act in.
+function M.target_window()
+  return target_window()
+end
 
 --- The panel's buffer, or nil while it is closed.
 function M.buffer()
