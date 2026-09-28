@@ -161,9 +161,11 @@ local function render()
     }
     vim.list_extend(head, name)
     add(head, person)
-    local indent = (' '):rep(2 + vim.fn.strdisplaywidth(person.initials) + 3)
-    local where = person.path ~= nil and ('in ' .. person.path) or 'not in a file yet'
-    add({ { indent }, { where, 'SelvagePanelMuted' } }, person)
+    if not person.you then
+      local indent = (' '):rep(2 + vim.fn.strdisplaywidth(person.initials) + 3)
+      local where = person.path ~= nil and ('in ' .. person.path) or 'not in a file yet'
+      add({ { indent }, { where, 'SelvagePanelMuted' } }, person)
+    end
     if not person.you and person.path ~= nil then
       local list = by_path[person.path] or {}
       by_path[person.path] = list
@@ -259,12 +261,28 @@ local function in_target(act)
   act()
 end
 
+local function rename()
+  local row = row_under_cursor()
+  if row == nil or not row.you then
+    return
+  end
+  vim.ui.input({ prompt = 'Set the name other participants see: ', default = row.label }, function(name)
+    if name ~= nil and vim.trim(name) ~= '' then
+      selvage().set_display_name(name)
+    end
+  end)
+end
+
+--- Opens the file, goes to the person, or on your own row asks for your name, as your own face
+--- does on the web. Someone in no file yet has nowhere to go to.
 local function enter()
   local row = row_under_cursor()
   if row == nil then
     return
   end
-  if row.file ~= nil then
+  if row.you then
+    rename()
+  elseif row.file ~= nil then
     local room = selvage().room()
     in_target(function()
       if room.role == 'host' then
@@ -291,18 +309,6 @@ local function follow()
   end
   in_target(function()
     selvage().follow(row.peerId)
-  end)
-end
-
-local function rename()
-  local row = row_under_cursor()
-  if row == nil or not row.you then
-    return
-  end
-  vim.ui.input({ prompt = 'Set the name other participants see: ', default = row.label }, function(name)
-    if name ~= nil and vim.trim(name) ~= '' then
-      selvage().set_display_name(name)
-    end
   end)
 end
 

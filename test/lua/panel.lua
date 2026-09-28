@@ -174,25 +174,24 @@ check('  which the session bar leaves alone', vim.wo[panel_win()].winbar, '')
 
 local folder = path1:match('^(.*)/notes/one%.txt$')
 check('the host comes first, crowned, as you', lines()[1], '♛  Te  Test User (you) · Host')
-check('  with where you are', lines()[2], '       in ' .. path1)
 check('  your initials in your own face', highlight_on(1, ' Te '), 'SelvageYou')
 check('  the crown in its colour', highlight_on(1, '♛'), 'SelvageCrown')
-check('then the others', lines()[3], '   Ad  Ada Lovelace')
-check('  with where they are', lines()[4], '       in ' .. path1)
-local ada_group = highlight_on(3, ' Ad ')
+check('then the others, with no line saying where you are', lines()[2], '   Ad  Ada Lovelace')
+check('  with where they are', lines()[3], '       in ' .. path1)
+local ada_group = highlight_on(2, ' Ad ')
 check(
   "  their initials on their seat's colour",
   ada_group and vim.api.nvim_get_hl(0, { name = ada_group }).bg,
   tonumber('94e2d5', 16)
 )
-check('then the files as a tree', lines()[5], '')
-local tree = vim.list_slice(lines(), 6)
+check('then the files as a tree', lines()[4], '')
+local tree = vim.list_slice(lines(), 5)
 local n = select(2, folder:gsub('/', '')) + 1
 check('  the folders first', tree[n + 1], ('  '):rep(n + 1) .. 'notes/')
 check('  a file under its folder', tree[n + 2], ('  '):rep(n + 2) .. 'one.txt')
 check('  then the files beside it, even one named before it', tree[n + 3], ('  '):rep(n + 1) .. 'a.txt')
 check('  in order', tree[n + 4], ('  '):rep(n + 1) .. 'two.txt')
-local one_line = 5 + n + 2
+local one_line = 4 + n + 2
 local badge, badge_group, badge_pos = badges_on(one_line)
 check("  a person's badge on the file they are in", badge, ' Ad ')
 check('    in their colour', badge_group, ada_group)
@@ -234,33 +233,33 @@ check('  and into it', vim.api.nvim_get_current_win(), panel_win())
 -- -- it follows the room --------------------------------------------------------------
 
 room({ ADA, BOB })
-check('someone joining is listed at once', lines()[5], '   Bo  Bob')
-check('  not in a file yet', lines()[6], '       not in a file yet')
+check('someone joining is listed at once', lines()[4], '   Bo  Bob')
+check('  not in a file yet', lines()[5], '       not in a file yet')
 room({ ADA })
-check('  and gone again when they leave', lines()[5], '')
+check('  and gone again when they leave', lines()[4], '')
 
 -- -- its keys -------------------------------------------------------------------------
 
 vim.api.nvim_set_current_win(editing)
 vim.cmd('buffer ' .. buf2)
 vim.cmd('SelvagePeers')
-on_line(3)
+on_line(2)
 press('<CR>')
 check('<CR> on a person goes to them in the window it was opened from', vim.api.nvim_get_current_win(), editing)
 check('  showing their file', vim.api.nvim_get_current_buf(), buf1)
 check('  on their caret', vim.api.nvim_win_get_cursor(0)[1], 2)
 check('  and the panel stays', panel_win() ~= nil, true)
 
-on_line(4)
+on_line(3)
 press('f')
 check('f on a person follows them', selvage.following(), 'Ada Lovelace')
 check('  from the window the panel acts in', vim.api.nvim_get_current_win(), editing)
-check('  and marks them in the panel', lines()[3], ' ◉ Ad  Ada Lovelace')
-check('    in the colour the bar marks them', highlight_on(3, '◉'), 'SelvageFollowed')
-on_line(3)
+check('  and marks them in the panel', lines()[2], ' ◉ Ad  Ada Lovelace')
+check('    in the colour the bar marks them', highlight_on(2, '◉'), 'SelvageFollowed')
+on_line(2)
 press('f')
 check('f again stops following', selvage.following(), nil)
-check('  and the mark goes', lines()[3], '   Ad  Ada Lovelace')
+check('  and the mark goes', lines()[2], '   Ad  Ada Lovelace')
 
 on_line(one_line + 2)
 press('<CR>')
@@ -273,15 +272,19 @@ vim.ui.input = function(opts, on_confirm)
   asked = opts
   on_confirm('Grace')
 end
-on_line(3)
-press('r')
-check('r on someone else asks nothing', asked, nil)
 on_line(2)
 press('r')
-vim.ui.input = input
+check('r on someone else asks nothing', asked, nil)
+on_line(1)
+press('r')
 check('r on yourself asks for the name', asked and asked.prompt, 'Set the name other participants see: ')
 check('  starting from the one you have', asked and asked.default, 'Test User')
 check('  and renames you', last_of('rename') and last_of('rename').displayName, 'Grace')
+asked = nil
+press('<CR>')
+vim.ui.input = input
+check('<CR> on yourself asks for the name too', asked and asked.prompt, 'Set the name other participants see: ')
+check('  and stays in the panel', vim.api.nvim_get_current_win(), panel_win())
 
 vim.fn.setreg('"', '')
 on_line(1)
@@ -337,7 +340,7 @@ room({ HANA }, GUEST)
 vim.cmd('SelvagePeers')
 check('a guest sees the host first', lines()[1], '♛  Ha  Hana · Host')
 check('  then themself', lines()[3], '   Te  Test User (you)')
-check('  and no files yet', lines()[6], '  The host has not shared any files yet.')
+check('  and no files yet', lines()[5], '  The host has not shared any files yet.')
 selvage.leave()
 
 if failures > 0 then
