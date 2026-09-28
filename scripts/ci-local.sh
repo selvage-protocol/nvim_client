@@ -28,9 +28,6 @@ cd "$repo_root"
 export TMPDIR="$repo_root/.tmp"
 mkdir -p "$TMPDIR"
 
-# The system whose flake checks this builds; the flake carries them for both Linux architectures.
-system=$(nix eval --raw --impure --expr builtins.currentSystem)
-
 say() { printf '\n=== %s ===\n' "$*"; }
 
 # The runner has no nix and installs the pinned lychee release instead, so on this host the checker
@@ -44,6 +41,11 @@ run_lychee() {
 }
 
 job_checks() {
+  # The system whose flake checks this builds; the flake carries them for both Linux architectures.
+  # Read here rather than at the top: this is the mode that needs nix, while `links` takes its
+  # lychee from PATH and has to run on a host that has none.
+  local system
+  system=$(nix eval --raw --impure --expr builtins.currentSystem)
   say "checks: install"
   npm ci --no-audit --no-fund
   say "checks: typecheck"
