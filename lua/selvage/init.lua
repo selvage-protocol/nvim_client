@@ -4060,7 +4060,8 @@ local function confirm_leave(question, button)
     notify(question, vim.log.levels.WARN)
     return false
   end
-  return vim.fn.confirm(question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
+  -- Opened with a line break: a command line taller than one line drops a question that fits it.
+  return vim.fn.confirm('\n' .. question, ('&%s\n&Cancel'):format(button), 2, 'Warning') == 1
 end
 
 --- The box the first-run question and `:SelvageChangeServer`'s change both ask through: the

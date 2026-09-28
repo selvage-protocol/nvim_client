@@ -111,7 +111,9 @@ local confirmation = 0
 local confirmations = 0
 vim.fn.confirm = function(text, choices, default, kind)
   confirmations = confirmations + 1
-  question = { text = text, choices = choices, default = default, kind = kind }
+  -- A question asked as its own first line is what a command line taller than one keeps on
+  -- screen; `own_line` says it was, and `text` is the question itself.
+  question = { text = text:gsub('^\n', ''), own_line = text:sub(1, 1) == '\n', choices = choices, default = default, kind = kind }
   return confirmation
 end
 
@@ -1146,6 +1148,7 @@ do
     question and question.text,
     'Leaving ends the room for everyone and stops the invite link.'
   )
+  check('  on a line of its own, which a taller command line keeps on screen', question and question.own_line, true)
   check('  offering to leave anyway', question and question.choices, '&Leave anyway\n&Cancel')
   check('  and a cancel leaves nothing', count_type('leave'), leaves)
   check('  and the session stands', selvage.session().status, 'hosting')
