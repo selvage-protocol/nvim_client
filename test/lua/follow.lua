@@ -757,11 +757,7 @@ local selections_before = count_type('selection')
 selvage.follow('Ada')
 check('following lands on the peer', vim.fn.bufname('%'), 'selvage://g/one.txt')
 check('  with the cursor on their caret', cursor(), '2,1')
-check(
-  '  and says so once the landing is made',
-  said_since(before_follow, 'following Ada') ~= nil,
-  true
-)
+check('  and says nothing, as the web does: the window shows it', #notices, before_follow)
 check('  which the session reports', selvage.following(), 'Ada')
 check('  which the global reports by peer id', vim.g.selvage_following, 'p-ada')
 check(
@@ -864,7 +860,7 @@ check('  which the statusline reports', selvage.statusline(), 'In a shared sessi
 -- An edit in the followed document itself ends it the same way.
 local before_refollow = #notices
 selvage.follow('Ada')
-check('following again says so again', said_since(before_refollow, 'following Ada') ~= nil, true)
+check('following again says nothing either', #notices, before_refollow)
 local before_own_edit = #notices
 vim.api.nvim_buf_set_lines(vim.fn.bufnr('selvage://g/one.txt'), 0, 0, false, { 'ALPHA' })
 turn()
@@ -913,8 +909,7 @@ vim.cmd('SelvageStopFollowing')
 local before_stop = #notices
 selvage.follow('Ada')
 vim.cmd('SelvageStopFollowing')
-check('stopping through the command says nothing, as the web does', #notices, before_stop + 1)
-check('  past the follow it ended', notices[#notices].message, 'selvage: following Ada.')
+check('stopping through the command says nothing, as the web does', #notices, before_stop)
 check(
   '  and takes the indicator down',
   standing_row(vim.api.nvim_get_option_value('winbar', { win = 0 })),
@@ -1090,15 +1085,12 @@ check('  and follows nobody now', selvage.following(), nil)
 -- Following someone else re-targets; following the same peer re-lands, saying nothing new.
 local before_retarget = #notices
 selvage.follow('Ada Lovelace')
-check(
-  'following while following re-targets with the new name',
-  said_since(before_retarget, 'following Ada Lovelace') ~= nil,
-  true
-)
+check('following while following re-targets with the new name', selvage.following(), 'Ada Lovelace')
+check('  saying nothing', #notices, before_retarget)
 check('  which the global reports', vim.g.selvage_following, 'p-ada')
 local retarget_notices = #notices
 selvage.follow('Bob')
-check('  and again for the other peer', said_since(retarget_notices, 'following Bob') ~= nil, true)
+check('  and again for the other peer, silently', #notices, retarget_notices)
 check('  which the global reports anew', vim.g.selvage_following, 'p-bob')
 local idempotent_notices = #notices
 selvage.follow('Bob')

@@ -2297,9 +2297,10 @@ end_follow = function(why)
   end
 end
 
---- Attempts one landing of the standing follow. Says and indicates only on success — a
---- miss leaves every one of those where they were, so refusing an establishment touches
---- nothing a standing follow owns. Returns what `land` returned.
+--- Attempts one landing of the standing follow. Indicates only on success: a miss leaves the
+--- indicator where it was, so refusing an establishment touches nothing a standing follow owns.
+--- Nothing is said when a follow begins, as on the web: the window's `Following` chip shows it.
+--- Returns what `land` returned.
 local function land_follow()
   local following = state.following
   if following == nil then
@@ -2314,11 +2315,6 @@ local function land_follow()
   local ok, reason, err = land(following.peerId)
   if ok then
     set_indicator()
-    -- The first landing is said out loud.
-    if not following.said then
-      following.said = true
-      notify(('following %s.'):format(following.label))
-    end
   end
   return ok, reason, err
 end
@@ -2391,8 +2387,6 @@ local function begin_follow(row)
     peerId = row.peerId,
     label = row.label,
     colour = row.colour,
-    -- Following the peer already followed re-lands, idempotent: said once.
-    said = previous ~= nil and previous.peerId == row.peerId and previous.said or false,
     open_warned_for = nil,
   }
   local ok, reason, err = land_follow()

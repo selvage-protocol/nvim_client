@@ -265,8 +265,9 @@ being where a peer is means the cursor is there, and the next keystroke lands th
 why a local edit of a shared document ends the follow while a remote edit only re-lands it. A follow
 that ends by itself says why in the web page's words: `Stopped following <name> because you
 started typing.`, `… because you moved.`, `… because the file is gone.`, or `<name> left the room,
-so following stopped.`. Going somewhere or stopping it yourself ends one without a word, as on the
-web, looking at the room's panel leaves it standing, and a rename keeps it. While a
+so following stopped.`. Starting a follow says nothing, and neither does going somewhere or
+stopping it yourself, as on the web. Looking at the room's panel leaves it standing, and a rename
+keeps it. While a
 follow stands, the session bar carries a `Following <name> ✕` chip in the peer's own colour and
 marks their face with `◉`; clicking the chip stops the follow, where the editor takes a mouse.
 Every buffer's own row is saved as the bar arrives and put back as it leaves, so re-targeting
