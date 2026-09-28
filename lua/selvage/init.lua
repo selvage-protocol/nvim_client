@@ -1751,6 +1751,16 @@ local function land(peer_id)
   if not placed then
     return false, 'unresolvable'
   end
+  -- An editor with a UI fires `CursorMoved` for this placement later, from its main loop, when the
+  -- flag above is long down: the place it landed is what tells that event from a move of the
+  -- person's own.
+  local landed = api.nvim_win_get_cursor(0)
+  state.follow_landed = {
+    win = api.nvim_get_current_win(),
+    buf = api.nvim_get_current_buf(),
+    row = landed[1],
+    col = landed[2],
+  }
   -- The landing moved the caret, so the room hears it through the coalesced publish
   -- rather than through whatever event the editor may or may not fire for a programmatic
   -- move: headless Neovim fires none for anything, and the interval drops the duplicate
@@ -2121,6 +2131,16 @@ local function forget_winbar_stash(event)
   end
 end
 
+--- Whether the caret is where the follow last put it, in the window and buffer it put it in.
+local function still_landed()
+  local landed = state.follow_landed
+  if landed == nil or api.nvim_get_current_win() ~= landed.win or api.nvim_get_current_buf() ~= landed.buf then
+    return false
+  end
+  local here = api.nvim_win_get_cursor(0)
+  return here[1] == landed.row and here[2] == landed.col
+end
+
 --- Watches the window for the indicators: the switches that swap which buffer's row they
 --- show are the ones that save and put back each buffer's own.
 local function watch_follow_window()
@@ -2135,7 +2155,7 @@ local function watch_follow_window()
   api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
     group = state.follow_group,
     callback = function()
-      if state.applying_follow or state.following == nil then
+      if state.applying_follow or state.following == nil or still_landed() then
         return
       end
       end_follow('moved')
@@ -2159,6 +2179,7 @@ end_follow = function(why)
     return
   end
   state.following = nil
+  state.follow_landed = nil
   clear_indicator()
   -- The row is the window's, and the session's words are what stands on it with no follow:
   -- ending one puts the other back on every window, not only the one in front.

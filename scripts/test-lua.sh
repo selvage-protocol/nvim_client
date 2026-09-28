@@ -12,7 +12,8 @@
 # framing of what the companion writes beside what stopping the process does to it
 # (`test/lua/leave.lua`,
 # against a real job), and going to a participant and following one (`test/lua/follow.lua`),
-# and the pickers asking through `vim.ui.select` with no external picker required
+# and the follow in an editor whose event loop turns (`test/lua/followloop.lua`, against a second
+# Neovim over RPC), and the pickers asking through `vim.ui.select` with no external picker required
 # (`test/lua/pickers.lua`), and the plugin as the package it is installed as — the real
 # companion process started from it, with nothing stubbed (`test/lua/installed.lua`).
 #
@@ -39,6 +40,7 @@ nvim --headless -l test/lua/vocabulary.lua
 nvim --headless -l test/lua/warnings.lua
 nvim --headless -l test/lua/leave.lua
 nvim --headless -l test/lua/follow.lua
+nvim --headless -l test/lua/followloop.lua
 # The checkout as the installed plugin, which is what `SELVAGE_PLUGIN_ROOT` names: the file
 # asserts that it is what Neovim loaded before it starts the companion for real.
 SELVAGE_PLUGIN_ROOT="$repo_root" nvim --headless -l test/lua/installed.lua
