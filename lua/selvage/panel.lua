@@ -1,11 +1,14 @@
--- The room as the web page's faces and sidebar show it, in a split on the left: everyone in it,
--- then the files the room offers with a badge for each person in them. `:SelvagePeers` opens it.
+-- The room as the web page's faces and sidebar show it, in a split on the left: everyone in it
+-- under the web's heading for them, then the files the room offers with a badge for each person
+-- in them. `:SelvagePeers` opens it.
 
 local api = vim.api
 
 local M = {}
 
 local WIDTH = 36
+
+local HEADING = 'Everyone in the room'
 
 --- The panel's buffer, what each of its lines stands for, and the window it acts in.
 local panel = { buf = nil, rows = {}, target = nil, group = nil }
@@ -15,6 +18,7 @@ local function selvage()
 end
 
 local function paint()
+  pcall(api.nvim_set_hl, 0, 'SelvagePanelHeading', { link = 'Title', default = true })
   pcall(api.nvim_set_hl, 0, 'SelvagePanelName', { bold = true, default = true })
   pcall(api.nvim_set_hl, 0, 'SelvagePanelMuted', { link = 'Comment', default = true })
   pcall(api.nvim_set_hl, 0, 'SelvagePanelFolder', { link = 'Directory', default = true })
@@ -144,6 +148,7 @@ local function render()
     marks[#lines] = { spans = spans, badges = badges }
   end
 
+  add({ { HEADING, 'SelvagePanelHeading' } }, nil)
   local by_path = {}
   for _, person in ipairs(room.people) do
     local name = { { person.name, 'SelvagePanelName' } }
@@ -399,6 +404,10 @@ function M.open()
     vim.wo[win][0][option] = value
   end
   M.refresh()
+  -- On the first person rather than the heading above them.
+  if api.nvim_buf_line_count(panel.buf) >= 2 then
+    api.nvim_win_set_cursor(win, { 2, 0 })
+  end
 end
 
 M.close = close
