@@ -2184,6 +2184,17 @@ vim.g.selvage_indicator = nil
 -- -- the invite, copied ------------------------------------------------------------------
 --
 -- The bar carries no invite control: the command copies the link and a notification says so.
+--
+-- Whether this machine has a system clipboard is its business, not a session's, so the `+`
+-- write is stubbed to succeed and go nowhere: the sentence this section is about is the one a
+-- copy that worked says. What a Neovim with no provider says is `test/lua/commands.lua`'s.
+local real_setreg = vim.fn.setreg
+vim.fn.setreg = function(register, value)
+  if register == '+' then
+    return 0
+  end
+  return real_setreg(register, value)
+end
 handlers().on_message({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-peers', invite = 'ws://127.0.0.1:1/session?room=r-peers&token=t' })
 room({})
@@ -2194,6 +2205,7 @@ check('  and the command copies it', vim.fn.getreg('"'):find('r-peers', 1, true)
 check('  saying so once', #notices, before_command + 1)
 check('  in a notification', notices[#notices].message, 'selvage: invite link copied.')
 check('  and leaves the row as it was', row(), ALONE)
+vim.fn.setreg = real_setreg
 selvage.leave()
 check('leaving takes the row with it', row(), own_winbar)
 vim.cmd('edit! ' .. path)
