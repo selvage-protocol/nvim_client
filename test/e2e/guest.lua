@@ -151,7 +151,7 @@ if harness.control_file ~= nil then
     'the orchestrator to signal the network blip is over',
     harness.reconnect_deadline_ms,
     function()
-      if not saw_reconnecting and harness.row():find('Selvage: reconnecting…', 1, true) ~= nil then
+      if not saw_reconnecting and harness.row():find('Reconnecting…', 1, true) ~= nil then
         saw_reconnecting = true
         harness.log('the window said the connection was being re-established')
       end
@@ -165,7 +165,8 @@ if harness.control_file ~= nil then
     harness.fail('the dropped socket was never said on the window; the reconnect was invisible')
   end
   harness.wait('the window to name the session again after the blip', harness.reconnect_deadline_ms, function()
-    return harness.row():find('Selvage: guest — ', 1, true) ~= nil
+    local row = harness.row()
+    return row:find('’s session', 1, true) ~= nil and row:find('Reconnecting…', 1, true) == nil
   end, function()
     return 'the window holds ' .. vim.inspect(harness.row())
   end)
