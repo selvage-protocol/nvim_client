@@ -2496,7 +2496,7 @@ local function pick_peer(prompt, on_choice)
       return ('%s — %s — %s'):format(
         row_name(peers, peer),
         tostring(peer.role or 'participant'),
-        tostring(peer.path or 'not in a document')
+        tostring(peer.path or 'not in a file yet')
       )
     end,
   }, on_choice)
