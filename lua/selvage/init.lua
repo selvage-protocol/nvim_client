@@ -136,9 +136,6 @@ local state = {
   --- What the session is called at the start of the bar: the folder the host shares, or whose
   --- session a guest is in.
   identity = nil,
-  --- Whether the invite control reads `Copied`, and the timer that turns it back.
-  copied = false,
-  copied_timer = nil,
   --- Whether the session highlight is set for the current colorscheme. A colorscheme runs
   --- `highlight clear`, which takes it, so the flag is dropped there and the group is made again.
   session_painted = false,
@@ -421,14 +418,6 @@ end
 --- Declared here so the draw can call it; assigned where the row is drawn.
 local refresh_indicators
 
---- Draws the room's panel again, when it has been opened: it shows what the row shows and more.
-local function refresh_panel()
-  local panel = package.loaded['selvage.panel']
-  if panel ~= nil then
-    panel.refresh()
-  end
-end
-
 --- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
 --- (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is `{ [room_path] = { { initials,
 --- colour, label, peerId } } }` and `User SelvagePresence` fires whenever it changes. This client
@@ -616,15 +605,6 @@ function M.peers()
   return peers
 end
 
---- Opens the room's panel: everyone in it, then the files the room offers (`selvage.panel`).
-function M.list_peers()
-  if not in_session() then
-    notify('join a session first.', vim.log.levels.WARN)
-    return
-  end
-  require('selvage.panel').open()
-end
-
 --- The shared document whose buffer is `bufnr`, or nil when this session does not share it.
 local function document_for_buf(bufnr)
   for _, document in pairs(state.documents) do
@@ -703,10 +683,9 @@ end
 
 --- Publishes where the caret is now, or clears it when the user is not in a shared document.
 --- The state is read at flush time, so a burst of movement costs one look and one message.
---- Looking at the room's panel leaves the caret where it was, as the web's sidebar does.
 local function publish_selection()
   state.selection_armed = false
-  if state.process == nil or vim.bo.filetype == 'selvage' then
+  if state.process == nil then
     return
   end
   local document = current_document()
@@ -800,8 +779,8 @@ end
 
 --- Says, once per buffer, that a buffer with no file is not the room's to share. Hosting from
 --- an untitled buffer and typing is the newcomer's silence: the room never hears it, and
---- nothing else here says so. A buffer that was never meant to be a file, such as help or the
---- room's own panel, is not one a person types into for the room, so it is left unsaid.
+--- nothing else here says so. A buffer that was never meant to be a file, such as help, is not
+--- one a person types into for the room, so it is left unsaid.
 local function refuse_unfiled(bufnr)
   if state.unfiled[bufnr] ~= nil or vim.bo[bufnr].buftype ~= '' then
     return
@@ -1204,22 +1183,13 @@ local function share_current()
   end
 end
 
---- Whether a window is the room's panel, which is somewhere to look at the room from and never
---- holds a file.
-local function in_panel(win)
-  return vim.bo[api.nvim_win_get_buf(win or 0)].filetype == 'selvage'
-end
-
---- Puts a buffer in the window the user is looking at, or while that is the room's panel, in the
---- window beside it the panel acts in. Answers the window, or nil when it could not.
+--- Puts a buffer in the window the user is looking at. Answers the window, or nil when it could
+--- not.
 local function show(bufnr)
   if bufnr == nil or not api.nvim_buf_is_valid(bufnr) then
     return nil
   end
   local win = api.nvim_get_current_win()
-  if in_panel(win) then
-    win = require('selvage.panel').target_window()
-  end
   if not pcall(api.nvim_win_set_buf, win, bufnr) then
     return nil
   end
@@ -1809,15 +1779,12 @@ local function follow_chip(label)
   return ('%%#SelvageFollow#%%0@SelvageStopFollowing@ Following %s %s %%X%%*'):format(row_text(label), STOP_MARK)
 end
 
--- What the bar's click labels call: a Vim function by name. A Lua `_G` function is invisible to
--- that lookup (`exists('*name')` is 0 for one), so these thin wrappers hand the click to the
--- commands' own handlers. Defined once, when the module loads: with no session the handlers only
--- say there is nothing to act on, and no clickable row stands then anyway.
+-- What the bar's click label calls: a Vim function by name. A Lua `_G` function is invisible to
+-- that lookup (`exists('*name')` is 0 for one), so this thin wrapper hands the click to the
+-- command's own handler. Defined once, when the module loads: with no session the handler only
+-- says there is nothing to act on, and no clickable row stands then anyway.
 vim.cmd([[function! SelvageStopFollowing(minwid, clicks, button, mods) abort
   call v:lua.require('selvage').stop_following()
-endfunction
-function! SelvageCopyInvite(minwid, clicks, button, mods) abort
-  call v:lua.require('selvage').copy_invite()
 endfunction]])
 
 --- Which saved row a window's buffer reads and writes: the window and the buffer together,
@@ -1859,7 +1826,6 @@ local function paint_bar()
   state.session_painted = you
   pcall(api.nvim_set_hl, 0, SESSION_HIGHLIGHT, { link = 'Title', default = true })
   pcall(api.nvim_set_hl, 0, 'SelvageWarn', { link = 'WarningMsg', default = true })
-  pcall(api.nvim_set_hl, 0, 'SelvageInvite', { link = 'TabLineSel', default = true })
   pcall(api.nvim_set_hl, 0, 'SelvageCrown', { fg = '#f9e2af', bold = true, default = true })
   pcall(api.nvim_set_hl, 0, 'SelvageFollowed', { fg = '#cba6f7', bold = true, default = true })
   pcall(api.nvim_set_hl, 0, 'SelvageYou', { fg = '#000000', bg = you, bold = true, underline = true })
@@ -1974,9 +1940,9 @@ local function faces_text()
   return table.concat(faces, ' ')
 end
 
---- The room as `:SelvagePeers` draws it: everyone in the order of the faces, each with the
---- highlight their face wears and the file they are in, and the files the room offers. Your own
---- file is the one `win` shows, the current window by default.
+--- The room as `:SelvagePeers` lists it: everyone in the order of the faces, each with the
+--- highlight their face wears and the file they are in. Your own file is the one `win` shows,
+--- the current window by default.
 function M.room(win)
   paint_bar()
   local own = state.self_seat ~= nil and state.self_seat.peer_id or nil
@@ -2003,22 +1969,41 @@ function M.room(win)
       path = you and (here and here.path or nil) or where[seat.peer_id],
     }
   end
-  return {
-    role = state.role,
-    root = state.root,
-    here = here and here.path or nil,
-    files = M.offered(),
-    people = people,
-  }
+  return { people = people }
 end
 
---- The bar a buffer wears, the web page's session bar in a winbar: the session's name, the invite
---- control, the follow, and the faces at the right. Under `never` a follow still shows its own
+--- Lists everyone in the room, one line each: their face, their name and the file they are in.
+--- Echoed rather than notified, because a notification provider may render a message as plain
+--- text and the face's colour is how a person is told apart from the carets.
+function M.list_peers()
+  if not in_session() then
+    notify('join a session first.', vim.log.levels.WARN)
+    return
+  end
+  local people = M.room().people
+  local width = 0
+  for _, person in ipairs(people) do
+    person.shown = person.name .. (person.you and ' (you)' or '')
+    width = math.max(width, vim.fn.strdisplaywidth(person.shown))
+  end
+  local chunks = {}
+  for _, person in ipairs(people) do
+    if #chunks > 0 then
+      chunks[#chunks + 1] = { '\n' }
+    end
+    chunks[#chunks + 1] = person.host and { CROWN, 'SelvageCrown' } or { ' ' }
+    chunks[#chunks + 1] = person.followed and { FOLLOWED_MARK, 'SelvageFollowed' } or { ' ' }
+    chunks[#chunks + 1] = { ' ' .. person.initials .. ' ', person.highlight }
+    chunks[#chunks + 1] = { ' ' .. person.shown .. (' '):rep(width - vim.fn.strdisplaywidth(person.shown) + 2) }
+    chunks[#chunks + 1] = { person.path or 'no file open', 'Comment' }
+  end
+  api.nvim_echo(chunks, true, {})
+end
+
+--- The bar a buffer wears, the web page's session bar in a winbar: the session's name, the
+--- follow, and the faces at the right. Under `never` a follow still shows its own
 --- chip, because it is the way to stop. Nil when the buffer has no row to wear.
 local function indicator_row(bufnr)
-  if vim.bo[bufnr].filetype == 'selvage' then
-    return nil
-  end
   local mode = indicator_mode()
   if mode == 'never' then
     if state.following == nil then
@@ -2040,10 +2025,6 @@ local function indicator_row(bufnr)
   end
   if state.reconnecting then
     parts[#parts + 1] = '%#SelvageWarn#' .. row_text(words ~= nil and words.reconnecting or 'Reconnecting…') .. '%*'
-  end
-  if in_session() and state.invite ~= nil and words ~= nil then
-    local label = state.copied and words.copied or words.copyInvite
-    parts[#parts + 1] = ('%%#SelvageInvite#%%0@SelvageCopyInvite@ %s %%X%%*'):format(row_text(label))
   end
   if state.following ~= nil then
     parts[#parts + 1] = follow_chip(state.following.label)
@@ -2136,7 +2117,6 @@ refresh_indicators = function()
       show_indicator(win)
     end
   end
-  refresh_panel()
 end
 --- Draws the row again in the windows showing `bufnr`: what one buffer holds is the one
 --- thing the row says that changes without a session event — the mark a file wears while the
@@ -2241,8 +2221,7 @@ local function watch_follow_window()
   api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
     group = state.follow_group,
     callback = function()
-      -- Looking at the room's panel is not a move away from the person followed.
-      if state.applying_follow or state.following == nil or still_landed() or in_panel() then
+      if state.applying_follow or state.following == nil or still_landed() then
         return
       end
       end_follow('moved')
@@ -2291,8 +2270,8 @@ end_follow = function(why)
   end
   if why == 'typed' then
     -- Typing ends a follow from inside the buffer's change callback, where Neovim refuses to
-    -- change another buffer's text or open a window: redrawing the panel there fails with E565,
-    -- and a notifier that draws a float would too. Both wait for the next turn.
+    -- change another buffer's text or open a window: a notifier that draws a float fails there
+    -- with E565, so it waits for the next turn.
     vim.schedule(show)
   else
     show()
@@ -3080,13 +3059,7 @@ local function reset(land, keep_mirror)
   state.host_away = nil
   state.self_seat = nil
   state.identity = nil
-  if state.copied_timer ~= nil then
-    pcall(vim.fn.timer_stop, state.copied_timer)
-    state.copied_timer = nil
-  end
-  state.copied = false
   clear_indicator()
-  refresh_panel()
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
   clear_presence()
@@ -3174,6 +3147,17 @@ end
 --- declared here because the host confirm above runs before its definition loads.
 local hand_on_invite
 
+--- Says why `hand_on_invite` did not put the link on the clipboard.
+local function say_not_copied(handed, why)
+  if handed == 'register' then
+    notify(('invite link is in register " (clipboard failed: %s).'):format(why), vim.log.levels.WARN)
+  elseif handed == 'no-invite' then
+    notify('no invite link for this session.', vim.log.levels.WARN)
+  else
+    notify('not in a session.', vim.log.levels.WARN)
+  end
+end
+
 --- What a host or join that could not open says, as one sentence a person can act on.
 ---
 --- A refusal the protocol named is said from its code rather than repeated from the server's
@@ -3258,20 +3242,12 @@ local function on_status(message)
   elseif message.state == 'hosting' then
     -- A host's next move is pasting the link to a guest, so the room copies its page
     -- link without being asked; `:SelvageCopyInvite` stays for later copies. What is
-    -- copied is never the wire address: only the page link leaves this editor. A copy that
-    -- did not happen says which way it did not happen — a refused clipboard and a link this
-    -- connection never held are different faults, and naming the copy command for either
-    -- would answer a person with a command that has nothing to copy.
+    -- copied is never the wire address: only the page link leaves this editor.
     local handed, why = hand_on_invite()
     if handed == 'copied' then
-      notify('the room is open. Send this link to your friend — it is on the clipboard.')
-    elseif handed == 'register' then
-      notify(
-        ('the room is open, but the invite link could not be copied (%s).'):format(why),
-        vim.log.levels.WARN
-      )
+      notify('hosting, invite link copied.')
     else
-      notify('the room is open, but this connection holds no invite link to send.', vim.log.levels.WARN)
+      say_not_copied(handed, why)
     end
     share_current()
     watch_buffers()
@@ -4399,19 +4375,9 @@ function M.host(url)
   if state.status == 'hosting' then
     local handed, why = hand_on_invite()
     if handed == 'copied' then
-      notify('you are already hosting this session; the invite link is on the clipboard.')
-    elseif handed == 'register' then
-      notify(
-        ('you are already hosting this session, but the invite link could not be copied (%s).'):format(
-          why
-        ),
-        vim.log.levels.WARN
-      )
+      notify('already hosting, invite link copied.')
     else
-      notify(
-        'you are already hosting this session, but this connection holds no invite link to send.',
-        vim.log.levels.WARN
-      )
+      say_not_copied(handed, why)
     end
     return
   end
@@ -4534,40 +4500,14 @@ function M.join(invite)
   resolve_invite(with_invite)
 end
 
---- Turns the bar's invite control to `Copied` for as long as the web page shows it.
-local function show_copied()
-  if state.copied_timer ~= nil then
-    pcall(vim.fn.timer_stop, state.copied_timer)
-  end
-  state.copied = true
-  refresh_indicators()
-  state.copied_timer = vim.fn.timer_start(tonumber(words ~= nil and words.copiedMs) or 1800, function()
-    state.copied_timer = nil
-    state.copied = false
-    refresh_indicators()
-  end)
-end
-
---- Puts the invite on the clipboard and the unnamed register, and turns the bar's control to
---- `Copied`, as the web page's button does: that is all a copy that worked says, from the bar, the
---- panel or the command. A session that stands without a link to hand on is not a session that is
---- absent: the sentence for the one says what was missing, and `host or join a room first` is left
---- for the window that is in no session at all.
+--- Puts the invite on the clipboard and the unnamed register, and says so.
 function M.copy_invite()
   local handed, why = hand_on_invite()
-  if handed == 'no-session' then
-    notify('there is no invite link; host or join a room first.', vim.log.levels.WARN)
-    return
+  if handed == 'copied' then
+    notify('invite link copied.')
+  else
+    say_not_copied(handed, why)
   end
-  if handed == 'no-invite' then
-    notify('this session holds no invite link to copy.', vim.log.levels.WARN)
-    return
-  end
-  if handed == 'register' then
-    notify(('the invite link could not be copied (%s).'):format(why), vim.log.levels.WARN)
-    return
-  end
-  show_copied()
 end
 
 --- Leaves the session and stops the companion.

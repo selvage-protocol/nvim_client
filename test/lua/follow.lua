@@ -470,7 +470,7 @@ for _, item in ipairs(nodoc_choice.items) do
 end
 check('a bare go-to still offers the peer in no document', nodoc_row ~= nil, true)
 check(
-  "  whose row reads the panel's words for it",
+  '  whose row says they are not in a file yet',
   nodoc_row ~= nil and nodoc_choice.format_item(nodoc_row):match(' — not in a file yet$') ~= nil,
   true
 )

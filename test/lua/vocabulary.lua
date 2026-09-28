@@ -120,12 +120,8 @@ local TITLES = {
 --- the one whose room had nothing open: no document and no tree is a join with no other news.
 local MESSAGES = {
   -- Hosting and joining.
-  { 'INFO', 'the room is open. Send this link to your friend — it is on the clipboard.' },
-  { 'WARN', 'the room is open, but this connection holds no invite link to send.' },
-  { 'WARN', 'the room is open, but the invite link could not be copied (%s).' },
-  { 'INFO', 'you are already hosting this session; the invite link is on the clipboard.' },
-  { 'WARN', 'you are already hosting this session, but this connection holds no invite link to send.' },
-  { 'WARN', 'you are already hosting this session, but the invite link could not be copied (%s).' },
+  { 'INFO', 'hosting, invite link copied.' },
+  { 'INFO', 'already hosting, invite link copied.' },
   { 'WARN', 'a session is already being opened.' },
   { 'INFO', 'joined the room, opening %s.' },
   { 'INFO', 'joined the room, opening %s. %s open.' },
@@ -142,9 +138,9 @@ local MESSAGES = {
   { 'WARN', 'join a session first.' },
   { 'WARN', 'no shared document matches "%s"; :SelvageOpen alone offers them.' },
   { 'WARN', '"%s" matches several: %s.' },
-  { 'WARN', 'the invite link could not be copied (%s).' },
-  { 'WARN', 'this session holds no invite link to copy.' },
-  { 'WARN', 'there is no invite link; host or join a room first.' },
+  { 'INFO', 'invite link copied.' },
+  { 'WARN', 'invite link is in register " (clipboard failed: %s).' },
+  { 'WARN', 'no invite link for this session.' },
   -- Leaving.
   { 'INFO', 'left the session.' },
   { 'WARN', 'not in a session.' },
@@ -158,6 +154,7 @@ local MESSAGES = {
   { 'WARN', 'nothing to follow: %s\'s caret does not resolve here.' },
   { 'ERROR', 'could not open %s from the room: %s.' },
   { 'WARN', 'no participant matches "%s".' },
+  { 'WARN', 'no other participants yet.' },
   -- The display name.
   { 'INFO', 'no display name is set yet.' },
   { 'INFO', 'the name others see is "%s"; :SelvageDisplayName <name> to change it.' },
@@ -172,8 +169,6 @@ local MESSAGES = {
   { 'INFO', 'the "vim.g.selvage_server_url" setting fixes the server at %s; change it in your config to use a different one.' },
   { 'ERROR', 'that is an invite link, not a server address. Paste the address the server printed when it started, not the link you send to your guest.' },
   { 'ERROR', 'that does not look like a server address. Paste the address the server printed when it started, e.g. selvage.example or ws://127.0.0.1:8080.' },
-  -- The list of participants.
-  { 'WARN', 'no other participants yet.' },
   -- The role the room's state gives this connection (§13.4): a viewer's documents are the
   -- room's and its own edit is never published (§13.9).
   { 'WARN', 'you are a viewer in this room, so its documents are read-only.' },
