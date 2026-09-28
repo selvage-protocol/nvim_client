@@ -898,11 +898,8 @@ vim.cmd('SelvageStopFollowing')
 local before_stop = #notices
 selvage.follow('Ada')
 vim.cmd('SelvageStopFollowing')
-check(
-  'stopping through the command says so',
-  said_since(before_stop, 'stopped following Ada') ~= nil,
-  true
-)
+check('stopping through the command says nothing, as the web does', #notices, before_stop + 1)
+check('  past the follow it ended', notices[#notices].message, 'selvage: following Ada.')
 check(
   '  and takes the indicator down',
   standing_row(vim.api.nvim_get_option_value('winbar', { win = 0 })),
@@ -934,11 +931,7 @@ local clicked = pcall(function()
 end)
 check('the indicator answers a click', clicked, true)
 if clicked then
-  check(
-    '  stopping the follow',
-    said_since(before_click, 'stopped following Ada') ~= nil,
-    true
-  )
+  check('  stopping the follow, and saying nothing', #notices, before_click)
   check('  which the session reports', selvage.following(), nil)
   check('  which the global reports', vim.g.selvage_following, nil)
   check('  and takes the indicator down', standing_row(vim.api.nvim_get_option_value('winbar', { win = 0 })), true)
@@ -1074,11 +1067,7 @@ presence({
 })
 local before_goto = #notices
 selvage.go_to('Bob')
-check(
-  'going somewhere while following stops the follow first',
-  said_since(before_goto, 'stopped following Ada Lovelace') ~= nil,
-  true
-)
+check('going somewhere while following stops the follow first, and says nothing', said_since(before_goto, 'topped following'), nil)
 check('  and lands where asked', vim.fn.bufname('%'), 'selvage://g/two.txt')
 check('  with the cursor on their caret', cursor(), '2,0')
 check('  and follows nobody now', selvage.following(), nil)

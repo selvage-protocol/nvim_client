@@ -2231,9 +2231,9 @@ end
 --- Why a follow ended, in the web page's words, keyed by the reason `end_follow` is given.
 local FOLLOW_ENDED = { typed = 'typing', moved = 'moving', left = 'leaving', gone = 'fileGone' }
 
---- Ends the follow, saying so as `why` asks: 'stopped' for the user and for another navigation,
---- 'typed', 'moved', 'left' and 'gone' for the ways the web page names, and silence for the
---- session going with it.
+--- Ends the follow, saying so as `why` asks: 'typed', 'moved', 'left' and 'gone' in the web
+--- page's words, and nothing for 'stopped', which the person did themselves, as the web does. A
+--- follow the session takes with it is 'silent' and leaves the row to the session's end.
 end_follow = function(why)
   local following = state.following
   if following == nil then
@@ -2251,9 +2251,7 @@ end_follow = function(why)
     return
   end
   local ended = words ~= nil and FOLLOW_ENDED[why] ~= nil and words.followEnded[FOLLOW_ENDED[why]] or nil
-  if ended == nil then
-    notify(('stopped following %s.'):format(following.label))
-  else
+  if ended ~= nil then
     notify(ended:format(following.label))
   end
 end

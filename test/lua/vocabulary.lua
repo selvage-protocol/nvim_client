@@ -151,7 +151,6 @@ local MESSAGES = {
   -- Going to a participant, and following one.
   { 'INFO', 'following %s.' },
   { 'INFO', '%s is not in a document; still following.' },
-  { 'INFO', 'stopped following %s.' },
   { 'WARN', '%s Your copy is kept at %s.' },
   { 'WARN', 'not following anyone.' },
   { 'WARN', 'nothing to go to: %s is not in a document.' },
