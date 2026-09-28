@@ -11,8 +11,8 @@ What a person does:
 - `:SelvageHost <address>` mints the room on that server, with the folder this window is in as the
   room's listing. The address, the folder and the invite are otherwise unchanged.
 - A join is pasting the link. The invite carries the room key and the host key on its fragment, and
-  a room seats no connection that cannot read them, so the link is what a join is: a link without a
-  fragment is refused locally, before a socket is opened.
+  a room seats no connection that cannot read them: a link without a fragment is refused locally,
+  before a socket is opened.
 - Copying the invite is unchanged: the page link this client hands on is the same room, token and
   two keys as the connection's own wire invite.
 - Everything else — `:SelvageOpen`, the mirror, `:SelvageFetch`, `:SelvagePeers`, follow,
