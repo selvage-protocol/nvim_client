@@ -956,24 +956,6 @@ check(
   tonumber('98c379', 16)
 )
 
--- The command echoes the list — the sign first, the whole name beside it — in that same
--- highlight. A notification would go through whatever provider is installed and could arrive as
--- plain text, and the colour is what ties a name to a caret on screen.
-local echoed = nil
-local echo = vim.api.nvim_echo
-vim.api.nvim_echo = function(chunks)
-  echoed = chunks
-end
-vim.cmd('SelvagePeers')
-vim.api.nvim_echo = echo
-check('  and :SelvagePeers prints the two cells', echoed ~= nil and echoed[1] and echoed[1][1], 'th')
-check('    in the peer highlight', echoed ~= nil and echoed[1] and echoed[1][2], name_hl)
-check(
-  '    with the whole name beside them',
-  echoed ~= nil and echoed[2] and echoed[2][1]:find('thisismylongusername', 1, true) ~= nil,
-  true
-)
-
 -- The room names everyone in it, and the list is the room's: a peer whose caret this client
 -- cannot draw — one whose document nobody here holds — is someone to name all the same. The two
 -- cells and the colour are this session's own rendering of a peer, so those are carried only
@@ -997,26 +979,15 @@ check('    with no sign to explain', peers[2] and peers[2].sign, nil)
 check('    and no colour of its own', peers[2] and peers[2].highlight, nil)
 check('    and the role the room gave it', peers[2] and peers[2].role, 'host')
 
-echoed = nil
-vim.api.nvim_echo = function(chunks)
-  echoed = chunks
-end
+-- `:SelvagePeers` opens the room's panel over the same room: both peers, the one it cannot draw
+-- saying so. `test/lua/panel.lua` covers the panel itself.
 vim.cmd('SelvagePeers')
-vim.api.nvim_echo = echo
--- A row is the sign and the text for a peer the gutter drew, and the text alone for one it did
--- not: two rows, one separator, so four chunks, and the signless row is the last of them.
-check('  and :SelvagePeers prints a row for each', echoed ~= nil and #echoed, 4)
-check('    the drawn one still behind its sign', echoed and echoed[1] and echoed[1][1], 'th')
-check(
-  '    and the undrawn one by name alone',
-  echoed and echoed[4] and echoed[4][1]:find('Ann', 1, true) ~= nil,
-  true
-)
-check(
-  '    saying it is not in a document',
-  echoed and echoed[4] and echoed[4][1]:find('not in a document', 1, true) ~= nil,
-  true
-)
+local listed = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+check('  and :SelvagePeers opens a panel naming each', vim.bo.filetype, 'selvage')
+check('    the drawn one', listed:find('thisismylongusername', 1, true) ~= nil, true)
+check('    and the undrawn one', listed:find('Ann', 1, true) ~= nil, true)
+check('    saying it is not in a file yet', listed:find('not in a file yet', 1, true) ~= nil, true)
+vim.cmd('close')
 
 -- End of the session: every mark goes with it, whatever buffer it was on.
 marks = draw({

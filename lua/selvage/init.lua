@@ -411,6 +411,14 @@ end
 --- Declared here so the draw can call it; assigned where the row is drawn.
 local refresh_indicators
 
+--- Draws the room's panel again, when it has been opened: it shows what the row shows and more.
+local function refresh_panel()
+  local panel = package.loaded['selvage.panel']
+  if panel ~= nil then
+    panel.refresh()
+  end
+end
+
 --- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
 --- (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is `{ [room_path] = { { initials,
 --- colour, label, peerId } } }` and `User SelvagePresence` fires whenever it changes. This client
@@ -598,37 +606,13 @@ function M.peers()
   return peers
 end
 
---- Lists the session's participants: each sign beside the whole name it stands for, in the
---- colour both are drawn in. Echoed rather than notified, because a notification provider may
---- render a message as plain text and the colour is the point. A peer this client holds no
---- document for has no sign and no colour, and is listed by name and role alone.
+--- Opens the room's panel: everyone in it, then the files the room offers (`selvage.panel`).
 function M.list_peers()
   if not in_session() then
     notify('join a session first.', vim.log.levels.WARN)
     return
   end
-  local peers = M.peers()
-  if #peers == 0 then
-    notify('no other participants yet.', vim.log.levels.WARN)
-    return
-  end
-  local chunks = {}
-  for _, peer in ipairs(peers) do
-    if #chunks > 0 then
-      chunks[#chunks + 1] = { '\n' }
-    end
-    if peer.sign ~= nil then
-      chunks[#chunks + 1] = { peer.sign, peer.highlight }
-    end
-    chunks[#chunks + 1] = {
-      ('  %s  (%s, %s)'):format(
-        peer.label,
-        tostring(peer.role or 'participant'),
-        tostring(peer.path or 'not in a document')
-      ),
-    }
-  end
-  api.nvim_echo(chunks, true, {})
+  require('selvage.panel').open()
 end
 
 --- The shared document whose buffer is `bufnr`, or nil when this session does not share it.
@@ -1959,10 +1943,51 @@ local function faces_text()
   return table.concat(faces, ' ')
 end
 
+--- The room as `:SelvagePeers` draws it: everyone in the order of the faces, each with the
+--- highlight their face wears and the file they are in, and the files the room offers. Your own
+--- file is the one `win` shows, the current window by default.
+function M.room(win)
+  paint_bar()
+  local own = state.self_seat ~= nil and state.self_seat.peer_id or nil
+  local followed = state.following ~= nil and state.following.peerId or nil
+  local where = {}
+  for _, peer in ipairs(state.peers) do
+    where[peer.peerId] = peer.path
+  end
+  local here = document_for_buf(api.nvim_win_get_buf(win or 0))
+  local people = {}
+  for _, seat in ipairs(seat_order()) do
+    local you = seat.peer_id == own
+    local label = tostring(seat.display_name or '')
+    label = label ~= '' and label or tostring(seat.peer_id)
+    people[#people + 1] = {
+      peerId = seat.peer_id,
+      label = label,
+      name = seat.roster or label,
+      initials = seat.initials or peer_sign(label),
+      host = seat.role == 'host',
+      you = you,
+      followed = seat.peer_id == followed,
+      highlight = you and 'SelvageYou' or peer_highlight({ peerId = seat.peer_id, colour = seat.colour }),
+      path = you and (here and here.path or nil) or where[seat.peer_id],
+    }
+  end
+  return {
+    role = state.role,
+    root = state.root,
+    here = here and here.path or nil,
+    files = M.offered(),
+    people = people,
+  }
+end
+
 --- The bar a buffer wears, the web page's session bar in a winbar: the session's name, the invite
 --- control, the follow, and the faces at the right. Under `never` a follow still shows its own
 --- chip, because it is the way to stop. Nil when the buffer has no row to wear.
 local function indicator_row(bufnr)
+  if vim.bo[bufnr].filetype == 'selvage' then
+    return nil
+  end
   local mode = indicator_mode()
   if mode == 'never' then
     if state.following == nil then
@@ -2080,6 +2105,7 @@ refresh_indicators = function()
       show_indicator(win)
     end
   end
+  refresh_panel()
 end
 --- Draws the row again in the windows showing `bufnr`: what one buffer holds is the one
 --- thing the row says that changes without a session event — the mark a file wears while the
@@ -3021,6 +3047,7 @@ local function reset(land, keep_mirror)
   end
   state.copied = false
   clear_indicator()
+  refresh_panel()
   -- A callback left attached would keep sending into a companion that is gone.
   forget_documents()
   clear_presence()
