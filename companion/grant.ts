@@ -126,6 +126,15 @@ function holdsFile(entries: readonly Dirent[] | undefined, name: string): boolea
 }
 
 /**
+ * Whether a listing carries `name` exactly as the path spelled it, entry name and nothing else:
+ * no case folding and no normalization of the name's own. A directory this host cannot list
+ * carries nothing, so a name under one is refused as a name the folder does not carry.
+ */
+function holdsName(entries: readonly Dirent[] | undefined, name: string): boolean {
+  return entries?.some((entry) => entry.name === name) ?? false;
+}
+
+/**
  * The text of the ignore file `name` at `dir`, or `undefined` when `dir` holds no ignore file this
  * host will read.
  *
@@ -307,6 +316,17 @@ const PINNED_STEPS = existsSync('/proc/self/fd');
  * and only a comparison of the file systems' identities (`st_dev`) at each step would see it. It
  * takes `CAP_SYS_ADMIN` to plant, and the VS Code client serves it too.
  *
+ * Every segment on the way, and the leaf, also has to be an entry of the directory that holds it,
+ * spelled exactly as that directory's listing carries it (`holdsName`): no case folding and no
+ * normalization of the name's own. A file system that folds case or ignores Unicode normalization
+ * resolves a spelling the listing does not carry, while the ignore check above ran on the spelling
+ * the peer sent — so without this a path could pass that check and then open the file the check
+ * meant to leave out. The check reads the listings `openGoverning` and `walkGoverning` already
+ * take, so it costs no extra `readdir`. A name that is not an entry exactly is `missing`, the same
+ * refusal a name the folder does not carry gets, and it says nothing about why the spelling failed.
+ * It closes the folding and normalization aliases and nothing else: a mount point and a name the
+ * local writer swaps mid-resolution are still the residuals above.
+ *
  * The folder's own ignore files bind this read as well as the listing, because what the listing does
  * not carry is not this host's to serve either: the sources are the ones governing the path, read
  * only from directories the path's own resolution accepted and only where such a directory lists
@@ -331,15 +351,22 @@ export async function readGrantedFile(root: string, path: string): Promise<Grant
   }
   if (!PINNED_STEPS) {
     const directory = await walkGoverning(root, segments);
-    return 'kind' in directory
-      ? directory
-      : await readLeaf(join(directory.path, leaf), directory.sources, path);
+    if ('kind' in directory) {
+      return directory;
+    }
+    if (!holdsName(directory.entries, leaf)) {
+      return refused('missing');
+    }
+    return await readLeaf(join(directory.path, leaf), directory.sources, path);
   }
   const directory = await openGoverning(root, segments);
   if ('kind' in directory) {
     return directory;
   }
   try {
+    if (!holdsName(directory.entries, leaf)) {
+      return refused('missing');
+    }
     return await readLeaf(inside(directory.handle, leaf), directory.sources, path);
   } finally {
     await directory.handle.close().catch(() => undefined);
@@ -360,12 +387,20 @@ function refused(cause: GrantRefusal): Refused {
  * `isIgnoredPath` reads the patterns of each source against.
  */
 type GoverningOpened =
-  | { readonly handle: FileHandle; readonly sources: readonly IgnoreSource[] }
+  | {
+      readonly handle: FileHandle;
+      readonly sources: readonly IgnoreSource[];
+      readonly entries: readonly Dirent[] | undefined;
+    }
   | Refused;
 
 /** The same, for a platform that cannot address a directory that is already open. */
 type GoverningFound =
-  | { readonly path: string; readonly sources: readonly IgnoreSource[] }
+  | {
+      readonly path: string;
+      readonly sources: readonly IgnoreSource[];
+      readonly entries: readonly Dirent[] | undefined;
+    }
   | Refused;
 
 /**
@@ -398,7 +433,10 @@ function inside(directory: FileHandle, name = ''): string {
  * is a link is refused by `O_NOFOLLOW` where the platform has it (`NO_FOLLOW`) — the same care the
  * leaf's own read takes — and each ignore file is read from *inside* the directory that holds it
  * (`ignoreFileIn`). A `.gitignore` that is a link out of the folder, and a `.git` that is a link to
- * a repository elsewhere, are therefore not this folder's rules and not read.
+ * a repository elsewhere, are therefore not this folder's rules and not read. A step also has to be
+ * an entry of the directory it is opened in, spelled exactly as that directory lists it
+ * (`holdsName`); the listing that decides that is the same one the directory's own ignore file is
+ * read from, so a peer's path does not list a directory twice.
  */
 async function openGoverning(
   root: string,
@@ -418,14 +456,21 @@ async function openGoverning(
     sources.push({ dir: '', text: exclude });
   }
   for (let depth = 0; ; depth += 1) {
-    const own = await ignoreFileIn(directory, IGNORE_FILE);
+    const entries = await readdir(inside(directory), { withFileTypes: true }).catch(
+      () => undefined,
+    );
+    const own = await ignoreFileIn(directory, IGNORE_FILE, entries);
     if (own !== undefined) {
       sources.push({ dir: relative, text: own });
     }
     if (depth === segments.length) {
-      return { handle: directory, sources };
+      return { handle: directory, sources, entries };
     }
     const segment = segments[depth] ?? '';
+    if (!holdsName(entries, segment)) {
+      await directory.close().catch(() => undefined);
+      return refused('missing');
+    }
     const next = await open(inside(directory, segment), STEP).catch((error: unknown) =>
       refused(stepRefusal(error)),
     );
@@ -446,8 +491,13 @@ async function openGoverning(
  * listing and the read name the child through `dir`'s descriptor, so neither step resolves a name
  * through a directory anywhere but the one the path's resolution found and accepted.
  */
-async function ignoreFileIn(dir: FileHandle, name: string): Promise<string | undefined> {
-  const entries = await readdir(inside(dir), { withFileTypes: true }).catch(() => undefined);
+async function ignoreFileIn(
+  dir: FileHandle,
+  name: string,
+  listing?: readonly Dirent[],
+): Promise<string | undefined> {
+  const entries =
+    listing ?? (await readdir(inside(dir), { withFileTypes: true }).catch(() => undefined));
   if (!holdsFile(entries, name)) {
     return undefined;
   }
@@ -485,9 +535,10 @@ async function repositoryExcludeIn(directory: FileHandle): Promise<string | unde
 
 /**
  * The same walk by name, for a platform that cannot address a directory that is already open:
- * every step has to be a plain directory of the folder, and the ignore files are listed and read
- * by name, but the check and the resolution of the step after it are two readings of one name —
- * see `readGrantedFile`.
+ * every step has to be a plain directory of the folder, spelled exactly as the directory holding it
+ * lists it (`holdsName`) before the name is resolved, and the ignore files are listed and read by
+ * name, but the check and the resolution of the step after it are two readings of one name — see
+ * `readGrantedFile`.
  */
 async function walkGoverning(
   root: string,
@@ -497,14 +548,18 @@ async function walkGoverning(
   let head = root;
   let relative = '';
   for (let depth = 0; ; depth += 1) {
-    const own = await ignoreFileAt(head, IGNORE_FILE);
+    const entries = await listDirectory(head);
+    const own = await ignoreFileAt(head, IGNORE_FILE, entries);
     if (own !== undefined) {
       sources.push({ dir: relative, text: own });
     }
     if (depth === segments.length) {
-      return { path: head, sources };
+      return { path: head, sources, entries };
     }
     const segment = segments[depth] ?? '';
+    if (!holdsName(entries, segment)) {
+      return refused('missing');
+    }
     head = join(head, segment);
     const info = await lstat(head).catch(() => undefined);
     if (info === undefined) {

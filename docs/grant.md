@@ -38,6 +38,17 @@ where that directory is itself an ordinary directory of the folder: a `.gitignor
 symbolic link somewhere else, and a `.git` that is a link to another repository, are not this
 folder's rules and are not read.
 
+A path a peer names is resolved one segment at a time, and every segment — the leaf included — has
+to be an entry of the directory that holds it, spelled exactly as that directory lists it. A file
+system that folds case or ignores Unicode normalization resolves a spelling the listing does not
+carry, and the ignore check runs on the spelling the peer sent, so without this check a path could
+pass it and then open the file it meant to leave out. A segment that is not an entry exactly is
+refused `missing`, the refusal a name the folder does not carry gets, and it says nothing about why
+the spelling did not match. The check reads the same listing the directory's ignore file is read
+from, so it costs no second listing. Two things it does not close: a name the local writer swaps for
+a link between the check and the resolution that follows it, and a segment that is a mount point
+rather than a link, which the file system reports as the directory it resolves to.
+
 Two things this does not do, both deliberate. Nothing above the root is read, so a folder shared
 from inside a repository does not honor the `.gitignore` above it, and `core.excludesFile` is not
 read either: these are rules of the folder being shared rather than of the person at the machine,
