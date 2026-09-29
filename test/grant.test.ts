@@ -386,6 +386,60 @@ test('an ignored path that exists is not-granted, and one that is not there is m
   assert.equal(served(await readGrantedFile(root, 'sub/kept.txt')), 'kept\n');
 });
 
+// A path from the other end of the session is a *spelling*, and the directory that holds it has its
+// own. A file system that folds case or ignores Unicode normalization resolves a spelling no entry
+// carries, while the ignore check above it ran on the spelling the peer sent — so a path can pass
+// that check and then open the file it meant to leave out. Every segment, the leaf included, has to
+// be an entry of the directory that holds it, exactly, before the name is resolved.
+test('a variant spelling of a leaf or a directory is refused before it resolves', async () => {
+  // The portable half of the hole, on any host. U+FFFD is what Node decodes a directory entry to;
+  // a lone surrogate is a different string that Node's own UTF-8 encoding maps onto U+FFFD's
+  // bytes. No entry is named after the request, and the request still resolves: a case-folding or
+  // normalizing file system is the same shape with the alias that platform provides.
+  const listed = '\ufffd';
+  const variant = '\ud800';
+  const root = join(ROOT, 'spelling');
+  await put(`spelling/${listed}.txt`, 'the leaf the listing names\n');
+  // Padded past what the folder's own ignore files read together, so a read of it shows in the
+  // bytes this process read; a variant that resolves would read it and be served.
+  await put(`spelling/${listed}/secret.txt`, 'x'.repeat(PADDING_BYTES * 2));
+  await put('spelling/src/main.rs', 'the listed spelling\n');
+  await put('spelling/ignored/secret.txt', 'under an ignored directory\n');
+  await put('spelling/.gitignore', `${listed}/\nignored/\n`);
+  await put('spelling/kept.txt', 'kept\n');
+
+  // The case variants are the same rule with the platform's own alias: on a case-sensitive host
+  // they are refused because the name is not there at all, and on one that folds the exact-entry
+  // check is the whole of what refuses them. A variant directory and a variant leaf are separate
+  // call sites, so both are named.
+  const refused = [
+    'SRC/main.rs',
+    'src/MAIN.rs',
+    'IGNORED/secret.txt',
+    `${variant}.txt`,
+    `${variant}/secret.txt`,
+  ];
+  const before = bytesRead();
+  for (const path of refused) {
+    assert.equal(cause(await readGrantedFile(root, path)), 'missing', `${path} was served`);
+    assert.equal(served(await readGrantedFile(root, path)), undefined, `${path} was served`);
+  }
+  const after = bytesRead();
+  if (before !== undefined && after !== undefined) {
+    assert.ok(
+      after - before < PADDING_BYTES / 4,
+      `${after - before} bytes were read: a variant spelling resolved and was served`,
+    );
+  }
+
+  // The spellings the listing does carry still resolve, so the refusals above are the spelling:
+  // the leaf is served, and the directory is refused `not-granted` by the ignore rule naming it.
+  assert.equal(served(await readGrantedFile(root, `${listed}.txt`)), 'the leaf the listing names\n');
+  assert.equal(cause(await readGrantedFile(root, `${listed}/secret.txt`)), 'not-granted');
+  assert.equal(served(await readGrantedFile(root, 'src/main.rs')), 'the listed spelling\n');
+  assert.equal(cause(await readGrantedFile(root, 'ignored/secret.txt')), 'not-granted');
+});
+
 test('a folder that is no repository, and one whose .git is a file, still walk', async () => {
   const root = join(ROOT, 'no-repository');
   await put('no-repository/.gitignore', 'dropped.txt\n');
