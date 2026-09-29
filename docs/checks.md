@@ -52,8 +52,9 @@ companion, and is tested there against a fake editor. `test/bridge.test.ts` take
 bridge directly (this adapter's `NvimEditorHost` in front of it, a fake replica behind) because a
 guest document the room has not sent the text for is a case the companion's own deferral never
 lets the bridge see. `test/grant.test.ts` is the host's side of the room's listing on a real
-directory tree: which files a listing carries and in what order, and how far a path a peer named may
-reach, including the symbolic links that make a guess about a path interesting. What is left on the Lua side is translation, the wiring around one
+directory tree: which files a listing carries and in what order, which of them the folder's own
+ignore files leave out, and how far a path a peer named may reach, including the symbolic links
+that make a guess about a path interesting. What is left on the Lua side is translation, the wiring around one
 session, and one rule of the editor's own: the conversion between Neovim's byte positions and the
 protocol's UTF-16 code units. The first two get `test/lua/document.lua` and
 `test/lua/session.lua`, which run in a real headless Neovim. The first is against a real buffer
