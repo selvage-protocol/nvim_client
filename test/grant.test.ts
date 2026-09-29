@@ -11,10 +11,24 @@
  * is not, because the leaf behind it is an ordinary file that a `stat` would vouch for. The path
  * travels *through* the link, and no such path was ever listed. The last case is the same link
  * one moment later: a directory that is a link by the time the segment after it is resolved.
+ *
+ * The same link shapes decide the folder's own ignore files, on both halves: a `.gitignore` or a
+ * `.git` planted as a link out of the folder must change no listing and refuse no path, and the
+ * test has to be able to see it if one did — each escape tree holds the same rule as an ordinary
+ * file inside the folder as the control, and the outside files are padded so that reading one
+ * moves the bytes the kernel says this process read.
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -41,6 +55,113 @@ async function put(path: string, body = 'contents\n'): Promise<void> {
   const absolute = join(ROOT, path);
   await mkdir(join(absolute, '..'), { recursive: true });
   await writeFile(absolute, body);
+}
+
+/**
+ * How much an ignore file outside the folder pads itself: far more than every ignore file the
+ * folder holds together, so that a read of one cannot hide in the bytes this process read.
+ */
+const PADDING_BYTES = 128 * 1024;
+
+/** An ignore file's text: `rule` behind a comment line that matches nothing. */
+function paddedRule(rule: string): string {
+  return `# ${'x'.repeat(PADDING_BYTES)}\n${rule}`;
+}
+
+/**
+ * The bytes this process has read through `read` calls, from the kernel's own accounting, or
+ * `undefined` where the kernel publishes no such count.
+ *
+ * A read of a file cannot happen without moving this number, and it is the only way an in-process
+ * test can see the opens the adapter makes: the count is of bytes read, so a listing, an `lstat`
+ * and an open that reads nothing do not move it.
+ */
+function bytesRead(): number | undefined {
+  if (!existsSync('/proc/self/io')) {
+    return undefined;
+  }
+  const line = readFileSync('/proc/self/io', 'utf8')
+    .split('\n')
+    .find((entry) => entry.startsWith('rchar:'));
+  return line === undefined ? undefined : Number(line.slice('rchar:'.length).trim());
+}
+
+/**
+ * Runs `work` and asserts no padded file was among what it read. `work`'s own assertions say what
+ * the listing and the refusals were; this is the half that says *nothing outside the folder was
+ * opened*, which no listing can show. It is skipped where the kernel keeps no such count.
+ */
+async function assertReadNothingPadded(work: () => Promise<unknown>): Promise<void> {
+  const before = bytesRead();
+  await work();
+  const after = bytesRead();
+  if (before === undefined || after === undefined) {
+    return;
+  }
+  assert.ok(
+    after - before < PADDING_BYTES / 4,
+    `${after - before} bytes were read, where the folder's own ignore files are tens of bytes: a padded one was read`,
+  );
+}
+
+/**
+ * The cause each of `paths` is refused with, read in order; a path that was served is `undefined`.
+ */
+async function causes(
+  root: string,
+  paths: readonly string[],
+): Promise<Array<GrantRefusal | undefined>> {
+  const answered: Array<GrantRefusal | undefined> = [];
+  for (const path of paths) {
+    answered.push(cause(await readGrantedFile(root, path)));
+  }
+  return answered;
+}
+
+/** How one of an escape tree's two ignore files is placed. */
+type Placed = 'absent' | 'linked' | 'real';
+
+/**
+ * A tree whose own ignore files would change its listing, with either of them reachable through a
+ * symbolic link out of the folder.
+ *
+ * `<root>/.gitignore` excludes `hidden.txt` at every depth, so `sub/hidden.txt` is out until some
+ * source re-includes it; `sub/.gitignore` holds `!hidden.txt` and `.git/info/exclude` holds
+ * `dropped.txt`. Each is placed `absent` (the folder has none), `linked` (a symbolic link to a
+ * file, or to a repository directory, outside the folder) or `real` (the same bytes as an ordinary
+ * file of the folder).
+ *
+ * `real` is what keeps the comparison from being vacuous: the same rule changes the listing where
+ * it is a file of the folder, so `linked` equalling `absent` is a statement about the link and not
+ * two empty results agreeing.
+ */
+function escapeTree(name: string, sub: Placed, git: Placed): string {
+  const root = join(ROOT, 'escape', name);
+  const outside = join(ROOT, 'escape', 'outside');
+  const saidByTheLink = join(outside, 'said-by-the-link.gitignore');
+  const gitdir = join(outside, 'gitdir');
+  mkdirSync(join(gitdir, 'info'), { recursive: true });
+  writeFileSync(saidByTheLink, paddedRule('!hidden.txt\n'));
+  writeFileSync(join(gitdir, 'info', 'exclude'), paddedRule('dropped.txt\n'));
+
+  mkdirSync(join(root, 'sub'), { recursive: true });
+  writeFileSync(join(root, '.gitignore'), 'hidden.txt\n');
+  writeFileSync(join(root, 'dropped.txt'), 'kept unless an outside exclude is read\n');
+  writeFileSync(join(root, 'kept.txt'), 'kept\n');
+  writeFileSync(join(root, 'hidden.txt'), 'excluded by the folder\n');
+  writeFileSync(join(root, 'sub', 'hidden.txt'), 'excluded by the folder, re-included by a link\n');
+  if (sub === 'real') {
+    writeFileSync(join(root, 'sub', '.gitignore'), paddedRule('!hidden.txt\n'));
+  } else if (sub === 'linked') {
+    symlinkSync(saidByTheLink, join(root, 'sub', '.gitignore'));
+  }
+  if (git === 'real') {
+    mkdirSync(join(root, '.git', 'info'), { recursive: true });
+    writeFileSync(join(root, '.git', 'info', 'exclude'), paddedRule('dropped.txt\n'));
+  } else if (git === 'linked') {
+    symlinkSync(gitdir, join(root, '.git'));
+  }
+  return root;
 }
 
 before(() => {
@@ -193,6 +314,96 @@ test('a listing carries no symbolic link', async () => {
   assert.deepEqual(await enumerateGrant(linked), ['here.txt']);
 });
 
+test('a listing honors the folder’s ignore files and reads nothing above it', async () => {
+  // The folder sits inside a tree with rules of its own: `above/.gitignore` names `root/src/`. The
+  // folder is the bound on what a host reads for the room, so that rule is not this session's
+  // (`docs/grant.md`). It is padded, so a read of it would show in the bytes the walk read.
+  await put('ignore/above/.gitignore', paddedRule('root/src/\n'));
+  const root = join(ROOT, 'ignore', 'above', 'root');
+  await put('ignore/above/root/.gitignore', '*.log\n!keep.log\n/root-only\nmoved/\nignored/\n');
+  await put('ignore/above/root/.git/info/exclude', '*.tmp\n*.log\n');
+  await put('ignore/above/root/keep.log', 're-included over the repository exclude\n');
+  await put('ignore/above/root/drop.log', 'dropped by both sources\n');
+  await put('ignore/above/root/notes.tmp', 'dropped by the repository exclude\n');
+  await put('ignore/above/root/root-only/inside.txt', 'behind an anchored pattern\n');
+  await put('ignore/above/root/moved/a.txt', 'behind a directory pattern\n');
+  await put('ignore/above/root/ignored/.gitignore', '!inside.txt\n');
+  await put('ignore/above/root/ignored/inside.txt', 'under an ignored directory\n');
+  await put('ignore/above/root/src/main.rs', 'named by the ignore file above the folder\n');
+  await put('ignore/above/root/nested/.gitignore', '!drop.log\nnote.txt\n');
+  await put('ignore/above/root/nested/drop.log', 're-included by the deeper source\n');
+  await put('ignore/above/root/nested/note.txt', 'dropped by the deeper source\n');
+  await put('ignore/above/root/nested/root-only/inside.txt', 'the anchored pattern names the root one only\n');
+
+  // `.git/info/exclude` is the lowest precedence source and the `.gitignore` beside it overrides
+  // it (`keep.log`); the deeper source re-includes a name the root one drops (`nested/drop.log`);
+  // `ignored/` is a directory the walk does not descend into, so nothing inside it is listed
+  // however its own `.gitignore` reads; and `src/main.rs` is listed, because the rule above the
+  // folder has nothing to say here.
+  const listed = [
+    '.gitignore',
+    'keep.log',
+    'nested/.gitignore',
+    'nested/drop.log',
+    'nested/root-only/inside.txt',
+    'src/main.rs',
+  ];
+  await assertReadNothingPadded(async () => {
+    assert.deepEqual(await enumerateGrant(root), listed);
+  });
+
+  // The read agrees with the listing: what the listing does not carry is not this host's to serve.
+  for (const path of [
+    'drop.log',
+    'notes.tmp',
+    'moved/a.txt',
+    'ignored/inside.txt',
+    'nested/note.txt',
+    'root-only/inside.txt',
+  ]) {
+    assert.equal(cause(await readGrantedFile(root, path)), 'not-granted', `${path} was served`);
+  }
+  for (const path of ['keep.log', 'nested/drop.log', 'src/main.rs']) {
+    assert.notEqual(cause(await readGrantedFile(root, path)), 'not-granted', `${path} was refused`);
+  }
+});
+
+test('an ignored path that exists is not-granted, and one that is not there is missing first', async () => {
+  const root = join(ROOT, 'ignored-read');
+  await put('ignored-read/.gitignore', 'secret-*.txt\n');
+  await put('ignored-read/sub/.gitignore', 'notes-*.md\n');
+  await put('ignored-read/secret-here.txt', 'named by the root ignore file\n');
+  await put('ignored-read/sub/notes-here.md', 'named by the nested ignore file\n');
+  await put('ignored-read/sub/kept.txt', 'kept\n');
+
+  // A path that exists and the folder leaves out is refused `not-granted`, the silent no a name
+  // the grant never carries gets: a refusal that told a guesser otherwise would be worth making.
+  assert.equal(cause(await readGrantedFile(root, 'secret-here.txt')), 'not-granted');
+  assert.equal(cause(await readGrantedFile(root, 'sub/notes-here.md')), 'not-granted');
+  // A path that is not there is `missing` first, whatever the ignore files say about the name.
+  assert.equal(cause(await readGrantedFile(root, 'secret-gone.txt')), 'missing');
+  assert.equal(cause(await readGrantedFile(root, 'sub/notes-gone.md')), 'missing');
+  assert.equal(served(await readGrantedFile(root, 'sub/kept.txt')), 'kept\n');
+});
+
+test('a folder that is no repository, and one whose .git is a file, still walk', async () => {
+  const root = join(ROOT, 'no-repository');
+  await put('no-repository/.gitignore', 'dropped.txt\n');
+  await put('no-repository/dropped.txt', 'dropped\n');
+  await put('no-repository/kept.txt', 'kept\n');
+  assert.deepEqual(await enumerateGrant(root), ['.gitignore', 'kept.txt']);
+  assert.equal(cause(await readGrantedFile(root, 'dropped.txt')), 'not-granted');
+
+  // A `.git` that is a file rather than a directory (a linked worktree, a submodule) has no
+  // `info/exclude` to read, and neither shape is a fault: a shared folder need not be a
+  // repository at all.
+  const worktree = join(ROOT, 'linked-worktree');
+  await put('linked-worktree/.git', 'gitdir: ../elsewhere\n');
+  await put('linked-worktree/kept.txt', 'kept\n');
+  assert.deepEqual(await enumerateGrant(worktree), ['kept.txt']);
+  assert.equal(served(await readGrantedFile(worktree, 'kept.txt')), 'kept\n');
+});
+
 test('a plain file in the folder is served as its text', async () => {
   await put('served/notes.txt', 'a dokument twö editors share\n');
   assert.equal(
@@ -267,6 +478,57 @@ test('a path through a directory link is not served', async () => {
   }
   // And nothing behind the link is listed, so it is not a path the grant ever named.
   assert.deepEqual(await enumerateGrant(root), []);
+});
+
+test('a linked .gitignore is not read, so its rule re-includes nothing', async () => {
+  const plain = escapeTree('gitignore-plain', 'absent', 'absent');
+  const real = escapeTree('gitignore-real', 'real', 'absent');
+  const linked = escapeTree('gitignore-linked', 'linked', 'absent');
+
+  // The folder's own `.gitignore` excludes `hidden.txt` at every depth. The same rule as an
+  // ordinary file inside the folder re-includes `sub/hidden.txt`, which is what the fixture can
+  // see; the link to those bytes outside the folder changes nothing, so the listing and the
+  // refusals are the ones the link's absence gives.
+  assert.deepEqual(await enumerateGrant(real), [
+    '.gitignore',
+    'dropped.txt',
+    'kept.txt',
+    'sub/.gitignore',
+    'sub/hidden.txt',
+  ]);
+  assert.deepEqual(await enumerateGrant(linked), ['.gitignore', 'dropped.txt', 'kept.txt']);
+  const asked = ['sub/hidden.txt', 'dropped.txt', 'kept.txt'];
+  assert.deepEqual(await causes(real, asked), [undefined, undefined, undefined]);
+  assert.deepEqual(await causes(linked, asked), ['not-granted', undefined, undefined]);
+  assert.deepEqual(await causes(linked, asked), await causes(plain, asked));
+
+  // The listing and the refusals are the portable half; the bytes this process read are the direct
+  // one, and the outside file is far larger than every ignore file the folder holds together.
+  await assertReadNothingPadded(async () => {
+    await enumerateGrant(linked);
+    await readGrantedFile(linked, 'sub/hidden.txt');
+  });
+});
+
+test('a linked .git is not read, so its exclude drops nothing', async () => {
+  const plain = escapeTree('git-plain', 'absent', 'absent');
+  const real = escapeTree('git-real', 'absent', 'real');
+  const linked = escapeTree('git-linked', 'absent', 'linked');
+
+  // `info/exclude` inside the folder names `dropped.txt` and drops it; the link to a repository
+  // directory outside the folder is not this folder's repository, so the name stays listed and
+  // served, exactly as it is with no `.git` at all.
+  assert.deepEqual(await enumerateGrant(real), ['.gitignore', 'kept.txt']);
+  assert.deepEqual(await enumerateGrant(linked), ['.gitignore', 'dropped.txt', 'kept.txt']);
+  const asked = ['dropped.txt', 'kept.txt'];
+  assert.deepEqual(await causes(real, asked), ['not-granted', undefined]);
+  assert.deepEqual(await causes(linked, asked), [undefined, undefined]);
+  assert.deepEqual(await causes(linked, asked), await causes(plain, asked));
+
+  await assertReadNothingPadded(async () => {
+    await enumerateGrant(linked);
+    await readGrantedFile(linked, 'dropped.txt');
+  });
 });
 
 test('a segment that is a file is not walked through', async () => {
