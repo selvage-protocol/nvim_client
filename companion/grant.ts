@@ -9,8 +9,9 @@
  *
  * Resolving a path a *peer* named is the only place a host reads its disk because someone else
  * asked rather than because the user acted, so nothing the path says is trusted: it is held to
- * the grant's own rules, and every directory on the way to it has to be a plain directory of the
- * shared folder rather than a symbolic link out of it.
+ * the grant's own rules — the name-based excludes and the folder's own ignore files — and every
+ * directory on the way to it has to be a plain directory of the shared folder rather than a
+ * symbolic link out of it.
  */
 
 import { existsSync, type Dirent } from 'node:fs';
@@ -22,9 +23,10 @@ import {
   MAX_GRANT_PATHS,
   isBinaryNamedPath,
   isGrantedPath,
+  isIgnoredPath,
   sortGrant,
 } from '../vendor/bridge/index.ts';
-import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
+import type { GrantRefusal, GrantedRead, IgnoreSource } from '../vendor/bridge/index.ts';
 
 /**
  * The room's grant as the front-end is told it: the listing itself, whole and in the room's order,
@@ -55,6 +57,14 @@ export function grantReport(
 export const MAX_GRANT_NODES = 20_000;
 
 /**
+ * The names of the two ignore files a host reads: the `.gitignore` any directory may state for
+ * its children, and the `exclude` list a root's repository states under `info/` for the whole
+ * folder.
+ */
+const IGNORE_FILE = '.gitignore';
+const EXCLUDE_FILE = 'exclude';
+
+/**
  * The listing of a folder as the file system held it when the walk ran: files only, ascending by
  * UTF-16 code unit.
  *
@@ -62,12 +72,111 @@ export const MAX_GRANT_NODES = 20_000;
  * which is a project view missing some names rather than a wedged session. Each directory's
  * entries are visited in name order — the same code-unit order the listing is written in — so
  * which paths survive the truncation does not depend on the file system's own order.
+ *
+ * The listing is what this host shares by itself, so the folder's own ignore files narrow it the
+ * way they narrow a `git status`: `<root>/.git/info/exclude` and every `.gitignore` at or below
+ * the folder, with the last matching pattern deciding. Nothing above the folder is read, which is
+ * a real difference from `git status` — a folder shared from inside a repository does not honor
+ * the rules above it, because the folder is the bound on what a host reads for the room — and
+ * neither `core.excludesFile` nor any other rule outside the folder is read.
  */
 export async function enumerateGrant(root: string): Promise<string[]> {
   const paths: string[] = [];
   const budget = { nodes: MAX_GRANT_NODES };
-  await walk(root, '', paths, budget);
+  await walk(root, '', paths, budget, await rootIgnores(root));
   return sortGrant(paths);
+}
+
+/**
+ * The ignore sources that govern everything under the folder, which is its repository exclude and
+ * nothing else: `<root>/.git/info/exclude` is the lowest precedence source there is, under every
+ * `.gitignore` the walk reads below it.
+ *
+ * A folder need not be a repository, `.git` may be a file rather than a directory (a linked
+ * worktree, a submodule), and a listing may fail; each of those is a folder with no repository
+ * exclude, which is what an absent one means. `.git` and `.git/info` have to be ordinary
+ * directories of the folder before `info/exclude` is read, because a link to a repository
+ * elsewhere would let a file outside the folder decide what this one shares.
+ */
+async function rootIgnores(root: string): Promise<IgnoreSource[]> {
+  if (!holdsDirectory(await listDirectory(root), '.git')) {
+    return [];
+  }
+  const git = join(root, '.git');
+  if (!holdsDirectory(await listDirectory(git), 'info')) {
+    return [];
+  }
+  const text = await ignoreFileAt(join(git, 'info'), EXCLUDE_FILE);
+  return text === undefined ? [] : [{ dir: '', text }];
+}
+
+/** A directory's own entries, or `undefined` when this host cannot list it. */
+async function listDirectory(dir: string): Promise<Dirent[] | undefined> {
+  return readdir(dir, { withFileTypes: true }).catch(() => undefined);
+}
+
+/** Whether a listing holds `name` as an ordinary directory, and not as a link to one. */
+function holdsDirectory(entries: readonly Dirent[] | undefined, name: string): boolean {
+  return entries?.some((entry) => entry.name === name && entry.isDirectory()) ?? false;
+}
+
+/** Whether a listing holds `name` as an ordinary file — not a link, a directory or a FIFO. */
+function holdsFile(entries: readonly Dirent[] | undefined, name: string): boolean {
+  return entries?.some((entry) => entry.name === name && entry.isFile()) ?? false;
+}
+
+/**
+ * The text of the ignore file `name` at `dir`, or `undefined` when `dir` holds no ignore file this
+ * host will read.
+ *
+ * `name` counts only where `dir`'s own listing reports it as an ordinary file: a link, a directory
+ * and a FIFO are each not an ignore file, and a link is exactly what a `stat` of the name follows,
+ * where the listing carries `lstat`'s answer for the directory just read. Bytes that are not UTF-8
+ * text are no ignore file either.
+ *
+ * `listing` is `dir`'s own entries when the caller already holds them, so a walk does not list a
+ * directory twice. The check and the read are two resolutions of one name, so a name swapped for a
+ * link between them is followed: that is the window `readGrantedFile` already states for the leaf
+ * and not a second one, and it is why the path a *peer* names has its ignore files read through
+ * `ignoreFileIn` — inside the descriptor of the directory that listed them — instead.
+ */
+async function ignoreFileAt(
+  dir: string,
+  name: string,
+  listing?: readonly Dirent[],
+): Promise<string | undefined> {
+  const entries = listing ?? (await listDirectory(dir));
+  if (!holdsFile(entries, name)) {
+    return undefined;
+  }
+  return readIgnoreText(join(dir, name));
+}
+
+/**
+ * The bytes at `name` as an ignore file's text, or `undefined` when they are not one this host
+ * will read.
+ *
+ * The open is `O_NOFOLLOW` where the platform has it, and the type comes from the descriptor that
+ * open returned rather than from the name again, so the type and the bytes are one object's and
+ * not two readings of a name. Where the platform has no `O_NOFOLLOW`, a name swapped for a link
+ * between the listing and the open is followed: that is the window `readGrantedFile` states for
+ * the leaf and not a second one.
+ */
+async function readIgnoreText(name: string): Promise<string | undefined> {
+  const handle = await open(name, LEAF).catch(() => undefined);
+  if (handle === undefined) {
+    return undefined;
+  }
+  try {
+    const info = await handle.stat().catch(() => undefined);
+    if (info === undefined || !info.isFile()) {
+      return undefined;
+    }
+    const bytes = await handle.readFile().catch(() => undefined);
+    return bytes === undefined ? undefined : decodableText(bytes);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 async function walk(
@@ -75,18 +184,22 @@ async function walk(
   relative: string,
   out: string[],
   budget: { nodes: number },
+  inherited: readonly IgnoreSource[],
 ): Promise<void> {
   if (out.length >= MAX_GRANT_PATHS || budget.nodes <= 0) {
     return;
   }
-  let entries: Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  const entries = await listDirectory(dir);
+  if (entries === undefined) {
     // A directory that cannot be listed is one this host cannot share; it is not a fault the
     // session should hear about, because the grant is a listing and not a promise.
     return;
   }
+  // This directory's own ignore file governs its children, and it is read whether or not some
+  // pattern would leave it out, as git reads it; `.gitignore` itself stays a shareable name. The
+  // listing just read decides whether the file is there and plain (`ignoreFileAt`).
+  const own = await ignoreFileAt(dir, IGNORE_FILE, entries);
+  const ignores = own === undefined ? inherited : [...inherited, { dir: relative, text: own }];
   entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   for (const entry of entries) {
     if (out.length >= MAX_GRANT_PATHS || budget.nodes <= 0) {
@@ -94,7 +207,11 @@ async function walk(
     }
     budget.nodes -= 1;
     const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
-    if (!isGrantedPath(child)) {
+    const directory = entry.isDirectory();
+    // Two gates by name, and neither reads a byte: what a room never shares at all, and what this
+    // folder's own ignore files leave out. An ignored directory is not descended into, so the
+    // tree below it costs the walk nothing.
+    if (!isGrantedPath(child) || isIgnoredPath(ignores, child, directory)) {
       continue;
     }
     // A symbolic link is neither a file this host can vouch for nor one it should follow,
@@ -103,8 +220,8 @@ async function walk(
     if (entry.isSymbolicLink()) {
       continue;
     }
-    if (entry.isDirectory()) {
-      await walk(join(dir, entry.name), child, out, budget);
+    if (directory) {
+      await walk(join(dir, entry.name), child, out, budget, ignores);
       continue;
     }
     // A listing carries files and never directories.
@@ -190,9 +307,18 @@ const PINNED_STEPS = existsSync('/proc/self/fd');
  * and only a comparison of the file systems' identities (`st_dev`) at each step would see it. It
  * takes `CAP_SYS_ADMIN` to plant, and the VS Code client serves it too.
  *
- * The answer names *which* refusal it is — nothing there, not a plain file, over the size a
- * session carries, bytes that are not text — because one sentence for all of them sent a person
- * refused a `.zip` looking for a file that had never been deleted.
+ * The folder's own ignore files bind this read as well as the listing, because what the listing does
+ * not carry is not this host's to serve either: the sources are the ones governing the path, read
+ * only from directories the path's own resolution accepted and only where such a directory lists
+ * one as an ordinary file (`openGoverning`). A path that exists and they leave out is refused
+ * `not-granted`, the silent no an excluded name gets, and a path that is not there is refused
+ * `missing` first, whatever they say about the name (`readLeaf`). Nothing above the folder is read,
+ * so a folder shared from inside a repository does not honor the rules above it, and
+ * `core.excludesFile` is not read either.
+ *
+ * The answer names *which* refusal it is — not one the grant carries, nothing there, not a plain
+ * file, over the size a session carries, bytes that are not text — because one sentence for all of
+ * them sent a person refused a `.zip` looking for a file that had never been deleted.
  */
 export async function readGrantedFile(root: string, path: string): Promise<GrantedRead> {
   if (!isGrantedPath(path)) {
@@ -204,15 +330,17 @@ export async function readGrantedFile(root: string, path: string): Promise<Grant
     return refused('not-granted');
   }
   if (!PINNED_STEPS) {
-    const directory = await walkToDirectory(root, segments);
-    return 'kind' in directory ? directory : await readLeaf(join(directory.path, leaf));
+    const directory = await walkGoverning(root, segments);
+    return 'kind' in directory
+      ? directory
+      : await readLeaf(join(directory.path, leaf), directory.sources, path);
   }
-  const directory = await openToDirectory(root, segments);
+  const directory = await openGoverning(root, segments);
   if ('kind' in directory) {
     return directory;
   }
   try {
-    return await readLeaf(inside(directory.handle, leaf));
+    return await readLeaf(inside(directory.handle, leaf), directory.sources, path);
   } finally {
     await directory.handle.close().catch(() => undefined);
   }
@@ -225,11 +353,20 @@ function refused(cause: GrantRefusal): Refused {
   return { kind: 'refused', cause };
 }
 
-/** An open directory of the shared folder, or why the path's steps do not lead to one. */
-type OpenedDirectory = { readonly handle: FileHandle } | Refused;
+/**
+ * An open directory of the shared folder, with the ignore sources that govern a path under it.
+ *
+ * A source's `dir` is relative to the root folder, and `''` is the root itself: what
+ * `isIgnoredPath` reads the patterns of each source against.
+ */
+type GoverningOpened =
+  | { readonly handle: FileHandle; readonly sources: readonly IgnoreSource[] }
+  | Refused;
 
-/** A directory of the shared folder named by path, or why the steps do not lead to one. */
-type FoundDirectory = { readonly path: string } | Refused;
+/** The same, for a platform that cannot address a directory that is already open. */
+type GoverningFound =
+  | { readonly path: string; readonly sources: readonly IgnoreSource[] }
+  | Refused;
 
 /**
  * Why a step could not be taken. A name that is not there is `missing`; anything else the file
@@ -244,20 +381,29 @@ function stepRefusal(error: unknown): GrantRefusal {
   return 'not-a-file';
 }
 
-/** A name inside a directory that is already open: `/proc/self/fd/<fd>` is that directory. */
-function inside(directory: FileHandle, name: string): string {
+/**
+ * A name inside a directory that is already open: `/proc/self/fd/<fd>` is that directory, and a
+ * name under it is looked up in what the descriptor holds rather than through the name again.
+ */
+function inside(directory: FileHandle, name = ''): string {
   return join('/proc/self/fd', String(directory.fd), name);
 }
 
 /**
- * The directory the path's segments name, opened one step at a time — a refusal when a step is
- * not a plain directory of the folder. Every step after the folder is resolved inside the
- * descriptor of the one before it, so the names walked through are not resolved a second time.
+ * The directory holding the path's leaf, opened one step at a time, and the ignore sources that
+ * govern the path: the repository exclude at the root first, then the `.gitignore` of every
+ * directory from the root down to that one, lowest precedence first.
+ *
+ * Every step after the folder is taken inside the descriptor of the one before it, and a step that
+ * is a link is refused by `O_NOFOLLOW` where the platform has it (`NO_FOLLOW`) — the same care the
+ * leaf's own read takes — and each ignore file is read from *inside* the directory that holds it
+ * (`ignoreFileIn`). A `.gitignore` that is a link out of the folder, and a `.git` that is a link to
+ * a repository elsewhere, are therefore not this folder's rules and not read.
  */
-async function openToDirectory(
+async function openGoverning(
   root: string,
   segments: readonly string[],
-): Promise<OpenedDirectory> {
+): Promise<GoverningOpened> {
   const folder = await open(root, FOLDER).catch((error: unknown) =>
     refused(stepRefusal(error)),
   );
@@ -265,7 +411,21 @@ async function openToDirectory(
     return folder;
   }
   let directory = folder;
-  for (const segment of segments) {
+  let relative = '';
+  const sources: IgnoreSource[] = [];
+  const exclude = await repositoryExcludeIn(directory);
+  if (exclude !== undefined) {
+    sources.push({ dir: '', text: exclude });
+  }
+  for (let depth = 0; ; depth += 1) {
+    const own = await ignoreFileIn(directory, IGNORE_FILE);
+    if (own !== undefined) {
+      sources.push({ dir: relative, text: own });
+    }
+    if (depth === segments.length) {
+      return { handle: directory, sources };
+    }
+    const segment = segments[depth] ?? '';
     const next = await open(inside(directory, segment), STEP).catch((error: unknown) =>
       refused(stepRefusal(error)),
     );
@@ -274,21 +434,77 @@ async function openToDirectory(
       return next;
     }
     directory = next;
+    relative = relative === '' ? segment : `${relative}/${segment}`;
   }
-  return { handle: directory };
+}
+
+/**
+ * The text of the ignore file `name` inside `dir`, or `undefined` when the directory holds no
+ * ignore file this host will read.
+ *
+ * The directory's own listing decides what is an ignore file (`ignoreFileAt`), and both the
+ * listing and the read name the child through `dir`'s descriptor, so neither step resolves a name
+ * through a directory anywhere but the one the path's resolution found and accepted.
+ */
+async function ignoreFileIn(dir: FileHandle, name: string): Promise<string | undefined> {
+  const entries = await readdir(inside(dir), { withFileTypes: true }).catch(() => undefined);
+  if (!holdsFile(entries, name)) {
+    return undefined;
+  }
+  return readIgnoreText(inside(dir, name));
+}
+
+/**
+ * `<root>/.git/info/exclude`, read inside the root's own descriptor, or `undefined` when the
+ * folder has no repository exclude — which is what an absent one means, not a fault.
+ *
+ * `.git` and `info` are opened with `O_NOFOLLOW` (see `NO_FOLLOW`), so a `.git` that is a link to
+ * a repository elsewhere is refused where a directory has to be rather than read as this folder's
+ * repository. A platform without `/proc/self/fd` does not come here; it goes through
+ * `rootIgnores`, which reads the same rule off the directory listing.
+ */
+async function repositoryExcludeIn(directory: FileHandle): Promise<string | undefined> {
+  const git = await open(inside(directory, '.git'), STEP).catch(() => undefined);
+  if (git === undefined) {
+    return undefined;
+  }
+  try {
+    const info = await open(inside(git, 'info'), STEP).catch(() => undefined);
+    if (info === undefined) {
+      return undefined;
+    }
+    try {
+      return await ignoreFileIn(info, EXCLUDE_FILE);
+    } finally {
+      await info.close().catch(() => undefined);
+    }
+  } finally {
+    await git.close().catch(() => undefined);
+  }
 }
 
 /**
  * The same walk by name, for a platform that cannot address a directory that is already open:
- * every step has to be a plain directory of the folder, but the check and the resolution of the
- * step after it are two readings of one name — see `readGrantedFile`.
+ * every step has to be a plain directory of the folder, and the ignore files are listed and read
+ * by name, but the check and the resolution of the step after it are two readings of one name —
+ * see `readGrantedFile`.
  */
-async function walkToDirectory(
+async function walkGoverning(
   root: string,
   segments: readonly string[],
-): Promise<FoundDirectory> {
+): Promise<GoverningFound> {
+  const sources: IgnoreSource[] = [...(await rootIgnores(root))];
   let head = root;
-  for (const segment of segments) {
+  let relative = '';
+  for (let depth = 0; ; depth += 1) {
+    const own = await ignoreFileAt(head, IGNORE_FILE);
+    if (own !== undefined) {
+      sources.push({ dir: relative, text: own });
+    }
+    if (depth === segments.length) {
+      return { path: head, sources };
+    }
+    const segment = segments[depth] ?? '';
     head = join(head, segment);
     const info = await lstat(head).catch(() => undefined);
     if (info === undefined) {
@@ -297,8 +513,8 @@ async function walkToDirectory(
     if (!info.isDirectory()) {
       return refused('not-a-file');
     }
+    relative = relative === '' ? segment : `${relative}/${segment}`;
   }
-  return { path: head };
 }
 
 /**
@@ -312,11 +528,23 @@ async function walkToDirectory(
  * file whose name declares a format no session carries is the listing's own line, drawn from the
  * name alone (`isBinaryNamedPath`); what is left to this read is a binary the name did not
  * declare, which is refused here.
+ *
+ * The folder's own ignore files bind this read as well as the listing, and they are consulted
+ * once the name is known to exist: a path that is not there is `missing` whatever they say about
+ * the name, and one they leave out is `not-granted`, the silent no a name the grant never carries
+ * gets — a different answer would say the guess was worth making (`docs/grant.md`).
  */
-async function readLeaf(name: string): Promise<GrantedRead> {
+async function readLeaf(
+  name: string,
+  ignores: readonly IgnoreSource[],
+  path: string,
+): Promise<GrantedRead> {
   const info = await lstat(name).catch(() => undefined);
   if (info === undefined) {
     return refused('missing');
+  }
+  if (isIgnoredPath(ignores, path, false)) {
+    return refused('not-granted');
   }
   if (!info.isFile()) {
     return refused('not-a-file');
@@ -342,25 +570,30 @@ async function readLeaf(name: string): Promise<GrantedRead> {
       return refused('too-large');
     }
     const bytes = await handle.readFile().catch(() => undefined);
-    return bytes === undefined ? refused('missing') : decodableText(bytes);
+    if (bytes === undefined) {
+      return refused('missing');
+    }
+    const text = decodableText(bytes);
+    return text === undefined ? refused('binary') : { kind: 'text', text };
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
 /**
- * A file's bytes as text, or a refusal when they are not what a session can carry: a NUL byte or
- * a byte sequence that is not valid UTF-8. A binary turned into a `Y.Text` would be corrupted
+ * A file's bytes as text, or `undefined` when they are not what a session can carry: a NUL byte
+ * or a byte sequence that is not valid UTF-8. A binary turned into a `Y.Text` would be corrupted
  * into replacement characters, and the room's own save policy would write it back over the
- * host's file.
+ * host's file. An ignore file's bytes are held to the same test, because a file that is not text
+ * is not a list of patterns.
  */
-function decodableText(bytes: Uint8Array): GrantedRead {
+function decodableText(bytes: Uint8Array): string | undefined {
   if (bytes.includes(0)) {
-    return refused('binary');
+    return undefined;
   }
   try {
-    return { kind: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    return refused('binary');
+    return undefined;
   }
 }
