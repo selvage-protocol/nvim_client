@@ -654,6 +654,52 @@ test('a walk that read the whole folder is not reported as cut', async (t) => {
   assert.deepEqual(listingCuts(it), []);
 });
 
+test('a mint that failed is not told about a cut', async (t) => {
+  const root = folder(t);
+  // The walk stops short and the mint then dies — a dead address, or a server that refuses the
+  // hello. No room was opened, so there is no session whose folder is short of its listing, and a
+  // warning about one would stand after the failure's own sentence with nothing to act on.
+  const it = harness('host', [], [], {
+    enumerate: async () => ({ paths: ['a.txt'], cut: 'bytes' }),
+    mintFails: new Error('the WebSocket reported an error'),
+  });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:1', root });
+  assert.deepEqual(
+    statuses(it).map((status) => status.state),
+    ['connecting', 'error'],
+    'the mint threw',
+  );
+  assert.deepEqual(listingCuts(it), [], 'a session that never opened was told about a cut');
+});
+
+test('a cut is said by the walk that finds it, not again by the next one', async (t) => {
+  const root = folder(t);
+  tree(root, 'notes.txt', 'a note\n');
+  let walks = 0;
+  const it = harness('host', [], [], {
+    enumerate: async () => {
+      walks += 1;
+      return { paths: ['notes.txt'], cut: 'bytes' };
+    },
+  });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  assert.deepEqual(listingCuts(it), [{ kind: 'listingCut', cut: 'bytes' }]);
+  const minted = walks;
+
+  // A name created in the folder is a change the watcher answers with a walk, and this walk names
+  // what the room already holds, so nothing is published. The cut is a fact about the folder and
+  // not about the listing, so the walk reaches the report all the same — and it is said when it
+  // appears rather than by every walk that finds it.
+  tree(root, 'created.txt', 'made while hosting\n');
+  await until('the change to reach a walk', () => walks > minted, () => walks);
+  await delay(QUIET_MS);
+  assert.deepEqual(
+    listingCuts(it),
+    [{ kind: 'listingCut', cut: 'bytes' }],
+    'the same cut was said a second time',
+  );
+});
+
 test('a host seeds the buffer it opens, and only once', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });

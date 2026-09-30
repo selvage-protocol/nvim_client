@@ -504,6 +504,10 @@ export class Companion {
       return;
     }
     this.send({ type: 'status', state: 'connecting' });
+    // The bound the last walk stopped at belongs to the session that found it: it is forgotten
+    // here, before this attempt's own walk reports one, so a cut the previous session said is not
+    // what this session's walk is measured against.
+    this.listingCut = undefined;
     let engine: CompanionEngine;
     try {
       engine = await open();
@@ -535,9 +539,6 @@ export class Companion {
     this.toldRole = engine.session().role;
     // Which listing reports this session has produced is the session's, not the process's.
     this.grantReported = false;
-    // The bound the last walk stopped at is this session's too: the next one learns the folder's
-    // bounds from its own walk rather than from the previous session's.
-    this.listingCut = undefined;
     this.bridge = new SessionBridge({
       engine,
       host: this.editor,
@@ -653,7 +654,9 @@ export class Companion {
    * throw — a dead address, a server that refuses the hello — and a listing written into the
    * session's own field before that would outlive the attempt: `publishGrant` compares against what
    * it holds, so the next host of the same folder would find it unchanged and send no `doc.grant` at
-   * all. A room the mint sealed a state from holds the walk; one that never minted holds nothing.
+   * all. A room the mint sealed a state from holds the walk; one that never minted holds nothing. The
+   * walk's cut is the same fact about the same attempt, and is told once the room exists and not
+   * before: a mint that threw opened no session to warn about.
    */
   private async hosting(
     serverUrl: string,
@@ -661,6 +664,7 @@ export class Companion {
     root?: string,
   ): Promise<CompanionEngine> {
     let walked: readonly string[] = [];
+    let cut: GrantCut | undefined;
     const listing: ListingSource = {
       current: () => walked,
       replace: (paths) => {
@@ -671,7 +675,7 @@ export class Companion {
       try {
         const enumeration = await this.enumerate(root);
         listing.replace(enumeration.paths);
-        this.reportListingCut(enumeration.cut);
+        cut = enumeration.cut;
       } catch (error: unknown) {
         // A folder this process cannot read is not a reason to refuse the room: the host's
         // listing is empty until it can be read, and the walk's own failure is reported by
@@ -690,6 +694,9 @@ export class Companion {
     // The state the mint sealed carries this listing, so the room has been handed it: from here
     // it is what `publishGrant` compares a fresh walk against.
     this.grantedListing = [...walked];
+    // The cut is said here, where a room stands to hear it, and not before the mint above: a walk
+    // that stopped short is a fact about the session, and one that never opened has none.
+    this.reportListingCut(cut);
     return engine;
   }
 
