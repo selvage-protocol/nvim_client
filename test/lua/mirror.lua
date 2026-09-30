@@ -137,8 +137,9 @@ end
 
 --- Joins a room: the status, then the reports a real companion sends as a session starts, in the
 --- order it sends them — the listing first, because a document's buffer is named after the file
---- the listing was materialised at.
-local function join(documents, paths, room)
+--- the listing was materialised at. `unsafe` is the paths of a listing a real companion flags as
+--- ones a host would never publish, which the mirror keeps out of the room.
+local function join(documents, paths, room, unsafe)
   selvage.leave()
   selvage.join('ws://127.0.0.1:1/session?room=r-mirror&token=t')
   handle({
@@ -147,7 +148,7 @@ local function join(documents, paths, room)
     role = 'guest',
     roomId = room or 'r-mirror',
   })
-  handle({ type = 'report', report = { kind = 'grant', paths = paths } })
+  handle({ type = 'report', report = { kind = 'grant', paths = paths, unsafe = unsafe } })
   handle({ type = 'report', report = { kind = 'documents', documents = documents } })
   handle({ type = 'report', report = { kind = 'peers', peers = {} } })
   return selvage.session().mirror
@@ -1301,6 +1302,57 @@ check(
   true
 )
 check('  and opens nothing', #selvage.documents(), held_before)
+selvage.leave()
+
+-- The cap counts what the room names and not what this mirror kept: a listing past it refuses even
+-- when the mirror, refusing most of its paths, would have held only a few. That is the count VS
+-- Code makes the same refusal on (`listed()`, `extension.ts`), so a room it refuses is refused
+-- here too rather than fetched in part. Only one path is kept, and that single file is the probe
+-- that the refusal is the count's and not the mirror's.
+local over_cap = {}
+local refused = {}
+for index = 1, 200 + 1 do
+  over_cap[index] = ('src/f%03d.txt'):format(index)
+  if index > 1 then
+    refused[#refused + 1] = over_cap[index]
+  end
+end
+root = join({}, over_cap, 'r-fetchcap-kept', refused)
+check('a listing over the cap keeps only the paths the mirror would write', mirror.granted('src/f001.txt'), true)
+check('  and not the rest', mirror.granted('src/f002.txt'), false)
+held_before = #selvage.documents()
+before = #notices
+selvage.fetch()
+check(
+  'a fetch of a whole listing over the cap refuses though the mirror kept one path',
+  said_since(
+    before,
+    'fetching all 201 listed files at once would hold every one in the room; fetch a file or a directory instead (at most 100 at once).'
+  ) ~= nil,
+  true
+)
+check('  and opens nothing', #selvage.documents(), held_before)
+before = #notices
+selvage.fetch('src')
+check(
+  'a fetch of a directory over the cap counts every path the room names under it',
+  said_since(before, '201 files under src is more than one fetch holds (at most 100 at once); name a narrower directory.') ~= nil,
+  true
+)
+check('  and opens nothing', #selvage.documents(), held_before)
+
+-- Under the cap the same shape fetches: the count is the room's listing and the hold is the subset
+-- of it this mirror has a file for, so a path it refused is left alone rather than waited for.
+local kept = { 'src/f001.txt', 'src/f002.txt', 'src/f003.txt' }
+root = join({}, kept, 'r-fetchcap-few', { 'src/f002.txt' })
+responder = room_holding({ ['src/f001.txt'] = 'first\n', ['src/f003.txt'] = 'third\n' })
+before = #notices
+selvage.fetch()
+check('a fetch of a listing under the cap fetches the paths the mirror kept', fetched_since(before, 'fetched the files') ~= nil, true)
+check('  and writes the one it kept', read(root .. '/src/f001.txt'), 'first\n')
+check('  and leaves the one it did not', read(root .. '/src/f002.txt'), nil)
+check('  and says nothing of the one it did not', said_since(before, 'src/f002.txt'), nil)
+responder = nil
 selvage.leave()
 
 -- -- a file closed while it is being fetched ----------------------------------------------
