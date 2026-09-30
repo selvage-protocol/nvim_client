@@ -24,16 +24,19 @@ local M = {}
 --- The name this client's mirrors live under, inside `stdpath('cache')`.
 local BASE = 'selvage'
 
---- How long a path in a listing may be, and how many of them one may carry: the server's bound
---- and the host enumerator's, which the grant's rules own (`vendor/bridge/grant.ts`,
---- `MAX_GRANT_PATH_BYTES` and `MAX_GRANT_PATHS`).
+--- How long a path in a listing may be, and how many of them one may carry: the longest path a
+--- listing may name (`vendor/bridge/grant.ts`'s `MAX_GRANT_PATH_BYTES`) and §13.3's count bound
+--- for one listing (`MAX_LISTING_PATHS`, which `MAX_GRANT_PATHS` derives from). Lua cannot import
+--- either, so they are fields a caller can read, and `test/lua/bounds.lua` pins them against the
+--- vendored constants so neither literal can drift from its one home.
 ---
---- A host never publishes more than these, so a conforming room is never shortened by them. A
---- listing past either is one no client enumerated, and this process makes one file per path in
---- the foreground as the listing arrives — so what is past them is refused, and reported the way
---- a path that cannot be written is.
-local MAX_PATH_BYTES = 4096
-local MAX_LISTED = 5000
+--- The count bound is this receiver's capacity and not a cut the room is told about: a listing past
+--- it is one that listed more than a walk publishes, and this process makes one file per path in
+--- the foreground as the listing arrives, so what it will not make is said — as capacity, told
+--- apart from a path whose file could not be written. A test lowers the bound to reach that
+--- refusal without a hundred thousand files; the front-end never writes it.
+M.max_path_bytes = 4096
+M.max_listed = 100000
 
 local state = {
   --- The directory this session materialises the room into, or nil when there is none.
@@ -80,7 +83,7 @@ local function writable(path)
   if type(path) ~= 'string' or path == '' or path:sub(1, 1) == '/' or path:sub(-1) == '/' then
     return false
   end
-  if #path > MAX_PATH_BYTES then
+  if #path > M.max_path_bytes then
     return false
   end
   if path:find('\\', 1, true) ~= nil or path:find('\0', 1, true) ~= nil then
@@ -408,26 +411,29 @@ end
 --- @param room string|nil the room id, as the status named it
 --- @param paths string[] the listing, in the order the room carries it
 --- @param unsafe string[]|nil the paths of the listing never to put on disk
---- @return string|nil root, string[] blocked, boolean created
+--- @return string|nil root, string[] blocked, boolean created, string[] overCapacity
 function M.setup(room, paths, unsafe)
   if type(room) ~= 'string' or room == '' then
-    return nil, {}, false
+    return nil, {}, false, {}
   end
   local refused = {}
   for _, path in ipairs(type(unsafe) == 'table' and unsafe or {}) do
     refused[path] = true
   end
   local blocked = {}
+  local over_capacity = {}
   local wanted = {}
   local listed = {}
   for _, path in ipairs(paths or {}) do
-    if #wanted >= MAX_LISTED or refused[path] then
+    if #wanted >= M.max_listed then
+      -- Past the most paths one listing carries: this receiver's capacity, told apart from a
+      -- path the filesystem or the grant's own rules will not write.
+      over_capacity[#over_capacity + 1] = tostring(path)
+    elseif refused[path] or not writable(path) then
       blocked[#blocked + 1] = tostring(path)
-    elseif writable(path) then
+    else
       wanted[#wanted + 1] = path
       listed[path] = true
-    else
-      blocked[#blocked + 1] = tostring(path)
     end
   end
   if state.root ~= nil and state.room ~= room then
@@ -436,11 +442,11 @@ function M.setup(room, paths, unsafe)
   local created = false
   if state.root == nil then
     if #wanted == 0 then
-      return nil, blocked, false
+      return nil, blocked, false, over_capacity
     end
     local dir = room_dir(room)
     if not ensure_dir(dir) then
-      return nil, blocked, false
+      return nil, blocked, false, over_capacity
     end
     prune(dir)
     state.root = vim.fs.joinpath(dir, ('%d-%x'):format(uv.os_getpid(), uv.hrtime()))
@@ -451,10 +457,9 @@ function M.setup(room, paths, unsafe)
   -- The listing is the room's whole answer about which paths it holds as files, so a path it no
   -- longer names loses the file this session made for it. What is compared is the listing the room
   -- last published *as this client mirrored it* — the room's own listing within the bounds above.
-  -- A path the room still names past `MAX_LISTED` is one this client makes no file for, so the file
-  -- it had while the path was inside the bound goes with the rest; a conforming room never reaches
-  -- that, because the host enumerator stops at the same number of paths. A file a tool created in
-  -- the mirror was never the room's and is left where it is. An already-open buffer is not this
+  -- A path the room still names past `max_listed` is one this client makes no file for, so the file
+  -- it had while the path was inside the bound goes with the rest. A file a tool created in the
+  -- mirror was never the room's and is left where it is. An already-open buffer is not this
   -- module's to close; the front-end's grant handler takes it away (`drop_documents`).
   for path in pairs(state.listed) do
     if listed[path] == nil then
@@ -471,7 +476,7 @@ function M.setup(room, paths, unsafe)
   -- of a text the room still holds.
   state.listed = listed
   materialise(state.root, wanted, blocked)
-  return state.root, blocked, created
+  return state.root, blocked, created, over_capacity
 end
 
 --- Removes this session's mirror, unless `keep` asks for it to stay. The room is the truth, so

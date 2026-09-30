@@ -218,6 +218,10 @@ local MESSAGES = {
   { 'INFO', '1 file is mirrored at %s; :SelvageOpen opens it.' },
   { 'WARN', "%d of the room's files could not be written to disk, starting with %s." },
   { 'WARN', "one of the room's files could not be written to disk: %s." },
+  -- The receiver's capacity, told apart from a write that failed: the room listed more files than
+  -- this mirror holds.
+  { 'WARN', 'the room lists more files than this session mirrors; %s is left out.' },
+  { 'WARN', 'the room lists more files than this session mirrors; %d of them are left out, starting with %s.' },
   { 'WARN', "%s is not in the room, so it is not shared. Save a copy outside the room's folder to keep it." },
   { 'WARN', "%s is not in the room, so this save was not shared. Save a copy outside the room's folder to keep it." },
   { 'WARN', 'the room carries no file mutations yet.' },
