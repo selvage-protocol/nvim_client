@@ -315,6 +315,13 @@ class FakeTree implements ListingWalkSource<string> {
   readonly reads: string[] = [];
   private readonly dirs: Map<string, FakeDirectory | undefined>;
 
+  /**
+   * A tree this host cannot say the platform of, which keeps the fold: every name in a fake is
+   * one a listing carries on either host, so the fold decides nothing here. A test that needs the
+   * platform to decide a name builds its own source or walks a real folder.
+   */
+  readonly platform = '';
+
   constructor(dirs: Record<string, FakeDirectory | undefined>) {
     this.dirs = new Map(Object.entries(dirs));
   }

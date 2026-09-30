@@ -21,6 +21,7 @@ import { join } from 'node:path';
 
 import {
   MAX_GRANT_FILE_BYTES,
+  hostPlatform,
   isGrantedPath,
   isIgnoredPath,
   walkListing,
@@ -83,8 +84,9 @@ const EXCLUDE_FILE = 'exclude';
 export type DirectoryReader = (dir: string) => Promise<readonly WalkEntry[] | undefined>;
 
 /**
- * This host's own file system, as the shared walk's seam: every read goes through `node:fs`, and
- * an entry's own type is reduced to what a listing carries (`kindOf`).
+ * This host's own file system, as the shared walk's seam: every read goes through `node:fs`, an
+ * entry's own type is reduced to what a listing carries (`kindOf`), and the platform is the one
+ * this companion runs on, named here rather than read by the walk.
  *
  * `list` is how a directory is read, and the root's own ignore sources are read through it rather
  * than by listing the folder a second time, so a caller that hands in a reader sees every
@@ -93,6 +95,7 @@ export type DirectoryReader = (dir: string) => Promise<readonly WalkEntry[] | un
  */
 export function fileSystemSource(list: DirectoryReader = listDirectory): ListingWalkSource<string> {
   return {
+    platform: hostPlatform(),
     entries: list,
     ignoreText: (dir, entries) => ignoreFileAt(dir, IGNORE_FILE, entries),
     shareable: (dir, name) => isShareableFile(join(dir, name)),
