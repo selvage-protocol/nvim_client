@@ -22,9 +22,9 @@ the one command that answers that. A buffer holding no fetched content has `[not
 row. `require('selvage').session().mirror` is where the directory is, for a plugin that has to be
 pointed at it.
 
-A fetch holds what it names: those paths join the room's open-document set, so every peer
-receives them and a peer with a mirror materialises them. A file, two of them or a directory is
-one thing; `:SelvageFetch` alone is a whole project published to the room, and the notification
+A fetch holds what it names and can write: those paths join the room's open-document set, so every
+peer receives them and a peer with a mirror materialises them. A file, two of them or a directory
+is one thing; `:SelvageFetch` alone is a whole project published to the room, and the notification
 before it happens says so.
 
 One hold carries at most 100 paths, and it is the room's listing that is counted — the whole
@@ -32,6 +32,15 @@ listing, or every path the room names under a directory — rather than the smal
 client's mirror could write. A fetch past that refuses with a sentence naming a narrower target
 instead of truncating, and the room's open-document set is left as it was. A path the mirror
 refused is still counted, so this client and the VS Code one refuse at the same point.
+
+Under the cap, a path the room names and this mirror wrote no file for is refused on its own,
+with the sentence the VS Code client refuses one with
+(`could not fetch <path> from the room: the file could not be mirrored.`): the room's text has
+nowhere to land, and the file is what a fetch is for. The listing named the path, so that refusal
+is never `no file the room lists matches`, which is said only for an argument the listing does not
+reach at all. This client does hold a document the room has open and its listing does not name —
+as a `selvage://` buffer — but a fetch is not that: it is for the file, and a path the mirror
+refused has none.
 
 A listed path's buffer is the mirror's file, a real path on disk rather than a `selvage://`
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being
