@@ -34,13 +34,12 @@ import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 
 import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
-import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
+import type { GrantRefusal, GrantedRead, IgnoreSource, ListingWalkSource, WalkEntry } from '../vendor/bridge/index.ts';
 import { enumerateGrant, readGrantedFile } from '../companion/grant.ts';
-import type { GrantLimits } from '../companion/grant.ts';
 
 /** The listing a walk found, for the assertions that are about its paths alone. */
-async function pathsOf(root: string, limits?: GrantLimits): Promise<string[]> {
-  return (await enumerateGrant(root, limits)).paths;
+async function pathsOf(root: string): Promise<string[]> {
+  return (await enumerateGrant(root)).paths;
 }
 
 /** The text a read served, or `undefined` when it refused. */
@@ -289,93 +288,152 @@ test('a name that spoofs a tree row is refused', () => {
   assert.equal(isGrantedPath('notes.txt'), true);
 });
 
-// The bounds a walk stops at. The ceiling is a seam here rather than a hundred thousand files on
-// a disk: what is exercised is the accounting — which entry is declined, and which bound is named
-// — so each case hands the walk a ceiling of its own and a tree just wide enough to cross it.
+// The bounds a walk stops at. The shared rule owns them and takes none, so a test cannot narrow
+// them: these cross §13.3's own bounds over the seam `enumerateGrant` reads through, which costs
+// an array and never the hundred thousand files a real folder would need to reach one. Everything
+// else in this file drives the real file system.
 
-/** A ceiling and a work budget a test can cross with a handful of files. */
-function narrowed(
-  ceiling: Partial<GrantLimits['ceiling']> = {},
-  nodes = MAX_GRANT_NODES,
-): GrantLimits {
-  return {
-    ceiling: {
-      paths: ceiling.paths ?? MAX_GRANT_PATHS,
-      bytes: ceiling.bytes ?? MAX_GRANT_LISTING_BYTES,
-    },
-    nodes,
-  };
+/** One entry of a directory, in the shape a listing carries. */
+const fileEntry = (name: string): WalkEntry => ({ name, kind: 'file' });
+
+/** One directory the fake answers for. A directory whose value is `undefined` cannot be listed. */
+interface FakeDirectory {
+  readonly entries: readonly WalkEntry[];
+  /** The files this host will carry in a document. Every one of them by default. */
+  readonly carries?: (name: string) => boolean;
+}
+
+/**
+ * A tree the walk can read without a disk: one map entry per directory, keyed by the path the
+ * walk's own descent builds — `''` is the root, a child of `a` is `a/b` — so a key that is
+ * absent is a directory the walk cannot reach and one mapped to `undefined` is one it can reach
+ * but not list. It is handed to `enumerateGrant` where this host's file system would be, which
+ * is how a bound of §13.3's own size is reached without a hundred thousand files on a disk.
+ */
+class FakeTree implements ListingWalkSource<string> {
+  /** Every directory the walk asked for, in order, with repeats. */
+  readonly reads: string[] = [];
+  private readonly dirs: Map<string, FakeDirectory | undefined>;
+
+  constructor(dirs: Record<string, FakeDirectory | undefined>) {
+    this.dirs = new Map(Object.entries(dirs));
+  }
+
+  entries(dir: string): Promise<readonly WalkEntry[] | undefined> {
+    this.reads.push(dir);
+    return Promise.resolve(this.dirs.get(dir)?.entries);
+  }
+
+  ignoreText(): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  }
+
+  shareable(dir: string, name: string): Promise<boolean> {
+    const carries = this.dirs.get(dir)?.carries;
+    return Promise.resolve(carries === undefined || carries(name));
+  }
+
+  child(dir: string, name: string): Promise<string | undefined> {
+    const below = dir === '' ? name : `${dir}/${name}`;
+    return Promise.resolve(this.dirs.has(below) ? below : undefined);
+  }
+
+  rootIgnores(): Promise<readonly IgnoreSource[]> {
+    return Promise.resolve([]);
+  }
+}
+
+/** The root a fake tree is walked from; every seam call the walk makes is handed it first. */
+const FAKE_ROOT = '';
+
+/** The UTF-8 bytes of a listing's paths, counted here rather than by the code under test. */
+function listedBytes(paths: readonly string[]): number {
+  const encoder = new TextEncoder();
+  return paths.reduce((total, path) => total + encoder.encode(path).length, 0);
 }
 
 test('a walk stops at the path count one listing carries, and names the bound', async () => {
-  const many = join(ROOT, 'many');
-  mkdirSync(many, { recursive: true });
-  for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt']) {
-    writeFileSync(join(many, name), 'x\n');
-  }
-  const listing = await enumerateGrant(many, narrowed({ paths: 3 }));
-  assert.equal(listing.cut, 'paths');
-  // Which names survive follows the order the listing is written in, so the tail is what is
-  // missing — not whatever the file system happened to hand back first.
-  assert.deepEqual(listing.paths, ['a.txt', 'b.txt', 'c.txt']);
+  // One more than a listing carries, all of them shareable and in memory.
+  const entries = Array.from({ length: MAX_GRANT_PATHS + 1 }, (_, index) => fileEntry(`f-${index}.md`));
+  const tree = new FakeTree({ [FAKE_ROOT]: { entries } });
+
+  const listing = await enumerateGrant(FAKE_ROOT, tree);
+  assert.equal(listing.cut, 'paths', 'the walk read past the ceiling in silence');
+  assert.equal(listing.paths.length, MAX_GRANT_PATHS, 'the listing is not one ceiling wide');
+  assert.equal(new Set(listing.paths).size, listing.paths.length, 'the same path was listed twice');
+  assert.deepEqual(tree.reads, [FAKE_ROOT], 'the root was read for something besides the walk');
 });
 
 test('a walk stops when the paths it would publish reach the byte bound, and names it', async () => {
-  const bytes = join(ROOT, 'bytes');
-  mkdirSync(bytes, { recursive: true });
-  for (const name of ['a.txt', 'b.txt', 'c.txt']) {
-    writeFileSync(join(bytes, name), 'x\n');
-  }
-  // Each name is 5 UTF-8 bytes, so a ceiling of 12 holds two and declines the third.
-  const listing = await enumerateGrant(bytes, narrowed({ bytes: 12 }));
-  assert.equal(listing.cut, 'bytes');
-  assert.deepEqual(listing.paths, ['a.txt', 'b.txt']);
+  // 2000 names of 2100 UTF-8 bytes each: more than the 4 MiB a listing carries, in fewer files
+  // than the count bound, so the byte bound is the one that binds. A character outside ASCII is
+  // deliberate — the count is UTF-8 bytes and not UTF-16 code units.
+  const long = 'あ'.repeat(700);
+  const entries = Array.from({ length: 2000 }, (_, index) => fileEntry(`${index}-${long}.md`));
+  const tree = new FakeTree({ [FAKE_ROOT]: { entries } });
+
+  const listing = await enumerateGrant(FAKE_ROOT, tree);
+  assert.equal(listing.cut, 'bytes', 'the walk read past the byte bound in silence');
+  assert.ok(listing.paths.length > 0, 'the byte bound stopped the walk at the first path');
+  assert.ok(listing.paths.length < entries.length, 'every path was listed');
+  const bytes = listedBytes(listing.paths);
+  assert.ok(bytes <= MAX_GRANT_LISTING_BYTES, `the listing is over the bound: ${bytes}`);
+  assert.ok(
+    bytes + listedBytes([`0-${long}.md`]) > MAX_GRANT_LISTING_BYTES,
+    `the walk stopped well short of the bound: ${bytes}`
+  );
 });
 
 test('a walk stops when its work budget is spent, and says so rather than naming nothing', async () => {
-  const spent = join(ROOT, 'spent');
-  mkdirSync(spent, { recursive: true });
-  writeFileSync(join(spent, 'a-shareable.txt'), 'x\n');
-  writeFileSync(join(spent, 'b-shareable.txt'), 'x\n');
-  // A file too large to share costs the budget its shareability check and names nothing, so a
-  // three-node budget is spent before the third candidate is looked at.
-  for (let index = 0; index < 3; index += 1) {
-    await writeFile(join(spent, `c-large-${index}.txt`), Buffer.alloc(MAX_GRANT_FILE_BYTES + 1));
-  }
-  const listing = await enumerateGrant(spent, narrowed({}, 3));
-  assert.deepEqual(listing.paths, ['a-shareable.txt', 'b-shareable.txt']);
-  assert.equal(listing.cut, 'budget');
+  // The budget pays for the shareability check every candidate costs, so a folder of files too
+  // large to share spends it without naming one. Two small files sort first and are listed; the
+  // bound that stops the walk is the budget and not the listing.
+  const spent = Array.from({ length: MAX_GRANT_NODES + 1 }, (_, index) => fileEntry(`b-${index}.md`));
+  const tree = new FakeTree({
+    [FAKE_ROOT]: {
+      entries: [fileEntry('a-granted-too.md'), fileEntry('a-granted.md'), ...spent],
+      carries: (name) => !name.startsWith('b-'),
+    },
+  });
+
+  const listing = await enumerateGrant(FAKE_ROOT, tree);
+  assert.deepEqual(
+    listing.paths,
+    ['a-granted-too.md', 'a-granted.md'],
+    'the walk listed the wrong paths'
+  );
+  assert.equal(listing.cut, 'budget', 'the walk gave up in silence');
 });
 
 test('a name a room never shares costs the walk nothing', async () => {
-  const starved = join(ROOT, 'starved');
-  mkdirSync(starved, { recursive: true });
-  // The defect this accounting exists for: a tree rich in assets and poor in sources. Every one of
-  // these names is dropped by the name alone, so the walk spends nothing on them, where charging
-  // for each entry would spend the whole budget before the first shareable file.
-  for (let index = 0; index < 50; index += 1) {
-    writeFileSync(join(starved, `a-${index}.png`), 'x');
-  }
-  for (let index = 0; index < 5; index += 1) {
-    writeFileSync(join(starved, `z-${index}.txt`), 'x\n');
-  }
-  const listing = await enumerateGrant(starved, narrowed({}, 10));
+  // The defect this accounting exists for: a tree rich in assets and poor in sources. Every one
+  // of these names is dropped by the name alone — a binary format a room cannot carry — so the
+  // walk spends nothing on them, where charging for each entry would spend the whole budget
+  // before the first shareable file and publish a listing that names none of them.
+  const assets = Array.from({ length: MAX_GRANT_NODES }, (_, index) => fileEntry(`a-${index}.png`));
+  const sources = Array.from({ length: 5 }, (_, index) => fileEntry(`z-${index}.md`));
+  const tree = new FakeTree({ [FAKE_ROOT]: { entries: [...assets, ...sources] } });
+
+  const listing = await enumerateGrant(FAKE_ROOT, tree);
   assert.equal(listing.paths.length, 5, `assets starved the walk: ${listing.paths.length} listed`);
   assert.equal(listing.cut, undefined, 'a complete listing was reported as cut');
 });
 
 test('a folder whose listing fits entirely is not reported as cut', async () => {
-  const fits = join(ROOT, 'fits');
-  mkdirSync(fits, { recursive: true });
-  for (const name of ['a.txt', 'b.txt', 'c.txt']) {
-    writeFileSync(join(fits, name), 'x\n');
-  }
-  // The listing holds three paths and the folder shares nothing else, so it is whole. Deciding the
-  // bound at the top of the loop would name a cut here, on the entry the walk drops for its size.
-  await writeFile(join(fits, 'd-large.txt'), Buffer.alloc(MAX_GRANT_FILE_BYTES + 1));
-  const listing = await enumerateGrant(fits, narrowed({ paths: 3 }));
-  assert.deepEqual(listing.paths, ['a.txt', 'b.txt', 'c.txt']);
-  assert.equal(listing.cut, undefined);
+  // Exactly a listing's worth of shareable paths, and one plain file too large to share after
+  // them. The listing holds every file this walk would name, so it is short of nothing and there
+  // is no cut to report. A bound read off a candidate the walk then declines — one checked before
+  // the file is asked about — would say the listing was cut.
+  const entries = Array.from({ length: MAX_GRANT_PATHS }, (_, index) => fileEntry(`f-${index}.md`));
+  entries.push(fileEntry('z-large.md'));
+  const tree = new FakeTree({
+    [FAKE_ROOT]: { entries, carries: (name) => name !== 'z-large.md' },
+  });
+
+  const listing = await enumerateGrant(FAKE_ROOT, tree);
+  assert.equal(listing.cut, undefined, 'a complete listing was reported as cut');
+  assert.equal(listing.paths.length, MAX_GRANT_PATHS, 'a shareable path is missing from the listing');
+  assert.ok(listing.paths.includes('f-0.md'), 'the listing holds something else');
 });
 
 test('a listing carries six thousand files without a cut', async () => {
