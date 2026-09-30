@@ -365,9 +365,9 @@ check('  and republishing the listing says nothing about it', #notices, before)
 --
 -- The listing is a peer's, and this process makes one file per path in the foreground as the
 -- listing arrives, so the two bounds a listing itself has are applied where the files are made:
--- the longest path it may carry (the server's) and the most paths one may carry (the host
--- enumerator's). A conforming room never reaches either, and what is past them is refused and
--- reported the way a path that cannot be written is.
+-- the longest path it may carry (the server's) and the most paths one listing carries (the
+-- protocol's own count bound). Past either is refused, and the two refusals are told apart — a path
+-- past the count is this mirror's capacity, and one that cannot be written is a write that failed.
 
 local LONG = ('a'):rep(4096 + 1) .. '.txt'
 local UNWRITABLE = ('b'):rep(300) .. '.txt'
@@ -392,14 +392,36 @@ for index = 1, 5000 + 1 do
 end
 before = #notices
 root = join({}, many, 'r-many')
-check('a listing stops at the most paths one may carry', vim.fn.filereadable(root .. '/f05000.txt'), 1)
-check('  and what is past it is not materialised', vim.fn.filereadable(root .. '/f05001.txt'), 0)
-check('  and the client does not hold it', mirror.granted('f05001.txt'), false)
+check('a listing carries five thousand paths and more', vim.fn.filereadable(root .. '/f05000.txt'), 1)
+check('  and the five-thousand-and-first too', vim.fn.filereadable(root .. '/f05001.txt'), 1)
+check('  and the client holds it', mirror.granted('f05001.txt'), true)
 check(
-  '  and the person is told',
-  said_since(before, "one of the room's files could not be written to disk: f05001.txt.") ~= nil,
+  '  and nothing was said about a failed write',
+  said_since(before, 'could not be written to disk'),
+  nil
+)
+selvage.leave()
+
+-- The count bound is the protocol's, far above what a folder this session shares holds; it is the
+-- receiver's capacity and binds only on a room that listed past a whole listing. The bound is
+-- lowered for the test, because a real room's host stops at the same number and a hundred thousand
+-- files is not a test.
+mirror.max_listed = 2
+before = #notices
+root = join({}, { 'one.txt', 'two.txt', 'three.txt' }, 'r-capacity')
+check('a listing past the count the mirror carries leaves the rest out', vim.fn.filereadable(root .. '/three.txt'), 0)
+check('  and the ones inside it are materialised', vim.fn.filereadable(root .. '/two.txt'), 1)
+check(
+  '  and it is the capacity that is said, not a failed write',
+  said_since(before, 'the room lists more files than this session mirrors; three.txt is left out.') ~= nil,
   true
 )
+check(
+  '  and no failed write is claimed',
+  said_since(before, 'could not be written to disk'),
+  nil
+)
+mirror.max_listed = 100000
 selvage.leave()
 
 -- A path the grant's own rules would never let a host publish is flagged by the companion as

@@ -3377,13 +3377,16 @@ local function on_report(report)
       state.dropped[path] = nil
     end
     if is_peer() then
-      local root, blocked, created = mirror.setup(state.room, state.grant, report.unsafe)
+      local root, blocked, created, over_capacity = mirror.setup(state.room, state.grant, report.unsafe)
       if root ~= nil then
+        -- What the room listed and this client did not put on disk, however it refused: a path
+        -- past the mirror's capacity and a path it could not write are both missed files.
+        local mirrored = #state.grant - #blocked - #over_capacity
         if created then
           watch_mirror()
         end
         if state.join_mirror == nil and not state.join_said then
-          state.join_mirror = { count = #state.grant - #blocked, root = root }
+          state.join_mirror = { count = mirrored, root = root }
         end
         -- A first listing that arrives after the join was said stays silent: the summary already
         -- went out, and one summary plus errors is the whole of the join's news. The mirror stays
@@ -3391,9 +3394,9 @@ local function on_report(report)
         -- `:SelvageFetch` completion). The exception is a join the room had nothing open in: that
         -- guest has no document to watch and no tree to read, so a listing that arrives after the
         -- sentence is the only place the room's files reach them, and it is said once here.
-        if state.join_said and state.join_empty and not state.join_listed and #state.grant > #blocked then
+        if state.join_said and state.join_empty and not state.join_listed and mirrored > 0 then
           state.join_listed = true
-          local count = #state.grant - #blocked
+          local count = mirrored
           if count == 1 then
             notify(('1 file is mirrored at %s; :SelvageOpen opens it.'):format(root))
           else
@@ -3407,6 +3410,22 @@ local function on_report(report)
             ('%d of the room\'s files could not be written to disk, starting with %s.'):format(
               #blocked,
               blocked[1]
+            ),
+            vim.log.levels.WARN
+          )
+        end
+        -- The receiver's capacity, said apart from a write that failed: the room listed more
+        -- than this mirror holds, and no disk was involved.
+        if #over_capacity == 1 then
+          notify(
+            ('the room lists more files than this session mirrors; %s is left out.'):format(over_capacity[1]),
+            vim.log.levels.WARN
+          )
+        elseif #over_capacity > 1 then
+          notify(
+            ('the room lists more files than this session mirrors; %d of them are left out, starting with %s.'):format(
+              #over_capacity,
+              over_capacity[1]
             ),
             vim.log.levels.WARN
           )
