@@ -777,8 +777,8 @@ export class Companion {
   /**
    * One event from the folder's watcher, and whether it can move the listing at all.
    *
-   * Most events cannot, and each walk the watcher schedules reads the whole tree — up to
-   * `MAX_GRANT_NODES` entries, measured at ~390 ms. While a guest types, the room's autosave
+   * Most events cannot, and each walk the watcher schedules reads the whole tree, up to the
+   * walk's own budget in entries. While a guest types, the room's autosave
    * writes the document about twice a second, and every one of those writes is an event: a host
    * whose every save of a file the listing already names walked the tree spent its session walking
    * it. So a path the grant's rules never publish — `.git/index` on every `git status`, anything
@@ -882,10 +882,10 @@ export class Companion {
     if (engine === undefined) {
       return;
     }
-    // Which reading this is. A walk of a large tree outlasts the window a burst is gathered in —
-    // the work budget is 200 000 nodes against a 250 ms window — so an event during a walk
-    // starts a second one, and the two can finish in the order opposite to the one they started
-    // in. The last reading started is the only one whose answer is the folder's current shape.
+    // Which reading this is. A walk of a large tree outlasts the window a burst is gathered in,
+    // so an event during a walk starts a second one, and the two can finish in the order opposite
+    // to the one they started in. The last reading started is the only one whose answer is the
+    // folder's current shape.
     const reading = ++this.grantReadings;
     void (async () => {
       let enumeration: GrantEnumeration;
