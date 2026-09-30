@@ -1272,6 +1272,37 @@ selvage.fetch()
 check('a fetch after the listing shrank to nothing says so', selvage.session().mirror, root)
 check('  and the fetch says it too', said_since(before, 'the room lists no files to fetch') ~= nil, true)
 
+-- Past the most paths one hold may take, a fetch refuses rather than truncates: it names a
+-- narrower target and the room keeps its open-document set. The whole listing and a directory are
+-- answered with a sentence each, because the next step differs — name a file, or name a narrower
+-- directory — and both are the words the other client refuses with.
+local cap_paths = {}
+for index = 1, 100 + 1 do
+  cap_paths[index] = ('src/f%03d.txt'):format(index)
+end
+root = join({}, cap_paths, 'r-fetchcap')
+local held_before = #selvage.documents()
+before = #notices
+selvage.fetch()
+check(
+  'a fetch of a whole listing past the cap refuses',
+  said_since(
+    before,
+    'fetching all 101 listed files at once would hold every one in the room; fetch a file or a directory instead (at most 100 at once).'
+  ) ~= nil,
+  true
+)
+check('  and opens nothing', #selvage.documents(), held_before)
+before = #notices
+selvage.fetch('src')
+check(
+  'a fetch of a directory past the cap names a narrower one',
+  said_since(before, '101 files under src is more than one fetch holds (at most 100 at once); name a narrower directory.') ~= nil,
+  true
+)
+check('  and opens nothing', #selvage.documents(), held_before)
+selvage.leave()
+
 -- -- a file closed while it is being fetched ----------------------------------------------
 --
 -- The hold is what asks the host for the file, and a buffer that goes away while the answer is

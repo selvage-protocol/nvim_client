@@ -1390,6 +1390,13 @@ local function unfetched(pending)
   return left
 end
 
+--- The most paths one fetch holds at once. Every held path is a `doc.open` every peer absorbs and
+--- a `Y.Text` every replica keeps, so a whole listing — or one directory of it — past this refuses
+--- with a sentence naming a narrower target instead of holding the room sequentially, each path up
+--- to `fetch_timeout_ms`. The twin of VS Code's `MAX_FETCH_ALL_PATHS`, and the same number and the
+--- same words, so the two clients refuse at the same point.
+local MAX_FETCH_ALL_PATHS = 100
+
 --- Fetches the room's content into the mirror: one file, a directory of them, or all of it.
 ---
 --- A file's content arrives the way any shared document's does — the path is held in the room, the
@@ -1428,6 +1435,31 @@ function M.fetch(path)
       notify(
         ('no file the room lists matches "%s"; :SelvageOpen and completion name them.'):format(wanted),
         vim.log.levels.WARN
+      )
+    end
+    return
+  end
+  -- A hold of every one of these would put the whole listing — or one directory of it — into
+  -- every replica at once, so past the cap the fetch refuses rather than truncates: it names a
+  -- narrower target, and the room keeps its open-document set. The whole listing and a directory
+  -- are told apart, because the next step differs.
+  if #targets > MAX_FETCH_ALL_PATHS then
+    if wanted == '' then
+      notify(
+        ('fetching all %d listed files at once would hold every one in the room; fetch a file or a directory instead (at most %d at once).'):format(
+          #targets,
+          MAX_FETCH_ALL_PATHS
+        ),
+        vim.log.levels.ERROR
+      )
+    else
+      notify(
+        ('%d files under %s is more than one fetch holds (at most %d at once); name a narrower directory.'):format(
+          #targets,
+          wanted,
+          MAX_FETCH_ALL_PATHS
+        ),
+        vim.log.levels.ERROR
       )
     end
     return
