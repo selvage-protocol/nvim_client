@@ -33,7 +33,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 
-import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
+import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, hostPlatform, isGrantedPath } from '../vendor/bridge/index.ts';
 import type { GrantRefusal, GrantedRead, IgnoreSource, ListingWalkSource, WalkEntry } from '../vendor/bridge/index.ts';
 import { FILE_SYSTEM_SOURCE, enumerateGrant, fileSystemSource, readGrantedFile } from '../companion/grant.ts';
 
@@ -484,6 +484,27 @@ test('a walk lists the folder once, and takes its exclude from the entries it re
   // every publish.
   assert.ok(listed.includes(join(root, '.git')), 'the repository exclude was never looked for');
   assert.ok(listed.includes(join(root, '.git', 'info')), 'the exclude file was never listed');
+});
+
+test('the seam names this host, so the walk folds case where the host does', async () => {
+  // The two name gates fold case only where the host's file system does, and the platform
+  // arrives on the seam rather than from a global the walk reads. This host's own reader is
+  // asked, so a seam that stopped naming the host — `''` means the host cannot say, which keeps
+  // the fold — would drop an ordinary `Build/` on a case-sensitive machine while the mirror went
+  // on sharing it, which is sharing less than the folder holds.
+  assert.equal(FILE_SYSTEM_SOURCE.platform, hostPlatform(), 'the seam does not name this host');
+
+  const root = join(ROOT, 'seam-platform');
+  await put('seam-platform/Build/out.txt', 'built\n');
+  await put('seam-platform/kept.txt', 'kept\n');
+
+  // The gate's own answer for the platform the seam named, so the two cannot disagree here.
+  const listed = isGrantedPath('Build/out.txt', hostPlatform());
+  assert.deepEqual(
+    await pathsOf(root),
+    listed ? ['Build/out.txt', 'kept.txt'] : ['kept.txt'],
+    'the listing does not match the platform the seam named',
+  );
 });
 
 test('a listing carries no symbolic link', async () => {
