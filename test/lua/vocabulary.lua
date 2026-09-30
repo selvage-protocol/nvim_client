@@ -185,6 +185,11 @@ local MESSAGES = {
   -- The one refusal the session itself maps from a code rather than repeating: the capacity
   -- policy the server states with `x.room_full`.
   { 'ERROR', 'the room is full — it seats no more people.' },
+  -- A walk that stopped short of the folder this session shares. Only the host is told — a cut
+  -- reaches no frame, so the room does not know which of the two trees it is looking at.
+  { 'WARN', 'this session shares more paths than one room listing carries, so some of its files are not in the room.' },
+  { 'WARN', "this session's paths are longer in total than one room listing carries, so some of its files are not in the room." },
+  { 'WARN', "reading this session's folder took more work than one listing walk pays for, so some of its files are not in the room." },
   -- What this front-end refuses on its own.
   { 'ERROR', '%s is not valid UTF-8, so it is not shared.' },
   { 'ERROR', '%s is a binary file, and a room carries text, so it is not shared.' },

@@ -33,9 +33,15 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 
-import { MAX_GRANT_FILE_BYTES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
+import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
 import type { GrantRefusal, GrantedRead } from '../vendor/bridge/index.ts';
 import { enumerateGrant, readGrantedFile } from '../companion/grant.ts';
+import type { GrantLimits } from '../companion/grant.ts';
+
+/** The listing a walk found, for the assertions that are about its paths alone. */
+async function pathsOf(root: string, limits?: GrantLimits): Promise<string[]> {
+  return (await enumerateGrant(root, limits)).paths;
+}
 
 /** The text a read served, or `undefined` when it refused. */
 function served(read: GrantedRead): string | undefined {
@@ -177,7 +183,7 @@ test('a listing carries the files, never the directories', async () => {
   await put('listing/b.txt');
   await put('listing/a/deep.txt');
   await put('listing/c.txt');
-  assert.deepEqual(await enumerateGrant(join(ROOT, 'listing')), [
+  assert.deepEqual(await pathsOf(join(ROOT, 'listing')), [
     'a/deep.txt',
     'b.txt',
     'c.txt',
@@ -192,7 +198,7 @@ test('a listing is written ascending by UTF-16 code unit', async () => {
   await put('order/\u{1f9f5}.txt');
   await put('order/\u{e000}.txt');
   await put('order/z.txt');
-  assert.deepEqual(await enumerateGrant(join(ROOT, 'order')), [
+  assert.deepEqual(await pathsOf(join(ROOT, 'order')), [
     'z.txt',
     '\u{1f9f5}.txt',
     '\u{e000}.txt',
@@ -208,7 +214,7 @@ test('a listing leaves out what the grant excludes', async () => {
   await put('excluded/dist/bundle.js');
   await put('excluded/.hg/store');
   await put('excluded/kept.txt');
-  assert.deepEqual(await enumerateGrant(join(ROOT, 'excluded')), ['kept.txt']);
+  assert.deepEqual(await pathsOf(join(ROOT, 'excluded')), ['kept.txt']);
 });
 
 test('a listing leaves out secret names and keeps their templates', async () => {
@@ -224,7 +230,7 @@ test('a listing leaves out secret names and keeps their templates', async () => 
   await put('secrets/kept.txt');
   // Templates carry no secrets and stay shareable; anything else under a secret name —
   // including a public key beside its private one — stays out.
-  assert.deepEqual(await enumerateGrant(join(ROOT, 'secrets')), [
+  assert.deepEqual(await pathsOf(join(ROOT, 'secrets')), [
     '.env.example',
     '.env.production',
     'kept.txt',
@@ -253,7 +259,7 @@ test('a listing leaves out a name that declares a binary format', async () => {
   await writeFile(join(ROOT, 'binary/blob.bin'), Buffer.from([0x00, 0x01, 0xff, 0xfe]));
   await writeFile(join(ROOT, 'binary/data.undeclared'), Buffer.from([0x61, 0x00, 0x62]));
 
-  assert.deepEqual(await enumerateGrant(join(ROOT, 'binary')), [
+  assert.deepEqual(await pathsOf(join(ROOT, 'binary')), [
     'data.undeclared',
     'docs/notes.txt',
     'src/main.rs',
@@ -283,23 +289,106 @@ test('a name that spoofs a tree row is refused', () => {
   assert.equal(isGrantedPath('notes.txt'), true);
 });
 
-test('a listing stops at the count it will carry', async () => {
+// The bounds a walk stops at. The ceiling is a seam here rather than a hundred thousand files on
+// a disk: what is exercised is the accounting — which entry is declined, and which bound is named
+// — so each case hands the walk a ceiling of its own and a tree just wide enough to cross it.
+
+/** A ceiling and a work budget a test can cross with a handful of files. */
+function narrowed(
+  ceiling: Partial<GrantLimits['ceiling']> = {},
+  nodes = MAX_GRANT_NODES,
+): GrantLimits {
+  return {
+    ceiling: {
+      paths: ceiling.paths ?? MAX_GRANT_PATHS,
+      bytes: ceiling.bytes ?? MAX_GRANT_LISTING_BYTES,
+    },
+    nodes,
+  };
+}
+
+test('a walk stops at the path count one listing carries, and names the bound', async () => {
   const many = join(ROOT, 'many');
   mkdirSync(many, { recursive: true });
-  const names = Array.from({ length: MAX_GRANT_PATHS + 1 }, (_unused, index) =>
-    String(index).padStart(5, '0'),
-  );
-  for (const name of names) {
-    writeFileSync(join(many, `${name}.txt`), 'x\n');
+  for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt']) {
+    writeFileSync(join(many, name), 'x\n');
   }
-  const paths = await enumerateGrant(many);
-  assert.equal(paths.length, MAX_GRANT_PATHS);
-  // Which names survive the truncation follows the same order the listing is written in, so the
-  // first of them is the first name and the tail is what is missing — not whatever the file
-  // system happened to hand back first.
-  assert.equal(paths[0], '00000.txt');
-  assert.equal(paths.at(-1), '04999.txt');
-  assert.ok(!paths.includes('05000.txt'));
+  const listing = await enumerateGrant(many, narrowed({ paths: 3 }));
+  assert.equal(listing.cut, 'paths');
+  // Which names survive follows the order the listing is written in, so the tail is what is
+  // missing — not whatever the file system happened to hand back first.
+  assert.deepEqual(listing.paths, ['a.txt', 'b.txt', 'c.txt']);
+});
+
+test('a walk stops when the paths it would publish reach the byte bound, and names it', async () => {
+  const bytes = join(ROOT, 'bytes');
+  mkdirSync(bytes, { recursive: true });
+  for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+    writeFileSync(join(bytes, name), 'x\n');
+  }
+  // Each name is 5 UTF-8 bytes, so a ceiling of 12 holds two and declines the third.
+  const listing = await enumerateGrant(bytes, narrowed({ bytes: 12 }));
+  assert.equal(listing.cut, 'bytes');
+  assert.deepEqual(listing.paths, ['a.txt', 'b.txt']);
+});
+
+test('a walk stops when its work budget is spent, and says so rather than naming nothing', async () => {
+  const spent = join(ROOT, 'spent');
+  mkdirSync(spent, { recursive: true });
+  writeFileSync(join(spent, 'a-shareable.txt'), 'x\n');
+  writeFileSync(join(spent, 'b-shareable.txt'), 'x\n');
+  // A file too large to share costs the budget its shareability check and names nothing, so a
+  // three-node budget is spent before the third candidate is looked at.
+  for (let index = 0; index < 3; index += 1) {
+    await writeFile(join(spent, `c-large-${index}.txt`), Buffer.alloc(MAX_GRANT_FILE_BYTES + 1));
+  }
+  const listing = await enumerateGrant(spent, narrowed({}, 3));
+  assert.deepEqual(listing.paths, ['a-shareable.txt', 'b-shareable.txt']);
+  assert.equal(listing.cut, 'budget');
+});
+
+test('a name a room never shares costs the walk nothing', async () => {
+  const starved = join(ROOT, 'starved');
+  mkdirSync(starved, { recursive: true });
+  // The defect this accounting exists for: a tree rich in assets and poor in sources. Every one of
+  // these names is dropped by the name alone, so the walk spends nothing on them, where charging
+  // for each entry would spend the whole budget before the first shareable file.
+  for (let index = 0; index < 50; index += 1) {
+    writeFileSync(join(starved, `a-${index}.png`), 'x');
+  }
+  for (let index = 0; index < 5; index += 1) {
+    writeFileSync(join(starved, `z-${index}.txt`), 'x\n');
+  }
+  const listing = await enumerateGrant(starved, narrowed({}, 10));
+  assert.equal(listing.paths.length, 5, `assets starved the walk: ${listing.paths.length} listed`);
+  assert.equal(listing.cut, undefined, 'a complete listing was reported as cut');
+});
+
+test('a folder whose listing fits entirely is not reported as cut', async () => {
+  const fits = join(ROOT, 'fits');
+  mkdirSync(fits, { recursive: true });
+  for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+    writeFileSync(join(fits, name), 'x\n');
+  }
+  // The listing holds three paths and the folder shares nothing else, so it is whole. Deciding the
+  // bound at the top of the loop would name a cut here, on the entry the walk drops for its size.
+  await writeFile(join(fits, 'd-large.txt'), Buffer.alloc(MAX_GRANT_FILE_BYTES + 1));
+  const listing = await enumerateGrant(fits, narrowed({ paths: 3 }));
+  assert.deepEqual(listing.paths, ['a.txt', 'b.txt', 'c.txt']);
+  assert.equal(listing.cut, undefined);
+});
+
+test('a listing carries six thousand files without a cut', async () => {
+  const big = join(ROOT, 'six-thousand');
+  mkdirSync(big, { recursive: true });
+  for (let index = 0; index < 6000; index += 1) {
+    writeFileSync(join(big, `f${String(index).padStart(5, '0')}.txt`), 'x\n');
+  }
+  const listing = await enumerateGrant(big);
+  assert.equal(listing.paths.length, 6000);
+  assert.equal(listing.cut, undefined);
+  assert.equal(listing.paths[0], 'f00000.txt');
+  assert.equal(listing.paths.at(-1), 'f05999.txt');
 });
 
 test('a listing carries no symbolic link', async () => {
@@ -311,7 +400,7 @@ test('a listing carries no symbolic link', async () => {
   writeFileSync(join(linked, 'here.txt'), 'this one is in the folder\n');
   symlinkSync(join(outside, 'secret.txt'), join(linked, 'file-link.txt'));
   symlinkSync(outside, join(linked, 'escape'));
-  assert.deepEqual(await enumerateGrant(linked), ['here.txt']);
+  assert.deepEqual(await pathsOf(linked), ['here.txt']);
 });
 
 test('a listing honors the folder’s ignore files and reads nothing above it', async () => {
@@ -349,7 +438,7 @@ test('a listing honors the folder’s ignore files and reads nothing above it', 
     'src/main.rs',
   ];
   await assertReadNothingPadded(async () => {
-    assert.deepEqual(await enumerateGrant(root), listed);
+    assert.deepEqual(await pathsOf(root), listed);
   });
 
   // The read agrees with the listing: what the listing does not carry is not this host's to serve.
@@ -445,7 +534,7 @@ test('a folder that is no repository, and one whose .git is a file, still walk',
   await put('no-repository/.gitignore', 'dropped.txt\n');
   await put('no-repository/dropped.txt', 'dropped\n');
   await put('no-repository/kept.txt', 'kept\n');
-  assert.deepEqual(await enumerateGrant(root), ['.gitignore', 'kept.txt']);
+  assert.deepEqual(await pathsOf(root), ['.gitignore', 'kept.txt']);
   assert.equal(cause(await readGrantedFile(root, 'dropped.txt')), 'not-granted');
 
   // A `.git` that is a file rather than a directory (a linked worktree, a submodule) has no
@@ -454,7 +543,7 @@ test('a folder that is no repository, and one whose .git is a file, still walk',
   const worktree = join(ROOT, 'linked-worktree');
   await put('linked-worktree/.git', 'gitdir: ../elsewhere\n');
   await put('linked-worktree/kept.txt', 'kept\n');
-  assert.deepEqual(await enumerateGrant(worktree), ['kept.txt']);
+  assert.deepEqual(await pathsOf(worktree), ['kept.txt']);
   assert.equal(served(await readGrantedFile(worktree, 'kept.txt')), 'kept\n');
 });
 
@@ -531,7 +620,7 @@ test('a path through a directory link is not served', async () => {
     );
   }
   // And nothing behind the link is listed, so it is not a path the grant ever named.
-  assert.deepEqual(await enumerateGrant(root), []);
+  assert.deepEqual(await pathsOf(root), []);
 });
 
 test('a linked .gitignore is not read, so its rule re-includes nothing', async () => {
@@ -543,14 +632,14 @@ test('a linked .gitignore is not read, so its rule re-includes nothing', async (
   // ordinary file inside the folder re-includes `sub/hidden.txt`, which is what the fixture can
   // see; the link to those bytes outside the folder changes nothing, so the listing and the
   // refusals are the ones the link's absence gives.
-  assert.deepEqual(await enumerateGrant(real), [
+  assert.deepEqual(await pathsOf(real), [
     '.gitignore',
     'dropped.txt',
     'kept.txt',
     'sub/.gitignore',
     'sub/hidden.txt',
   ]);
-  assert.deepEqual(await enumerateGrant(linked), ['.gitignore', 'dropped.txt', 'kept.txt']);
+  assert.deepEqual(await pathsOf(linked), ['.gitignore', 'dropped.txt', 'kept.txt']);
   const asked = ['sub/hidden.txt', 'dropped.txt', 'kept.txt'];
   assert.deepEqual(await causes(real, asked), [undefined, undefined, undefined]);
   assert.deepEqual(await causes(linked, asked), ['not-granted', undefined, undefined]);
@@ -572,8 +661,8 @@ test('a linked .git is not read, so its exclude drops nothing', async () => {
   // `info/exclude` inside the folder names `dropped.txt` and drops it; the link to a repository
   // directory outside the folder is not this folder's repository, so the name stays listed and
   // served, exactly as it is with no `.git` at all.
-  assert.deepEqual(await enumerateGrant(real), ['.gitignore', 'kept.txt']);
-  assert.deepEqual(await enumerateGrant(linked), ['.gitignore', 'dropped.txt', 'kept.txt']);
+  assert.deepEqual(await pathsOf(real), ['.gitignore', 'kept.txt']);
+  assert.deepEqual(await pathsOf(linked), ['.gitignore', 'dropped.txt', 'kept.txt']);
   const asked = ['dropped.txt', 'kept.txt'];
   assert.deepEqual(await causes(real, asked), ['not-granted', undefined]);
   assert.deepEqual(await causes(linked, asked), [undefined, undefined]);

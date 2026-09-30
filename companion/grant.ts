@@ -20,6 +20,8 @@ import { join } from 'node:path';
 
 import {
   MAX_GRANT_FILE_BYTES,
+  MAX_GRANT_LISTING_BYTES,
+  MAX_GRANT_NODES,
   MAX_GRANT_PATHS,
   isBinaryNamedPath,
   isGrantedPath,
@@ -27,6 +29,8 @@ import {
   sortGrant,
 } from '../vendor/bridge/index.ts';
 import type { GrantRefusal, GrantedRead, IgnoreSource } from '../vendor/bridge/index.ts';
+import { listingBound, listingPathBytes } from '../vendor/engine/index.ts';
+import type { ListingBound, ListingCeiling } from '../vendor/engine/index.ts';
 
 /**
  * The room's grant as the front-end is told it: the listing itself, whole and in the room's order,
@@ -49,12 +53,34 @@ export function grantReport(
   return unsafe.length === 0 ? { kind: 'grant', paths } : { kind: 'grant', paths, unsafe };
 }
 
+/** What a walk stops at: §13.3's two bounds, from the grant's one home for them. */
+const GRANT_CEILING: ListingCeiling = {
+  paths: MAX_GRANT_PATHS,
+  bytes: MAX_GRANT_LISTING_BYTES,
+};
+
 /**
- * How many entries a walk will look at before it stops. The path count is the listing's own
- * bound; this is the one that keeps a directory tree with a hundred thousand entries in it from
- * costing a hundred thousand stats before the first path is ever published.
+ * Which bound stopped a walk: §13.3's two, or the work it pays for. A budget cut is the walk's
+ * own — what it spends on directory reads and shareability checks — and not a listing bound.
  */
-export const MAX_GRANT_NODES = 20_000;
+export type GrantCut = ListingBound | 'budget';
+
+/** What one walk found: the listing, and the bound that left the folder short of it. */
+export interface GrantEnumeration {
+  readonly paths: string[];
+  readonly cut: GrantCut | undefined;
+}
+
+/**
+ * What one walk is bounded by: §13.3's ceiling and the work it may spend. A caller passes its own
+ * only to narrow a walk it holds a smaller bound for; a real session walks the whole ceiling.
+ */
+export interface GrantLimits {
+  readonly ceiling: ListingCeiling;
+  readonly nodes: number;
+}
+
+const GRANT_LIMITS: GrantLimits = { ceiling: GRANT_CEILING, nodes: MAX_GRANT_NODES };
 
 /**
  * The names of the two ignore files a host reads: the `.gitignore` any directory may state for
@@ -66,12 +92,19 @@ const EXCLUDE_FILE = 'exclude';
 
 /**
  * The listing of a folder as the file system held it when the walk ran: files only, ascending by
- * UTF-16 code unit.
+ * UTF-16 code unit, with the bound that stopped it short of the folder.
  *
- * The count is a bound and not an error: a tree larger than it produces a truncated listing,
- * which is a project view missing some names rather than a wedged session. Each directory's
- * entries are visited in name order — the same code-unit order the listing is written in — so
- * which paths survive the truncation does not depend on the file system's own order.
+ * The bounds are §13.3's and the walk stops at whichever binds first — `MAX_GRANT_PATHS` listed
+ * paths, `MAX_GRANT_LISTING_BYTES` of their UTF-8 bytes, or the work budget. `cut` names it, so
+ * the host's own window can say that the room's listing is short of the folder rather than let a
+ * smaller tree pass for the whole one. Each directory's entries are visited in name order — the
+ * same code-unit order the listing is written in — so which paths survive a cut does not depend
+ * on the file system's own order.
+ *
+ * The budget pays for the work that costs a call: one node for a directory this walk reads, one
+ * for the shareability check it asks of a candidate file. A name it can drop on its own — an
+ * excluded or ignored one, a binary-named one, a link, an entry that is not a plain file — costs
+ * nothing, because the assets a tree carries are no part of what it shares.
  *
  * The listing is what this host shares by itself, so the folder's own ignore files narrow it the
  * way they narrow a `git status`: `<root>/.git/info/exclude` and every `.gitignore` at or below
@@ -80,11 +113,13 @@ const EXCLUDE_FILE = 'exclude';
  * the rules above it, because the folder is the bound on what a host reads for the room — and
  * neither `core.excludesFile` nor any other rule outside the folder is read.
  */
-export async function enumerateGrant(root: string): Promise<string[]> {
-  const paths: string[] = [];
-  const budget = { nodes: MAX_GRANT_NODES };
-  await walk(root, '', paths, budget, await rootIgnores(root));
-  return sortGrant(paths);
+export async function enumerateGrant(
+  root: string,
+  limits: GrantLimits = GRANT_LIMITS,
+): Promise<GrantEnumeration> {
+  const state: WalkState = { paths: [], bytes: 0, nodes: limits.nodes, cut: undefined };
+  await walk(root, '', state, await rootIgnores(root), limits.ceiling);
+  return { paths: sortGrant(state.paths), cut: state.cut };
 }
 
 /**
@@ -188,16 +223,33 @@ async function readIgnoreText(name: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * What one walk carries as it descends: the listing, its size in path bytes, the work it has
+ * left to spend, and the bound that stopped it.
+ */
+interface WalkState {
+  readonly paths: string[];
+  bytes: number;
+  nodes: number;
+  cut: GrantCut | undefined;
+}
+
 async function walk(
   dir: string,
   relative: string,
-  out: string[],
-  budget: { nodes: number },
+  state: WalkState,
   inherited: readonly IgnoreSource[],
+  ceiling: ListingCeiling,
 ): Promise<void> {
-  if (out.length >= MAX_GRANT_PATHS || budget.nodes <= 0) {
+  if (state.cut !== undefined) {
     return;
   }
+  // Entering a directory is a read, and a read is what the budget pays for.
+  if (state.nodes <= 0) {
+    state.cut = 'budget';
+    return;
+  }
+  state.nodes -= 1;
   const entries = await listDirectory(dir);
   if (entries === undefined) {
     // A directory that cannot be listed is one this host cannot share; it is not a fault the
@@ -211,10 +263,9 @@ async function walk(
   const ignores = own === undefined ? inherited : [...inherited, { dir: relative, text: own }];
   entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   for (const entry of entries) {
-    if (out.length >= MAX_GRANT_PATHS || budget.nodes <= 0) {
+    if (state.cut !== undefined) {
       return;
     }
-    budget.nodes -= 1;
     const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
     const directory = entry.isDirectory();
     // Two gates by name, and neither reads a byte: what a room never shares at all, and what this
@@ -230,7 +281,7 @@ async function walk(
       continue;
     }
     if (directory) {
-      await walk(join(dir, entry.name), child, out, budget, ignores);
+      await walk(join(dir, entry.name), child, state, ignores, ceiling);
       continue;
     }
     // A listing carries files and never directories.
@@ -245,9 +296,27 @@ async function walk(
     if (isBinaryNamedPath(child)) {
       continue;
     }
-    if (await isShareableFile(join(dir, entry.name))) {
-      out.push(child);
+    // The shareability check is the one call this entry costs, whether or not it ends in a name.
+    if (state.nodes <= 0) {
+      state.cut = 'budget';
+      return;
     }
+    state.nodes -= 1;
+    if (!(await isShareableFile(join(dir, entry.name)))) {
+      continue;
+    }
+    // A candidate this walk would now publish: the listing's own bounds are decided here, on a
+    // path that is shareable, so a name the walk drops for free can never trip one and a folder
+    // whose listing fits is not reported as cut because a later entry was not shareable. A full
+    // listing has no room for another path, so the walk stops rather than publish past the bound.
+    const size = listingPathBytes(child);
+    const bound = listingBound(ceiling, state.paths.length, state.bytes, size);
+    if (bound !== undefined) {
+      state.cut = bound;
+      return;
+    }
+    state.paths.push(child);
+    state.bytes += size;
   }
 }
 
