@@ -12,8 +12,10 @@ path whose content has not been fetched is present and empty. A listing replaces
 it, so a path it no longer names loses its file, and the directories that become empty with it go
 too. Only a path the previous listing named is removed, and nothing outside the mirror is touched.
 The listing's bounds (the most paths it may carry, and the longest name in it) are applied where
-those files are made, and a listing past either is refused and reported with the paths that could
-not be written. Content arrives when something needs it: a file opened in the editor, or
+those files are made. A path past the longest name is refused and reported with the paths that
+could not be written; a listing past the most paths it may carry is the room's own overflow rather
+than a disk that refused a write, and is reported as the room listing more files than this session
+mirrors. Content arrives when something needs it: a file opened in the editor, or
 `:SelvageFetch`, which takes one path, a directory of them or the whole listing. A project-wide
 search is therefore partial until the paths it covers have been fetched, and `:SelvageFetch` is
 the one command that answers that. A buffer holding no fetched content has `[not fetched]` on its
