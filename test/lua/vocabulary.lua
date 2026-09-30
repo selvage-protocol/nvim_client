@@ -235,6 +235,10 @@ local MESSAGES = {
   { 'INFO', 'fetching opens %s in the room, so every peer receives it.' },
   { 'INFO', '%s is opened in the room, so every peer receives it.' },
   { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them.' },
+  -- The fetch cap: past the most paths one hold may take, the fetch refuses rather than truncates,
+  -- with the sentence the other client refuses with.
+  { 'ERROR', 'fetching all %d listed files at once would hold every one in the room; fetch a file or a directory instead (at most %d at once).' },
+  { 'ERROR', '%d files under %s is more than one fetch holds (at most %d at once); name a narrower directory.' },
   { 'INFO', 'fetched the files.' },
   { 'WARN', 'fetched the files; these had not arrived within %ds: %s.' },
   { 'WARN', 'fetched the files; %s had not arrived within %ds.' },
@@ -441,6 +445,12 @@ end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
 check('the messages that are not literals are the nine this file names', variables, 9)
+
+-- The number the fetch refuses at is the other client's too, and it is not a sentence hole this
+-- file pins: the literal is read out of the source, so a silent edit on this side is caught and not
+-- only the words around the number.
+local fetch_cap = source:match('local MAX_FETCH_ALL_PATHS = (%d+)')
+check('the fetch cap is the number both clients refuse at', fetch_cap, '100')
 
 -- -- no room id reaches a sentence a user reads ----------------------------------------
 --
