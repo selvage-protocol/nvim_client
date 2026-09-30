@@ -1,11 +1,12 @@
 /**
  * The grant, read off the host's working copy.
  *
- * Everything decidable about a listing — which paths it may name, in what order it is written —
- * is in `vendor/bridge/grant.ts`, because both clients have to agree on it. What is left here is
- * this adapter's half: walking a real directory tree with Node's own file system, and resolving a
- * room path back to the file it names. It is the counterpart of `vscode_client`'s
- * `src/adapter/grant.ts`, which does the same over `vscode.workspace.fs`.
+ * Everything decidable about a listing — which paths it may name, in what order it is written,
+ * how a tree is derived from it, and where a walk over a folder stops — is in `vendor/bridge/`,
+ * because both clients have to agree on it. What is left here is this adapter's half: the seam
+ * the shared walk reads through, over Node's own file system, and resolving a room path back to
+ * the file it names. It is the counterpart of `vscode_client`'s `src/adapter/grant.ts`, which
+ * does the same over `vscode.workspace.fs`.
  *
  * Resolving a path a *peer* named is the only place a host reads its disk because someone else
  * asked rather than because the user acted, so nothing the path says is trusted: it is held to
@@ -20,17 +21,18 @@ import { join } from 'node:path';
 
 import {
   MAX_GRANT_FILE_BYTES,
-  MAX_GRANT_LISTING_BYTES,
-  MAX_GRANT_NODES,
-  MAX_GRANT_PATHS,
-  isBinaryNamedPath,
   isGrantedPath,
   isIgnoredPath,
-  sortGrant,
+  walkListing,
 } from '../vendor/bridge/index.ts';
-import type { GrantRefusal, GrantedRead, IgnoreSource } from '../vendor/bridge/index.ts';
-import { listingBound, listingPathBytes } from '../vendor/engine/index.ts';
-import type { ListingBound, ListingCeiling } from '../vendor/engine/index.ts';
+import type {
+  GrantRefusal,
+  GrantedRead,
+  IgnoreSource,
+  ListingCut,
+  ListingWalkSource,
+  WalkEntry,
+} from '../vendor/bridge/index.ts';
 
 /**
  * The room's grant as the front-end is told it: the listing itself, whole and in the room's order,
@@ -53,12 +55,6 @@ export function grantReport(
   return unsafe.length === 0 ? { kind: 'grant', paths } : { kind: 'grant', paths, unsafe };
 }
 
-/** What a walk stops at: §13.3's two bounds, from the grant's one home for them. */
-const GRANT_CEILING: ListingCeiling = {
-  paths: MAX_GRANT_PATHS,
-  bytes: MAX_GRANT_LISTING_BYTES,
-};
-
 /**
  * Which bound stopped a walk: §13.3's two, or the work it pays for. A budget cut is the walk's
  * own — what it spends on directory reads and shareability checks — and not a listing bound.
@@ -67,24 +63,13 @@ const GRANT_CEILING: ListingCeiling = {
  * listing that holds every shareable file of the folder reports no cut. A spent budget leaves the
  * rest of the folder unread, so `budget` says the walk stopped and not that anything was left out.
  */
-export type GrantCut = ListingBound | 'budget';
+export type GrantCut = ListingCut;
 
 /** What one walk found: the listing, and the bound that left the folder short of it. */
 export interface GrantEnumeration {
   readonly paths: string[];
   readonly cut: GrantCut | undefined;
 }
-
-/**
- * What one walk is bounded by: §13.3's ceiling and the work it may spend. A caller passes its own
- * only to narrow a walk it holds a smaller bound for; a real session walks the whole ceiling.
- */
-export interface GrantLimits {
-  readonly ceiling: ListingCeiling;
-  readonly nodes: number;
-}
-
-const GRANT_LIMITS: GrantLimits = { ceiling: GRANT_CEILING, nodes: MAX_GRANT_NODES };
 
 /**
  * The names of the two ignore files a host reads: the `.gitignore` any directory may state for
@@ -94,22 +79,39 @@ const GRANT_LIMITS: GrantLimits = { ceiling: GRANT_CEILING, nodes: MAX_GRANT_NOD
 const IGNORE_FILE = '.gitignore';
 const EXCLUDE_FILE = 'exclude';
 
+/** How this adapter reads one directory of this host: the call the rest of the seam is built on. */
+export type DirectoryReader = (dir: string) => Promise<readonly WalkEntry[] | undefined>;
+
+/**
+ * This host's own file system, as the shared walk's seam: every read goes through `node:fs`, and
+ * an entry's own type is reduced to what a listing carries (`kindOf`).
+ *
+ * `list` is how a directory is read, and the root's own ignore sources are read through it rather
+ * than by listing the folder a second time, so a caller that hands in a reader sees every
+ * directory the seam reads — which is how a test counts the root rather than reading the code to
+ * see that it is read once.
+ */
+export function fileSystemSource(list: DirectoryReader = listDirectory): ListingWalkSource<string> {
+  return {
+    entries: list,
+    ignoreText: (dir, entries) => ignoreFileAt(dir, IGNORE_FILE, entries),
+    shareable: (dir, name) => isShareableFile(join(dir, name)),
+    child: (dir, name) => Promise.resolve(join(dir, name)),
+    rootIgnores: (dir, entries) => rootIgnores(dir, entries, list),
+  };
+}
+
+/** The seam a session walks through: this host's file system, read with `node:fs`'s own reader. */
+export const FILE_SYSTEM_SOURCE: ListingWalkSource<string> = fileSystemSource();
+
 /**
  * The listing of a folder as the file system held it when the walk ran: files only, ascending by
  * UTF-16 code unit, with the bound that stopped it short of the folder.
  *
- * The bounds are §13.3's and the walk stops at whichever binds first — `MAX_GRANT_PATHS` listed
- * paths, `MAX_GRANT_LISTING_BYTES` of their UTF-8 bytes, or the work budget. `cut` names it, so
- * the host's own window can say that the room's listing is short of the folder rather than let a
- * smaller tree pass for the whole one. A bound is recorded only where a shareable file would not
- * fit, so a folder whose listing is whole is reported whole whatever else it holds. Each
- * directory's entries are visited in name order — the same code-unit order the listing is written
- * in — so which paths survive a cut does not depend on the file system's own order.
- *
- * The budget pays for the work that costs a call: one node for a directory this walk reads, one
- * for the shareability check it asks of a candidate file. A name it can drop on its own — an
- * excluded or ignored one, a binary-named one, a link, an entry that is not a plain file — costs
- * nothing, because the assets a tree carries are no part of what it shares.
+ * The rule is the bridge's (`walkListing` in `vendor/bridge/listing-walk.ts`), which is the whole
+ * of why this is the same walk in both clients: the bounds, the charge points and the cut reason
+ * do not vary with the editor. What is here is the editor's half — `node:fs`, the folder's own
+ * ignore sources, and the entry types a listing can carry.
  *
  * The listing is what this host shares by itself, so the folder's own ignore files narrow it the
  * way they narrow a `git status`: `<root>/.git/info/exclude` and every `.gitignore` at or below
@@ -117,14 +119,17 @@ const EXCLUDE_FILE = 'exclude';
  * a real difference from `git status` — a folder shared from inside a repository does not honor
  * the rules above it, because the folder is the bound on what a host reads for the room — and
  * neither `core.excludesFile` nor any other rule outside the folder is read.
+ *
+ * `source` is the file system the walk reads. It is the one argument a test makes its own: the
+ * shared rule takes no bounds, so the way to cross one of §13.3's is to hand the walk a tree of
+ * its own rather than write the hundred thousand files a real folder would need to reach it.
  */
 export async function enumerateGrant(
   root: string,
-  limits: GrantLimits = GRANT_LIMITS,
+  source: ListingWalkSource<string> = FILE_SYSTEM_SOURCE,
 ): Promise<GrantEnumeration> {
-  const state: WalkState = { paths: [], bytes: 0, nodes: limits.nodes, cut: undefined };
-  await walk(root, '', state, await rootIgnores(root), limits.ceiling);
-  return { paths: sortGrant(state.paths), cut: state.cut };
+  const walked = await walkListing(source, [{ dir: root, name: '' }]);
+  return { paths: walked.paths, cut: walked.cut };
 }
 
 /**
@@ -137,32 +142,73 @@ export async function enumerateGrant(
  * exclude, which is what an absent one means. `.git` and `.git/info` have to be ordinary
  * directories of the folder before `info/exclude` is read, because a link to a repository
  * elsewhere would let a file outside the folder decide what this one shares.
+ *
+ * `entries` is the root's own listing, which the walk that calls this has just read: the root is
+ * not listed a second time for its excludes, and `.git` and `info` are different directories.
+ * `list` is how a directory is read, so a caller that handed the seam its own reader has the
+ * `.git` read counted with the rest.
  */
-async function rootIgnores(root: string): Promise<IgnoreSource[]> {
-  if (!holdsDirectory(await listDirectory(root), '.git')) {
+async function rootIgnores(
+  dir: string,
+  entries: readonly WalkEntry[],
+  list: DirectoryReader = listDirectory,
+): Promise<IgnoreSource[]> {
+  if (!holdsKind(entries, '.git', 'directory')) {
     return [];
   }
-  const git = join(root, '.git');
-  if (!holdsDirectory(await listDirectory(git), 'info')) {
+  const git = join(dir, '.git');
+  if (!holdsKind(await list(git), 'info', 'directory')) {
     return [];
   }
-  const text = await ignoreFileAt(join(git, 'info'), EXCLUDE_FILE);
+  const text = await ignoreFileAt(join(git, 'info'), EXCLUDE_FILE, undefined, list);
   return text === undefined ? [] : [{ dir: '', text }];
 }
 
-/** A directory's own entries, or `undefined` when this host cannot list it. */
-async function listDirectory(dir: string): Promise<Dirent[] | undefined> {
-  return readdir(dir, { withFileTypes: true }).catch(() => undefined);
+/**
+ * The kind of one entry of a directory's own listing, as a listing carries it.
+ *
+ * A link is tested first: it can point anywhere, including out of the folder being shared, so it
+ * is neither a file this host can vouch for nor a directory to descend into. Exactly a file and
+ * exactly a directory are the two a listing carries; everything else — a socket, a device, a type
+ * this host cannot name — is an entry a listing cannot carry.
+ */
+function kindOf(entry: Dirent): WalkEntry['kind'] {
+  if (entry.isSymbolicLink()) {
+    return 'other';
+  }
+  if (entry.isFile()) {
+    return 'file';
+  }
+  return entry.isDirectory() ? 'directory' : 'other';
 }
 
-/** Whether a listing holds `name` as an ordinary directory, and not as a link to one. */
-function holdsDirectory(entries: readonly Dirent[] | undefined, name: string): boolean {
-  return entries?.some((entry) => entry.name === name && entry.isDirectory()) ?? false;
+/** A directory's own entries, or `undefined` when this host cannot list it. */
+async function listDirectory(dir: string): Promise<WalkEntry[] | undefined> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
+  return entries?.map((entry) => ({ name: entry.name, kind: kindOf(entry) }));
+}
+
+/**
+ * The same for a directory that is already open, named through its descriptor so a segment
+ * cannot be swapped under it. Only the pinned-step read path takes this route.
+ */
+async function listInside(dir: FileHandle): Promise<WalkEntry[] | undefined> {
+  const entries = await readdir(inside(dir), { withFileTypes: true }).catch(() => undefined);
+  return entries?.map((entry) => ({ name: entry.name, kind: kindOf(entry) }));
+}
+
+/** Whether a listing holds `name` as exactly `kind`, and not as a link or another type. */
+function holdsKind(
+  entries: readonly WalkEntry[] | undefined,
+  name: string,
+  kind: WalkEntry['kind'],
+): boolean {
+  return entries?.some((entry) => entry.name === name && entry.kind === kind) ?? false;
 }
 
 /** Whether a listing holds `name` as an ordinary file — not a link, a directory or a FIFO. */
-function holdsFile(entries: readonly Dirent[] | undefined, name: string): boolean {
-  return entries?.some((entry) => entry.name === name && entry.isFile()) ?? false;
+function holdsFile(entries: readonly WalkEntry[] | undefined, name: string): boolean {
+  return holdsKind(entries, name, 'file');
 }
 
 /**
@@ -170,7 +216,7 @@ function holdsFile(entries: readonly Dirent[] | undefined, name: string): boolea
  * no case folding and no normalization of the name's own. A directory this host cannot list
  * carries nothing, so a name under one is refused as a name the folder does not carry.
  */
-function holdsName(entries: readonly Dirent[] | undefined, name: string): boolean {
+function holdsName(entries: readonly WalkEntry[] | undefined, name: string): boolean {
   return entries?.some((entry) => entry.name === name) ?? false;
 }
 
@@ -184,7 +230,8 @@ function holdsName(entries: readonly Dirent[] | undefined, name: string): boolea
  * text are no ignore file either.
  *
  * `listing` is `dir`'s own entries when the caller already holds them, so a walk does not list a
- * directory twice. The check and the read are two resolutions of one name, so a name swapped for a
+ * directory twice; `list` is the reader the listing comes from when it does not. The check and the
+ * read are two resolutions of one name, so a name swapped for a
  * link between them is followed: that is the window `readGrantedFile` already states for the leaf
  * and not a second one, and it is why the path a *peer* names has its ignore files read through
  * `ignoreFileIn` — inside the descriptor of the directory that listed them — instead.
@@ -192,9 +239,10 @@ function holdsName(entries: readonly Dirent[] | undefined, name: string): boolea
 async function ignoreFileAt(
   dir: string,
   name: string,
-  listing?: readonly Dirent[],
+  listing?: readonly WalkEntry[],
+  list: DirectoryReader = listDirectory,
 ): Promise<string | undefined> {
-  const entries = listing ?? (await listDirectory(dir));
+  const entries = listing ?? (await list(dir));
   if (!holdsFile(entries, name)) {
     return undefined;
   }
@@ -228,102 +276,6 @@ async function readIgnoreText(name: string): Promise<string | undefined> {
   }
 }
 
-/**
- * What one walk carries as it descends: the listing, its size in path bytes, the work it has
- * left to spend, and the bound that stopped it.
- */
-interface WalkState {
-  readonly paths: string[];
-  bytes: number;
-  nodes: number;
-  cut: GrantCut | undefined;
-}
-
-async function walk(
-  dir: string,
-  relative: string,
-  state: WalkState,
-  inherited: readonly IgnoreSource[],
-  ceiling: ListingCeiling,
-): Promise<void> {
-  if (state.cut !== undefined) {
-    return;
-  }
-  // Entering a directory is a read, and a read is what the budget pays for.
-  if (state.nodes <= 0) {
-    state.cut = 'budget';
-    return;
-  }
-  state.nodes -= 1;
-  const entries = await listDirectory(dir);
-  if (entries === undefined) {
-    // A directory that cannot be listed is one this host cannot share; it is not a fault the
-    // session should hear about, because the grant is a listing and not a promise.
-    return;
-  }
-  // This directory's own ignore file governs its children, and it is read whether or not some
-  // pattern would leave it out, as git reads it; `.gitignore` itself stays a shareable name. The
-  // listing just read decides whether the file is there and plain (`ignoreFileAt`).
-  const own = await ignoreFileAt(dir, IGNORE_FILE, entries);
-  const ignores = own === undefined ? inherited : [...inherited, { dir: relative, text: own }];
-  entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
-  for (const entry of entries) {
-    if (state.cut !== undefined) {
-      return;
-    }
-    const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
-    const directory = entry.isDirectory();
-    // Two gates by name, and neither reads a byte: what a room never shares at all, and what this
-    // folder's own ignore files leave out. An ignored directory is not descended into, so the
-    // tree below it costs the walk nothing.
-    if (!isGrantedPath(child) || isIgnoredPath(ignores, child, directory)) {
-      continue;
-    }
-    // A symbolic link is neither a file this host can vouch for nor one it should follow,
-    // because it can point anywhere, including out of the folder being shared. Nothing behind a
-    // link is listed, and nothing behind it is descended into.
-    if (entry.isSymbolicLink()) {
-      continue;
-    }
-    if (directory) {
-      await walk(join(dir, entry.name), child, state, ignores, ceiling);
-      continue;
-    }
-    // A listing carries files and never directories.
-    if (!entry.isFile()) {
-      continue;
-    }
-    // A file whose name declares a format a room cannot carry is left out, because the read
-    // refuses every file of that format as `binary`: naming it offered a guest a file no fetch
-    // could fill. The rule is the name alone and it is a floor — this walk reads no bytes, so a
-    // binary whose name declares no format stays listed and gets that refusal for asking
-    // (`GRANT_BINARY_SUFFIXES` in the grant's own rules).
-    if (isBinaryNamedPath(child)) {
-      continue;
-    }
-    // The shareability check is the one call this entry costs, whether or not it ends in a name.
-    if (state.nodes <= 0) {
-      state.cut = 'budget';
-      return;
-    }
-    state.nodes -= 1;
-    if (!(await isShareableFile(join(dir, entry.name)))) {
-      continue;
-    }
-    // A candidate this walk would now publish: the listing's own bounds are decided here, on a
-    // path that is shareable, so a name the walk drops for free can never trip one and a folder
-    // whose listing fits is not reported as cut because a later entry was not shareable. A full
-    // listing has no room for another path, so the walk stops rather than publish past the bound.
-    const size = listingPathBytes(child);
-    const bound = listingBound(ceiling, state.paths.length, state.bytes, size);
-    if (bound !== undefined) {
-      state.cut = bound;
-      return;
-    }
-    state.paths.push(child);
-    state.bytes += size;
-  }
-}
 
 /**
  * A regular file small enough for one `Y.Text`, which is all a document can be.
@@ -464,7 +416,7 @@ type GoverningOpened =
   | {
       readonly handle: FileHandle;
       readonly sources: readonly IgnoreSource[];
-      readonly entries: readonly Dirent[] | undefined;
+      readonly entries: readonly WalkEntry[] | undefined;
     }
   | Refused;
 
@@ -473,7 +425,7 @@ type GoverningFound =
   | {
       readonly path: string;
       readonly sources: readonly IgnoreSource[];
-      readonly entries: readonly Dirent[] | undefined;
+      readonly entries: readonly WalkEntry[] | undefined;
     }
   | Refused;
 
@@ -530,9 +482,7 @@ async function openGoverning(
     sources.push({ dir: '', text: exclude });
   }
   for (let depth = 0; ; depth += 1) {
-    const entries = await readdir(inside(directory), { withFileTypes: true }).catch(
-      () => undefined,
-    );
+    const entries = await listInside(directory);
     const own = await ignoreFileIn(directory, IGNORE_FILE, entries);
     if (own !== undefined) {
       sources.push({ dir: relative, text: own });
@@ -568,10 +518,9 @@ async function openGoverning(
 async function ignoreFileIn(
   dir: FileHandle,
   name: string,
-  listing?: readonly Dirent[],
+  listing?: readonly WalkEntry[],
 ): Promise<string | undefined> {
-  const entries =
-    listing ?? (await readdir(inside(dir), { withFileTypes: true }).catch(() => undefined));
+  const entries = listing ?? (await listInside(dir));
   if (!holdsFile(entries, name)) {
     return undefined;
   }
@@ -618,11 +567,14 @@ async function walkGoverning(
   root: string,
   segments: readonly string[],
 ): Promise<GoverningFound> {
-  const sources: IgnoreSource[] = [...(await rootIgnores(root))];
+  // The root is listed once: `rootIgnores` reads the repository exclude off the entries already
+  // held here rather than listing the folder again for itself.
+  const listed = await listDirectory(root);
+  const sources: IgnoreSource[] = [...(await rootIgnores(root, listed ?? []))];
   let head = root;
   let relative = '';
   for (let depth = 0; ; depth += 1) {
-    const entries = await listDirectory(head);
+    const entries = depth === 0 ? listed : await listDirectory(head);
     const own = await ignoreFileAt(head, IGNORE_FILE, entries);
     if (own !== undefined) {
       sources.push({ dir: relative, text: own });
