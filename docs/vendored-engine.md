@@ -20,4 +20,6 @@ The copy carries the session layer with the rest of the engine — `vendor/engin
 is `CANONICAL.md` §6.1's bytes, `vendor/engine/peer.ts` is `PROTOCOL.md` §13,
 `vendor/engine/host.ts` is §7.1's producer half, the room state the host key seals and the rule for
 each state that goes out, and `vendor/engine/crypto.ts` is the crypto seam a caller supplies,
-because a page has neither `node:crypto` nor a synchronous one.
+because a page has neither `node:crypto` nor a synchronous one, and `vendor/bridge/listing-walk.ts`
+is the one walk over a folder — the bounds a listing stops at and what a walk charges for — that
+both desktop clients read a folder through.
