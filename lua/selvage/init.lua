@@ -1326,46 +1326,58 @@ local function fetch_timeout_ms(count)
   return math.min(60000, 5000 + 500 * count)
 end
 
---- The room paths a fetch's argument names: the whole listing, one path of it, or a directory of
---- it. Nil and the paths it would have matched when the words name nothing the listing has.
+--- The room paths a fetch's argument names — the whole listing, one path of it, or a directory of
+--- it — and the subset of them this mirror has a file for. Nil targets, the count the room named and
+--- the paths it matched when the words name nothing that can be fetched.
+---
+--- The count is what the cap is applied to, and it is the room's listing rather than the mirror's
+--- subset: a listed path the mirror refused — one no host would publish, or one past this client's
+--- own bounds — is a path the room still names, and VS Code counts the same set (`listed()`,
+--- `extension.ts`), so the two clients refuse at the same point. A path with nowhere to be written
+--- is left out of the hold, so a fetch never waits out its time on one.
 ---
 --- The argument is read against the *listing* rather than against everything the room offers: a
 --- document the room holds and its listing does not name has no file in the mirror, so there is
 --- nothing to fetch for it.
 ---
 --- @param wanted string
---- @return string[]|nil targets, string[]|nil candidates
+--- @return string[]|nil targets, integer named, string[]|nil candidates
 local function fetch_targets(wanted)
-  -- What the mirror has a file for: a fetch is a write into it, and a listed path the mirror
-  -- refused — one no host would publish, or one past its bounds — has nowhere to be written, so a
-  -- fetch that waited for it would only run out its time.
-  local paths = {}
-  for _, path in ipairs(state.grant) do
-    if mirror.granted(path) then
-      paths[#paths + 1] = path
-    end
-  end
+  local named = {}
+  local candidates = nil
   if wanted == '' then
-    return paths
-  end
-  local prefix = wanted .. '/'
-  local under = {}
-  for _, path in ipairs(paths) do
-    if path == wanted then
-      return { path }
+    named = state.grant
+  else
+    local prefix = wanted .. '/'
+    for _, path in ipairs(state.grant) do
+      if path == wanted then
+        named = { path }
+        break
+      end
+      if path:sub(1, #prefix) == prefix then
+        named[#named + 1] = path
+      end
     end
-    if path:sub(1, #prefix) == prefix then
-      under[#under + 1] = path
+    if #named == 0 then
+      -- A word that names no listed path is resolved the way `:SelvageOpen` resolves one: an exact
+      -- name, or the one suffix at a directory boundary.
+      local resolved, matches = resolve(wanted)
+      candidates = matches
+      if resolved ~= nil then
+        named = { resolved }
+      end
     end
   end
-  if #under > 0 then
-    return under
+  local targets = {}
+  for _, path in ipairs(named) do
+    if mirror.granted(path) then
+      targets[#targets + 1] = path
+    end
   end
-  local resolved, candidates = resolve(wanted)
-  if resolved ~= nil and mirror.granted(resolved) then
-    return { resolved }
+  if #targets == 0 and wanted ~= '' then
+    return nil, #named, candidates
   end
-  return nil, candidates
+  return targets, #named, nil
 end
 
 --- The paths of `pending` whose content the mirror does not hold yet, dropping the ones it does.
@@ -1393,8 +1405,9 @@ end
 --- The most paths one fetch holds at once. Every held path is a `doc.open` every peer absorbs and
 --- a `Y.Text` every replica keeps, so a whole listing — or one directory of it — past this refuses
 --- with a sentence naming a narrower target instead of holding the room sequentially, each path up
---- to `fetch_timeout_ms`. The twin of VS Code's `MAX_FETCH_ALL_PATHS`, and the same number and the
---- same words, so the two clients refuse at the same point.
+--- to `fetch_timeout_ms`. The twin of VS Code's `MAX_FETCH_ALL_PATHS`: the same number, the same
+--- words and the same base, the room's listing — every path it names, and not the subset this
+--- mirror kept — so the two clients refuse at the same point.
 local MAX_FETCH_ALL_PATHS = 100
 
 --- Fetches the room's content into the mirror: one file, a directory of them, or all of it.
@@ -1424,7 +1437,34 @@ function M.fetch(path)
     return
   end
   local wanted = vim.trim(path or '')
-  local targets, candidates = fetch_targets(wanted)
+  local targets, named, candidates = fetch_targets(wanted)
+  -- A hold of every path the room names would put the whole listing — or one directory of it —
+  -- into every replica at once, so past the cap the fetch refuses rather than truncates: it names a
+  -- narrower target, and the room keeps its open-document set. The count is the room's listing and
+  -- not the subset this mirror kept, so the two clients refuse at the same point; what is held once
+  -- the cap passes is the subset with a file to be written. The whole listing and a directory are
+  -- told apart, because the next step differs.
+  if named > MAX_FETCH_ALL_PATHS then
+    if wanted == '' then
+      notify(
+        ('fetching all %d listed files at once would hold every one in the room; fetch a file or a directory instead (at most %d at once).'):format(
+          named,
+          MAX_FETCH_ALL_PATHS
+        ),
+        vim.log.levels.ERROR
+      )
+    else
+      notify(
+        ('%d files under %s is more than one fetch holds (at most %d at once); name a narrower directory.'):format(
+          named,
+          wanted,
+          MAX_FETCH_ALL_PATHS
+        ),
+        vim.log.levels.ERROR
+      )
+    end
+    return
+  end
   if targets == nil then
     if candidates ~= nil and #candidates > 1 then
       notify(
@@ -1435,31 +1475,6 @@ function M.fetch(path)
       notify(
         ('no file the room lists matches "%s"; :SelvageOpen and completion name them.'):format(wanted),
         vim.log.levels.WARN
-      )
-    end
-    return
-  end
-  -- A hold of every one of these would put the whole listing — or one directory of it — into
-  -- every replica at once, so past the cap the fetch refuses rather than truncates: it names a
-  -- narrower target, and the room keeps its open-document set. The whole listing and a directory
-  -- are told apart, because the next step differs.
-  if #targets > MAX_FETCH_ALL_PATHS then
-    if wanted == '' then
-      notify(
-        ('fetching all %d listed files at once would hold every one in the room; fetch a file or a directory instead (at most %d at once).'):format(
-          #targets,
-          MAX_FETCH_ALL_PATHS
-        ),
-        vim.log.levels.ERROR
-      )
-    else
-      notify(
-        ('%d files under %s is more than one fetch holds (at most %d at once); name a narrower directory.'):format(
-          #targets,
-          wanted,
-          MAX_FETCH_ALL_PATHS
-        ),
-        vim.log.levels.ERROR
       )
     end
     return
