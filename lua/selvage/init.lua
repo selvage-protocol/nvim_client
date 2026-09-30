@@ -3597,7 +3597,10 @@ local function on_report(report)
     elseif report.cut == 'bytes' then
       notify("this session's paths are longer in total than one room listing carries, so some of its files are not in the room.", vim.log.levels.WARN)
     elseif report.cut == 'budget' then
-      notify("reading this session's folder took more work than one listing walk pays for, so some of its files are not in the room.", vim.log.levels.WARN)
+      -- A spent budget leaves the folder unread rather than a file left out, so this one hedges
+      -- where the two listing bounds do not: the walk stopped, and what it did not reach is not
+      -- known to be shareable or not.
+      notify("reading this session's folder took more work than one listing walk pays for, so the listing may be missing some of its files.", vim.log.levels.WARN)
     end
   elseif report.kind == 'sessionError' then
     -- The report's own sentence, and its code is not shown: a refusal the protocol named and
