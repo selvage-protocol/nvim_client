@@ -62,6 +62,10 @@ const GRANT_CEILING: ListingCeiling = {
 /**
  * Which bound stopped a walk: §13.3's two, or the work it pays for. A budget cut is the walk's
  * own — what it spends on directory reads and shareability checks — and not a listing bound.
+ *
+ * `paths` and `bytes` are recorded only where a file the walk would have named did not fit, so a
+ * listing that holds every shareable file of the folder reports no cut. A spent budget leaves the
+ * rest of the folder unread, so `budget` says the walk stopped and not that anything was left out.
  */
 export type GrantCut = ListingBound | 'budget';
 
@@ -97,9 +101,10 @@ const EXCLUDE_FILE = 'exclude';
  * The bounds are §13.3's and the walk stops at whichever binds first — `MAX_GRANT_PATHS` listed
  * paths, `MAX_GRANT_LISTING_BYTES` of their UTF-8 bytes, or the work budget. `cut` names it, so
  * the host's own window can say that the room's listing is short of the folder rather than let a
- * smaller tree pass for the whole one. Each directory's entries are visited in name order — the
- * same code-unit order the listing is written in — so which paths survive a cut does not depend
- * on the file system's own order.
+ * smaller tree pass for the whole one. A bound is recorded only where a shareable file would not
+ * fit, so a folder whose listing is whole is reported whole whatever else it holds. Each
+ * directory's entries are visited in name order — the same code-unit order the listing is written
+ * in — so which paths survive a cut does not depend on the file system's own order.
  *
  * The budget pays for the work that costs a call: one node for a directory this walk reads, one
  * for the shareability check it asks of a candidate file. A name it can drop on its own — an
