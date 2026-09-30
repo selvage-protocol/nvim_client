@@ -27,6 +27,12 @@ receives them and a peer with a mirror materialises them. A file, two of them or
 one thing; `:SelvageFetch` alone is a whole project published to the room, and the notification
 before it happens says so.
 
+One hold carries at most 100 paths, and it is the room's listing that is counted — the whole
+listing, or every path the room names under a directory — rather than the smaller subset this
+client's mirror could write. A fetch past that refuses with a sentence naming a narrower target
+instead of truncating, and the room's open-document set is left as it was. A path the mirror
+refused is still counted, so this client and the VS Code one refuse at the same point.
+
 A listed path's buffer is the mirror's file, a real path on disk rather than a `selvage://`
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being
 edited. A document the room holds and its listing does not name (a listing can be truncated by the
