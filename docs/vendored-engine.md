@@ -10,11 +10,9 @@ scripts/sync-engine.sh [path-to-vscode_client]
 The script copies `src/engine` and `src/bridge`, removes anything the source has retired, and then
 diffs the result, so a run either brings `vendor/` into agreement or says what it could not.
 
-The copy is `vscode_client`'s `src/engine` and `src/bridge` at `c45b26b`: a reader can name the
-revision this tree carries without the commit that synced it, and re-syncing against a later
-checkout is what moves it. That revision is the tip of that repository's `fix/listing-walk` branch,
-which is where `bridge/listing-walk.ts` is authored and from which it arrives here; re-syncing
-against `main` until the branch lands describes the revision before it.
+The copy is `vscode_client`'s `src/engine` and `src/bridge` at `2a9b36a` (`2026-09-30`, that
+repository's `main`): a reader can name the revision this tree carries without the commit that
+synced it, and re-syncing against a later checkout is what moves it.
 
 The copy carries the session layer with the rest of the engine — `vendor/engine/sealed.ts`
 is `CANONICAL.md` §6.1's bytes, `vendor/engine/peer.ts` is `PROTOCOL.md` §13,
