@@ -123,6 +123,20 @@ local function read(path)
   return table.concat(lines, '\n') .. (#lines > 0 and '\n' or '')
 end
 
+--- Waits for the file at `path` to hold `text`, which is the effect a fetch is for. A fetch that
+--- refused a listed path claims no success (`fetched the files.`), so what it wrote is the only
+--- thing left to wait on rather than what it said.
+---
+--- @param path string
+--- @param text string
+--- @return boolean
+local function written_since(path, text)
+  vim.wait(2000, function()
+    return read(path) == text
+  end, 50)
+  return read(path) == text
+end
+
 --- A process id nothing is using: a mirror a session that crashed left behind is pruned by the
 --- process that owned it, so a test has to be able to name a dead one.
 local function dead_pid()
@@ -464,7 +478,12 @@ check(
   end, vim.list_slice(sent, sent_before + 1)),
   0
 )
-check('  and says the listing has no such file', said_since(before, 'no file the room lists matches') ~= nil, true)
+check(
+  '  and says the mirror has no file for it',
+  said_since(before, 'could not fetch .git/config from the room: the file could not be mirrored.') ~= nil,
+  true
+)
+check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
 selvage.leave()
 
 -- A name that would leave the root is refused rather than written: the listing comes from a
@@ -1341,17 +1360,88 @@ check(
 )
 check('  and opens nothing', #selvage.documents(), held_before)
 
--- Under the cap the same shape fetches: the count is the room's listing and the hold is the subset
--- of it this mirror has a file for, so a path it refused is left alone rather than waited for.
+-- Under the cap the same shape fetches what it can and names what it cannot: the count is the
+-- room's listing, the hold is the subset of it this mirror has a file for, and a listed path with
+-- no file is refused where it is rather than waited out — in the words the other client refuses
+-- one with, and never silently.
 local kept = { 'src/f001.txt', 'src/f002.txt', 'src/f003.txt' }
 root = join({}, kept, 'r-fetchcap-few', { 'src/f002.txt' })
 responder = room_holding({ ['src/f001.txt'] = 'first\n', ['src/f003.txt'] = 'third\n' })
 before = #notices
 selvage.fetch()
-check('a fetch of a listing under the cap fetches the paths the mirror kept', fetched_since(before, 'fetched the files') ~= nil, true)
-check('  and writes the one it kept', read(root .. '/src/f001.txt'), 'first\n')
+check('a fetch of a listing under the cap fetches the paths the mirror kept', written_since(root .. '/src/f001.txt', 'first\n'), true)
+check('  and the other', written_since(root .. '/src/f003.txt', 'third\n'), true)
 check('  and leaves the one it did not', read(root .. '/src/f002.txt'), nil)
-check('  and says nothing of the one it did not', said_since(before, 'src/f002.txt'), nil)
+check(
+  '  and names the one it did not in the other client\'s words',
+  said_since(before, 'could not fetch src/f002.txt from the room: the file could not be mirrored.') ~= nil,
+  true
+)
+check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
+check('  and claims no success over the one it refused', said_since(before, 'fetched the files.'), nil)
+responder = nil
+selvage.leave()
+
+-- A directory the room names whose files this mirror kept none of: the directory is the room's and
+-- not the mirror's, so the fetch resolves it against the listing and refuses each path where it is.
+-- `no file the room lists matches` is false while the room lists them, which is what the whole
+-- sentence was for. VS Code resolves the directory against `listed()` and reports each target its
+-- own mirror refuses (`fetchFromRoom`, `extension.ts`), which is what this answers with.
+root = join(
+  { 'src/kept.txt' },
+  { 'src/kept.txt', 'vendor/a.txt', 'vendor/b.txt' },
+  'r-fetch-refused',
+  { 'vendor/a.txt', 'vendor/b.txt' }
+)
+check('a listing this mirror holds one path of has a directory to write it in', vim.fn.filereadable(root .. '/src/kept.txt'), 1)
+held_before = #selvage.documents()
+before = #notices
+selvage.fetch('vendor')
+check(
+  'a fetch of a directory the mirror kept nothing of names the first path it refused',
+  said_since(before, 'could not fetch vendor/a.txt from the room: the file could not be mirrored.') ~= nil,
+  true
+)
+check(
+  '  and the second',
+  said_since(before, 'could not fetch vendor/b.txt from the room: the file could not be mirrored.') ~= nil,
+  true
+)
+check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
+check('  and opens nothing', #selvage.documents(), held_before)
+check('  and announces no hold', said_since(before, 'fetching opens'), nil)
+selvage.leave()
+
+-- A room whose listing this mirror kept nothing of at all: the mirror has no directory to be read
+-- from, which is not the room listing nothing, so a fetch still names each path.
+root = join({}, { 'vendor/a.txt', 'vendor/b.txt' }, 'r-fetch-noroot', { 'vendor/a.txt', 'vendor/b.txt' })
+check('a listing the mirror kept nothing of makes no directory', root, nil)
+before = #notices
+selvage.fetch('vendor')
+check(
+  'a fetch of it names a path rather than saying the room lists no files',
+  said_since(before, 'could not fetch vendor/a.txt from the room: the file could not be mirrored.') ~= nil,
+  true
+)
+check('  and says nothing about an empty listing', said_since(before, 'the room lists no files to fetch'), nil)
+selvage.leave()
+
+-- The same directory with a mix: what has a file is held and what has none is refused where it is,
+-- in the one answer a single fetch gives, the way one directory is one fetch in the other client.
+root = join({ 'src/kept.txt' }, { 'docs/a.md', 'docs/b.md' }, 'r-fetch-mix', { 'docs/b.md' })
+responder = room_holding({ ['docs/a.md'] = '# a\n' })
+held_before = #selvage.documents()
+before = #notices
+selvage.fetch('docs')
+check('a fetch of a directory the mirror kept one path of writes it', written_since(root .. '/docs/a.md', '# a\n'), true)
+check(
+  '  and names the one it kept none of',
+  said_since(before, 'could not fetch docs/b.md from the room: the file could not be mirrored.') ~= nil,
+  true
+)
+check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
+check('  and holds only what it can write', #selvage.documents(), held_before + 1)
+check('  and claims no success over the one it refused', said_since(before, 'fetched the files.'), nil)
 responder = nil
 selvage.leave()
 
