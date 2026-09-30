@@ -1746,6 +1746,55 @@ check(
 )
 check('  without inventing one', notices[#notices].message:find('()', 1, true) == nil, true)
 
+-- -- a walk that stopped short of the folder, told to the host alone -------------------
+--
+-- `docs/ipc.md` has the companion say which bound stopped the host's own walk of the folder,
+-- and the words for each bound are this front-end's. A report names the reason and not a
+-- sentence, so a reason the two sides disagree on would show nothing at all; these are checked
+-- where the message is driven, and `test/lua/vocabulary.lua` pins the words alone.
+--
+-- One report is one notice: the walk says the cut as the folder moves and the session tells a
+-- cut that has not changed from one that has, so the once-per-session part is the companion's
+-- (`test/companion.test.ts`). What is pinned here is that each report this front-end is handed
+-- is said exactly once, with the sentence for the bound it names and no sentence for one it
+-- does not know.
+
+local before_cut = #notices
+handlers().on_message({ type = 'report', report = { kind = 'listingCut', cut = 'paths' } })
+check(
+  'a listing cut at the path bound is said',
+  said_since(before_cut, 'this session shares more paths than one room listing carries, so some of its files are not in the room.') ~= nil,
+  true
+)
+check('  as a warning', notices[#notices].level, vim.log.levels.WARN)
+check('  and once for the one report', #notices - before_cut, 1)
+
+local before_bytes = #notices
+handlers().on_message({ type = 'report', report = { kind = 'listingCut', cut = 'bytes' } })
+check(
+  'a listing cut at the byte bound is said',
+  said_since(before_bytes, "this session's paths are longer in total than one room listing carries, so some of its files are not in the room.") ~= nil,
+  true
+)
+check('  as a warning', notices[#notices].level, vim.log.levels.WARN)
+check('  and once for the one report', #notices - before_bytes, 1)
+
+local before_budget = #notices
+handlers().on_message({ type = 'report', report = { kind = 'listingCut', cut = 'budget' } })
+check(
+  'a walk that spent its budget hedges what it left unread',
+  said_since(before_budget, "reading this session's folder took more work than one listing walk pays for, so the listing may be missing some of its files.") ~= nil,
+  true
+)
+check('  as a warning', notices[#notices].level, vim.log.levels.WARN)
+check('  and once for the one report', #notices - before_budget, 1)
+
+-- A reason this front-end has no words for says nothing rather than a sentence for the wrong
+-- bound: the companion and the plugin ship together, and a message neither wrote is not one to
+-- guess at.
+local before_unknown = #notices
+handlers().on_message({ type = 'report', report = { kind = 'listingCut', cut = 'pathz' } })
+check('a cut this front-end has no words for says nothing', #notices - before_unknown, 0)
 -- -- a buffer that is not valid UTF-8 -------------------------------------------
 --
 -- A Neovim buffer is bytes, and a file opened as Latin-1 holds bytes that no UTF-8 sequence
