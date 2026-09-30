@@ -35,7 +35,7 @@ import test, { after, before } from 'node:test';
 
 import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, isGrantedPath } from '../vendor/bridge/index.ts';
 import type { GrantRefusal, GrantedRead, IgnoreSource, ListingWalkSource, WalkEntry } from '../vendor/bridge/index.ts';
-import { enumerateGrant, readGrantedFile } from '../companion/grant.ts';
+import { FILE_SYSTEM_SOURCE, enumerateGrant, fileSystemSource, readGrantedFile } from '../companion/grant.ts';
 
 /** The listing a walk found, for the assertions that are about its paths alone. */
 async function pathsOf(root: string): Promise<string[]> {
@@ -447,6 +447,36 @@ test('a listing carries six thousand files without a cut', async () => {
   assert.equal(listing.cut, undefined);
   assert.equal(listing.paths[0], 'f00000.txt');
   assert.equal(listing.paths.at(-1), 'f05999.txt');
+});
+
+test('a walk lists the folder once, and takes its exclude from the entries it read', async () => {
+  const root = join(ROOT, 'listed-once');
+  await put('listed-once/.git/info/exclude', 'dropped.tmp\n');
+  await put('listed-once/.gitignore', 'also-dropped.tmp\n');
+  await put('listed-once/dropped.tmp', 'dropped by the repository exclude\n');
+  await put('listed-once/also-dropped.tmp', 'dropped by the ignore file\n');
+  await put('listed-once/kept.txt', 'kept\n');
+
+  // The repository exclude is the root's own ignore source, and it is read from the entries the
+  // walk already holds rather than by listing the root a second time. The reader is the real one
+  // with a recorder in front, so what is counted is every directory this seam reads.
+  const listed: string[] = [];
+  const counting = fileSystemSource(async (dir) => {
+    listed.push(dir);
+    return await FILE_SYSTEM_SOURCE.entries(dir);
+  });
+
+  const listing = await enumerateGrant(root, counting);
+  // `dropped.tmp` is out and `.gitignore` is in, so the exclude was read — and read off the
+  // entries the walk already held, which is what keeps the folder from being listed twice.
+  assert.deepEqual(listing.paths, ['.gitignore', 'kept.txt']);
+  const roots = listed.filter((dir) => dir === root);
+  assert.equal(roots.length, 1, `the folder was listed ${roots.length} times`);
+  // `.git` and `.git/info` are the only other directories the root's own excludes need, and they
+  // are not the folder: a second listing of the root is another whole enumeration of the folder on
+  // every publish.
+  assert.ok(listed.includes(join(root, '.git')), 'the repository exclude was never looked for');
+  assert.ok(listed.includes(join(root, '.git', 'info')), 'the exclude file was never listed');
 });
 
 test('a listing carries no symbolic link', async () => {
