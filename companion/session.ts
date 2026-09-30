@@ -22,6 +22,7 @@ import { code as errCode, isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant, grantReport } from './grant.ts';
+import type { GrantCut, GrantEnumeration } from './grant.ts';
 import { isRequest } from './ipc.ts';
 import { UnreadableInvite, hostRoom, joinRoom } from './relay.ts';
 import type { ListingSource } from './relay.ts';
@@ -116,7 +117,7 @@ export interface CompanionOptions {
    * completion it decides, because a walk that outlasts the window a burst is gathered in is the
    * only way to see two of them in flight at once.
    */
-  enumerate?: (root: string) => Promise<string[]>;
+  enumerate?: (root: string) => Promise<GrantEnumeration>;
   displayName?: string;
   /**
    * Whether a document the room changed is written, for a `host`/`join` that does not say.
@@ -129,7 +130,7 @@ export interface CompanionOptions {
 export class Companion {
   private readonly send: (notification: Notification) => void;
   private readonly engines: EngineFactory;
-  private readonly enumerate: (root: string) => Promise<string[]>;
+  private readonly enumerate: (root: string) => Promise<GrantEnumeration>;
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
   private readonly autoSave: boolean;
@@ -147,6 +148,12 @@ export class Companion {
    * has to stand down.
    */
   private grantReported = false;
+  /**
+   * The bound the last walk stopped at, or `undefined` when it read the whole folder. The cut is
+   * said when it appears rather than on every walk: the watcher republishes on every change, so a
+   * folder past a bound would otherwise say so once per keystroke.
+   */
+  private listingCut: GrantCut | undefined;
   /** The rereading a burst has scheduled, if one is outstanding. */
   private grantRepublish?: NodeJS.Timeout;
   /** The listing last handed to the room, so a folder that has not changed publishes nothing. */
@@ -528,6 +535,9 @@ export class Companion {
     this.toldRole = engine.session().role;
     // Which listing reports this session has produced is the session's, not the process's.
     this.grantReported = false;
+    // The bound the last walk stopped at is this session's too: the next one learns the folder's
+    // bounds from its own walk rather than from the previous session's.
+    this.listingCut = undefined;
     this.bridge = new SessionBridge({
       engine,
       host: this.editor,
@@ -659,7 +669,9 @@ export class Companion {
     };
     if (root !== undefined && root !== '') {
       try {
-        listing.replace(await this.enumerate(root));
+        const enumeration = await this.enumerate(root);
+        listing.replace(enumeration.paths);
+        this.reportListingCut(enumeration.cut);
       } catch (error: unknown) {
         // A folder this process cannot read is not a reason to refuse the room: the host's
         // listing is empty until it can be read, and the walk's own failure is reported by
@@ -679,6 +691,25 @@ export class Companion {
     // it is what `publishGrant` compares a fresh walk against.
     this.grantedListing = [...walked];
     return engine;
+  }
+
+  /**
+   * Tells the front-end when a walk stopped short of the folder, and which bound did it.
+   *
+   * A cut is a fact about the folder rather than about the listing, and the host is the one who
+   * can change the folder: the guest is told nothing, because a short listing is a listing like
+   * any other and no frame carries a cut. It is said when it appears rather than on every walk,
+   * because the watcher republishes on every change and a folder past a bound would otherwise
+   * say so once per keystroke. A bound that no longer binds says nothing at all.
+   */
+  private reportListingCut(cut: GrantCut | undefined): void {
+    if (cut === this.listingCut) {
+      return;
+    }
+    this.listingCut = cut;
+    if (cut !== undefined) {
+      this.send({ type: 'report', report: { kind: 'listingCut', cut } });
+    }
   }
 
   /**
@@ -852,14 +883,14 @@ export class Companion {
       return;
     }
     // Which reading this is. A walk of a large tree outlasts the window a burst is gathered in —
-    // the 20 000-node bound measured ~390 ms against a 250 ms window — so an event during a walk
+    // the work budget is 200 000 nodes against a 250 ms window — so an event during a walk
     // starts a second one, and the two can finish in the order opposite to the one they started
     // in. The last reading started is the only one whose answer is the folder's current shape.
     const reading = ++this.grantReadings;
     void (async () => {
-      let paths: string[];
+      let enumeration: GrantEnumeration;
       try {
-        paths = await this.enumerate(root);
+        enumeration = await this.enumerate(root);
       } catch (error: unknown) {
         if (this.engine === engine) {
           this.send({
@@ -885,6 +916,11 @@ export class Companion {
       if (this.engine !== engine) {
         return;
       }
+      // A walk that stopped short is a fact about the folder rather than about this listing, so it
+      // is said before the news test below: the room holds part of the folder either way, and the
+      // host is the one who can do something about it.
+      this.reportListingCut(enumeration.cut);
+      const paths = enumeration.paths;
       // The engine publishes unconditionally, and a listing is a snapshot the room replaces
       // wholesale: a folder that names exactly what it named last time has nothing to say.
       const previous = this.grantedListing;

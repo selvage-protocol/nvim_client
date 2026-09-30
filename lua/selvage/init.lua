@@ -3535,6 +3535,19 @@ local function on_report(report)
     state.host_away = nil
     notify(tostring(report.sentence or ''))
     refresh_indicators()
+  elseif report.kind == 'listingCut' then
+    -- A walk that stopped short of the folder is a fact about the folder, and the host is the
+    -- only one who can change it: the guest is told nothing, because a short listing is a
+    -- listing like any other and no frame carries a cut. The companion says which bound bound it
+    -- (or that its work budget ran out), and the words for each are here so a person reads what
+    -- they can act on rather than a code.
+    if report.cut == 'paths' then
+      notify('this session shares more paths than one room listing carries, so some of its files are not in the room.', vim.log.levels.WARN)
+    elseif report.cut == 'bytes' then
+      notify("this session's paths are longer in total than one room listing carries, so some of its files are not in the room.", vim.log.levels.WARN)
+    elseif report.cut == 'budget' then
+      notify("reading this session's folder took more work than one listing walk pays for, so some of its files are not in the room.", vim.log.levels.WARN)
+    end
   elseif report.kind == 'sessionError' then
     -- The report's own sentence, and its code is not shown: a refusal the protocol named and
     -- one this session made for itself both say what happened in words already — `the room

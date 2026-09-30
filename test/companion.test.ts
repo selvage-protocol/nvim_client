@@ -27,6 +27,7 @@ import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
 import { enumerateGrant } from '../companion/grant.ts';
+import type { GrantEnumeration } from '../companion/grant.ts';
 import { CLOSING_WAIT_MS, Companion, realEngines } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/index.ts';
@@ -36,6 +37,11 @@ import type { GrantedRead } from '../vendor/bridge/index.ts';
 import { INVITE_REFUSED } from '../companion/relay.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
+
+/** A walk that read the whole folder, for a stubbed `enumerate` that is not about a cut. */
+function whole(paths: string[]): GrantEnumeration {
+  return { paths, cut: undefined };
+}
 
 /**
  * The editor host the harness hands the companion, recording what the bridge asks it to read and
@@ -83,7 +89,7 @@ function harness(
     defaultAutoSave?: boolean;
     granted?: string[];
     grantError?: Error;
-    enumerate?: (root: string) => Promise<string[]>;
+    enumerate?: (root: string) => Promise<GrantEnumeration>;
     /**
      * When set, the next mint this harness is asked for throws it, the way a dead address or a
      * server that refuses the hello reaches the session, and the ones after it do not. No engine is
@@ -622,6 +628,30 @@ test('a guest join waits for the listing the handshake carried', async () => {
     ['grant', 'documents', 'peers'],
   );
   assert.deepEqual(reports[0]?.report, { kind: 'grant', paths: ['src/main.rs', 'notes.txt'] });
+});
+
+/** Every `listingCut` report the front-end was sent, in order. */
+function listingCuts(it: Harness): unknown[] {
+  return it.sent
+    .filter((notification) => notification.type === 'report')
+    .map((notification) => notification.report)
+    .filter((report) => (report as { kind: string }).kind === 'listingCut');
+}
+
+test('a host whose walk stopped short is told which bound it was', async (t) => {
+  const root = folder(t);
+  const it = harness('host', [], [], {
+    enumerate: async () => ({ paths: ['a.txt'], cut: 'bytes' }),
+  });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  assert.deepEqual(listingCuts(it), [{ kind: 'listingCut', cut: 'bytes' }]);
+});
+
+test('a walk that read the whole folder is not reported as cut', async (t) => {
+  const root = folder(t);
+  const it = harness('host', [], [], { enumerate: async () => whole(['a.txt']) });
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  assert.deepEqual(listingCuts(it), []);
 });
 
 test('a host seeds the buffer it opens, and only once', async () => {
@@ -1840,7 +1870,7 @@ test('a reading that finishes after a later one does not publish', async (t) => 
   // A real walk of a folder this size takes a few milliseconds and never overlaps itself, which is
   // exactly why the guard needs a walk the test holds open: the two readings have to be in flight
   // at once for the one that started first to be able to finish last.
-  const readings: Array<(paths: string[]) => void> = [];
+  const readings: Array<(enumeration: GrantEnumeration) => void> = [];
   const it = harness('host', [], [], {
     enumerate: () =>
       new Promise((resolve) => {
@@ -1852,7 +1882,7 @@ test('a reading that finishes after a later one does not publish', async (t) => 
   // has to carry a listing, so the walk comes before the mint.
   const opening = it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until('the mint to read the folder', () => readings.length === 1, () => readings.length);
-  readings[0]?.(['notes.txt']);
+  readings[0]?.(whole(['notes.txt']));
   await opening;
 
   // Two changes while no reading is in flight: the window passes, the timer fires, and the reading
@@ -1861,7 +1891,7 @@ test('a reading that finishes after a later one does not publish', async (t) => 
   await until('the first republish reading to start', () => readings.length === 2, () => readings.length);
   tree(root, 'created-too.txt', 'made while hosting\n');
   await until('a second reading to start', () => readings.length === 3, () => readings.length);
-  readings[2]?.(['created-too.txt', 'created.txt', 'notes.txt']);
+  readings[2]?.(whole(['created-too.txt', 'created.txt', 'notes.txt']));
   await until(
     'the later reading to reach the room',
     () => it.engine.grants.length === 1,
@@ -1871,7 +1901,7 @@ test('a reading that finishes after a later one does not publish', async (t) => 
   // The reading that started first now finishes, with the folder as it was before the last change.
   // It is older than the one the room was given, and nothing would put the room right until the
   // folder changed again.
-  readings[1]?.(['created.txt', 'notes.txt']);
+  readings[1]?.(whole(['created.txt', 'notes.txt']));
   await delay(QUIET_MS);
   assert.deepEqual(
     it.engine.grants,
@@ -1892,7 +1922,7 @@ test('a host that reseats after a drop publishes its current listing', async (t)
   const root = folder(t);
   let listing = ['old.txt'];
   const it = harness('host', [], [], {
-    enumerate: async () => [...listing],
+    enumerate: async () => whole([...listing]),
   });
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
@@ -1920,7 +1950,7 @@ test('later room news under the same peer id publishes nothing again', async (t)
   const root = folder(t);
   let listing = ['old.txt'];
   const it = harness('host', [], [], {
-    enumerate: async () => [...listing],
+    enumerate: async () => whole([...listing]),
   });
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
