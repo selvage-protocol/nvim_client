@@ -241,6 +241,9 @@ local MESSAGES = {
   -- with the sentence the other client refuses with.
   { 'ERROR', 'fetching all %d listed files at once would hold every one in the room; fetch a file or a directory instead (at most %d at once).' },
   { 'ERROR', '%d files under %s is more than one fetch holds (at most %d at once); name a narrower directory.' },
+  -- A listed path this client's mirror has no file for: no hold could write it, so the fetch names
+  -- it back in the words the VS Code one refuses a path its own mirror would not materialise with.
+  { 'ERROR', 'could not fetch %s from the room: the file could not be mirrored.' },
   { 'INFO', 'fetched the files.' },
   { 'WARN', 'fetched the files; these had not arrived within %ds: %s.' },
   { 'WARN', 'fetched the files; %s had not arrived within %ds.' },
