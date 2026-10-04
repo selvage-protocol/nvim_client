@@ -3,9 +3,7 @@
 -- The batching in `test/lua/join.lua` covers the grant-first order: the listing
 -- lands before the documents, so its counts join the summary. A room may also
 -- name its documents first and publish its listing after — and its text later
--- still — and that order escaped the batching: the summary went out without
--- the mirror, the listing earned its own mirror sentence, and the landing's
--- empty buffer earned the unfetched hint. Three notices for one join.
+-- still.
 --
 -- The join is one summary plus errors, in every order: a listing that arrives
 -- after the summary stays silent (the mirror is `require('selvage').session()`
@@ -60,8 +58,7 @@ vim.g.selvage_display_name = 'Test User'
 -- -- documents first, listing after, text never ----------------------------------
 --
 -- The room names four documents before it publishes its listing, and answers
--- no hold: the landing opens empty and stays empty. Before the fix this was
--- the summary, the mirror sentence and the unfetched hint; now it is the
+-- no hold: the landing opens empty and stays empty, and the join is still the
 -- summary and nothing else.
 
 selvage.leave()

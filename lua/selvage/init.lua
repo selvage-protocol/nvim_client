@@ -107,7 +107,7 @@ local state = {
   peer_groups = {},
   peer_fills = {},
   --- The paint a peer's highlights were last set with, so a report that changes nothing sets
-  --- nothing: every report redrew every caret's highlight, at a highlight set per cursor per
+  --- nothing: repainting every caret on every report would be a highlight set per cursor per
   --- report, on top of the marks the draw already recreates.
   peer_paints = {},
   peer_count = 0,
@@ -457,7 +457,7 @@ end
 --- line's start is drawn; an empty line has no cell either, and the block is the single one
 --- placed in the empty cell. Neither inserts anything, so the line keeps its width and the caret
 --- stays against the selection fill rather than beside it. A row of its own above the line reads
---- the position wrong, as before: a virtual line starts at the text column, not the caret's.
+--- the position wrong: a virtual line starts at the text column, not the caret's.
 local function draw_presence(cursors)
   -- The report is the companion's, and a misshapen one must not wedge the drawing: `ipairs`
   -- over a string errors inside the job callback, aborting the message with the follow and
@@ -1050,7 +1050,7 @@ end
 --- editing. The file is read into the buffer the way `:edit` reads it, so the buffer really is a
 --- file buffer — its `:w` is the session's to route, and a plugin that looks at the buffer finds
 --- the file behind it. A document the grant does not name has nowhere to go and stays a
---- `selvage://` buffer, which is what it was before the mirror existed.
+--- `selvage://` buffer.
 ---
 --- @param path string the room path
 --- @return integer bufnr
@@ -1125,8 +1125,8 @@ local function refuse_mirror_write(path)
   )
 end
 
---- Says, once per path, that the room has no frame for a file mutation: create, rename and
---- delete stay out of v1, so the file is refused where the editor names it.
+--- Says, once per path, that the room has no frame for a file mutation, so the file is refused
+--- where the editor names it.
 ---
 --- @param path string the room path as the mirror's file names it
 local function refuse_mutation(path)
@@ -1879,9 +1879,7 @@ end
 --- often shorter than the row itself: the one line a one-line float has is already spoken for, so
 --- writing a winbar into one is where Neovim raises `E36: Not enough room`. The host-away row is
 --- redrawn by a repeating timer, and Neovim stops a repeating timer after three of its runs raise
---- an error — which is what the frozen countdown at 27s was found beside, on the configuration
---- this came from: with `nvim-notify`'s popup on screen the errors accumulated and the timer went;
---- with no float on screen there is no `E36` at all and the countdown ticks to the end.
+--- an error.
 local function floating(win)
   local ok, config = pcall(api.nvim_win_get_config, win)
   return ok and config.relative ~= ''
@@ -2431,10 +2429,7 @@ local function begin_follow(row)
   -- peer in an unheld-but-listed document reads exactly the same here — the bridge only
   -- forwards held, resolvable cursors, so their path never reaches Lua — and opening it
   -- blind is not possible: closing that gap needs the companion to forward unresolved
-  -- presence, a companion change rather than a wire one. The other client pends a
-  -- programmatic follow instead, for its awareness-lag rationale stated in-code there; the
-  -- refusal is this client's honest answer to the same row, per the study's no-document
-  -- vocabulary.
+  -- presence, a companion change rather than a wire one.
   if row.path == nil then
     notify(('nothing to follow: %s is not in a document.'):format(row.label), vim.log.levels.WARN)
     return
@@ -4125,8 +4120,7 @@ end
 
 --- The page a server's room is linked at: the server's own origin, over the scheme a browser
 --- speaks. One address decides the whole invite — the page the guest opens and the socket they
---- join on are the same host — so a room cannot be linked at a page that dials another server,
---- which is what a separate page setting used to allow.
+--- join on are the same host — so a room cannot be linked at a page that dials another server.
 local function page_origin(base)
   local wanted = vim.trim(base or ''):gsub('/+$', '')
   if wanted:match('^wss://') ~= nil then

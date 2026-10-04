@@ -8,12 +8,9 @@
  * and writes nothing; anything that is not one of the three words, the `X.Y.Z` form included, is
  * refused with the tree unchanged.
  *
- * The 0.5.1 bump is the case this pins: the version lives in `package.json` and its lockfile, a
- * release that moves one and not the other is a red run, and the bump left the release workflow's
- * `version` default behind at 0.4.6 — `package.json version 0.5.1 != release 0.4.6` — before it
- * reached a tag. That input is gone: the workflow takes the bump word and computes the version
- * with this script, so it carries no version string of its own, and the last test here holds it
- * that way.
+ * The version lives in `package.json` and its lockfile, and a release that moves one and not the
+ * other is a red run. The workflow takes the bump word and computes the version with this script,
+ * so it carries no version string of its own, and the last test here holds it that way.
  *
  * The script is run, for real, on a copy of the checkout that this file takes itself under
  * `.tmp/` — never on the working tree, which no case below can reach. The copy is taken with
@@ -207,7 +204,7 @@ test('a word that is not a bump is refused, with the tree unchanged', () => {
   const copy = freshCopy('refused');
   try {
     const before = tree(copy);
-    // The `X.Y.Z` form is here on purpose: this script no longer takes a version.
+    // The `X.Y.Z` form is here on purpose: this script takes a bump word, not a version.
     const refusals: string[][] = [
       [],
       [''],
@@ -389,8 +386,8 @@ test('a bump writes exactly the files that carry the version, and nothing else',
 test('a tree whose files disagree is brought to the next version, and every file it writes is named', () => {
   const copy = freshCopy('disagreeing');
   try {
-    // The manifest moved by hand and the lockfile held to it left behind — the shape of the 0.5.1
-    // defect one file over, which must not be reported as a tree that already carries a version.
+    // The manifest moved by hand and the lockfile held to it left behind: a tree whose files
+    // disagree, which must not be reported as one that already carries a version.
     seedManifest(copy, '9.8.7');
 
     const before = tree(copy);

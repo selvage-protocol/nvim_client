@@ -1,10 +1,9 @@
 -- A guest's join says one summary sentence, whatever the room holds.
 --
--- Joining used to say a sentence per moment — the room and its landing, where the
--- mirror lives, and one hint per empty file opened after it — so a room of
--- several files arrived as a flood. The join now says one summary (the room, the
--- document it opened, and how many others it holds) and errors only; the
--- empty-file hint is said for the first file and never again.
+-- A sentence per moment — the room and its landing, where the mirror lives, and one hint per
+-- empty file opened after it — would arrive as a flood for a room of several files. The join
+-- says one summary (the room, the document it opened, and how many others it holds) and errors
+-- only; the empty-file hint is said for the first file and never again.
 --
 --   nvim --headless -l test/lua/join.lua      (or scripts/test-lua.sh)
 
@@ -103,9 +102,8 @@ end
 
 -- -- the join is one summary ------------------------------------------------------
 --
--- Six files mirrored, two of them the landing, both fetched by the room's answer: before the
--- batching this was the join sentence, the mirror sentence and four empty-file hints, and now
--- it is one sentence and nothing else. What the sentence says is the landing and how many
+-- Six files mirrored, two of them the landing, both fetched by the room's answer: the join says
+-- one sentence and nothing else. What the sentence says is the landing and how many
 -- other documents the room holds: where the mirror lives and how much of it has arrived read
 -- as a row of counts, and the session's own row and `:SelvageOpen` are where a person looks.
 

@@ -786,11 +786,11 @@ vim.fn.delete(outside, 'rf')
 
 -- -- a link planted where the mirror writes ----------------------------------------------
 --
--- The removal side reads every step with `fs_lstat`; the creation side did not: a link where a
--- room directory goes diverted every file materialised under it outside the mirror, and a link
--- at a file path looked, through `fs_stat`, like a file and was left alone — read into the room
--- on open, written through on save. Both are refused now, and said the way a path that cannot
--- be written is.
+-- Both the removal side and the creation side read every step with `fs_lstat`: a link where a
+-- room directory goes would divert every file materialised under it outside the mirror, and a
+-- link at a file path would look, through `fs_stat`, like a file and be left alone — read into
+-- the room on open, written through on save. Both are refused, and said the way a path that
+-- cannot be written is.
 
 local planted_outside = vim.fn.getcwd() .. '/.tmp/lua-mirror-planted'
 vim.fn.delete(planted_outside, 'rf')
@@ -921,8 +921,8 @@ check('  and the room was never told about it', selvage.text('stray.txt'), nil)
 
 -- -- a file mutation has no frame -----------------------------------------------------------
 --
--- Create, rename and delete stay out of v1, so the mirror refuses each where the editor names
--- it, once per path, with the one sentence both clients share.
+-- Create, rename and delete have no frame in the room, so the mirror refuses each where the
+-- editor names it, once per path, with the one sentence both clients share.
 
 root = join({}, GRANT)
 vim.cmd('silent! bufdo bwipeout!')
@@ -1243,9 +1243,9 @@ check(
   true
 )
 
--- A fetch returns while the room answers: holding the editor for the whole wait is what the
--- foreground poll did, and a slow room held it for up to a minute. The deadline the chain
--- still keeps speaks later, into no later test's window.
+-- A fetch returns while the room answers: holding the editor for the whole wait would stall it
+-- for up to a minute on a slow room. The deadline the chain still keeps speaks later, into no
+-- later test's window.
 root = join({}, { 'slowpoke.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 800

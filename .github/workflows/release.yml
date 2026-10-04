@@ -24,9 +24,7 @@ name: release
 #
 # `bump` is required and carries no default, and this file carries no version
 # string at all: `scripts/bump-version.sh` moves every copy of the version
-# `package.json` carries. A version written here would be a copy no bump moves —
-# 0.5.1 moved `package.json` and left a `version` default at 0.4.6, so a dispatch
-# that took it failed the assertion below before it reached a tag.
+# `package.json` carries, so a version written here would be a copy no bump moves.
 on:
   workflow_dispatch:
     inputs:

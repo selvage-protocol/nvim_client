@@ -6,11 +6,9 @@
 pushed, tagged and released, and every step after it carries `inputs.dry_run != true`. The
 flag is worth exactly as much as that second half: the plan step is a `run:` block printing a
 promise, and what keeps the promise is the conditions on the steps below it. A step added
-later with no condition performs the bump the plan said it would not — which is what happened
-in `reference_server`, whose `release.yml` printed "nothing was resolved, written, committed,
-pushed or dispatched" and then cut a release. This is that repository's check
-(`reference_server/scripts/check_dry_run_gating.py`), carried here because a regression in
-this file is otherwise found by a dispatch rather than by CI.
+later with no condition performs the bump the plan said it would not. This is the same check
+`reference_server` runs (`reference_server/scripts/check_dry_run_gating.py`), carried here so a
+regression in this file is found by CI rather than by a dispatch.
 
 `actionlint` cannot see it. Every step in a file like this one is syntactically valid, every
 `if:` is a well-formed expression and the file lints clean; the defect is *which steps do not

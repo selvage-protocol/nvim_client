@@ -869,13 +869,11 @@ test('an astral edit reaches the front-end as whole characters it can decode', a
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'a\u{1F601}b\n' });
 
-  // A peer replaces one emoji with another. The two share a high surrogate, and a diff that
-  // walked one code unit at a time left the change boundary between the halves: the range was
-  // `[2, 3)` and its text a lone `\ude00`. That is not an edit any editor can make, and the
-  // front-end never saw it — `vim.json.decode` refuses the escape, drops the line, and the
-  // `applyEdit` is never answered, so the bridge holds that document for the rest of the
-  // session, taking no remote edits and publishing no local ones. The change gives up one code
-  // unit at each end instead and carries the whole character.
+  // A peer replaces one emoji with another. The two share a high surrogate, so a change boundary
+  // drawn between the halves would carry a lone `\ude00` — which is not an edit any editor can
+  // make, and which `vim.json.decode` refuses, dropping the line, so the `applyEdit` is never
+  // answered. The change gives up one code unit at each end instead and carries the whole
+  // character.
   it.engine.remote('notes.txt', 'a\u{1F600}b\n');
   await settle();
   assert.deepEqual(
@@ -886,7 +884,7 @@ test('an astral edit reaches the front-end as whole characters it can decode', a
 
   // The same edit as the front-end receives it: the serialized line, not the object, decoded
   // the way the newline-delimited reader hands it on. It has to be JSON a decoder takes, and
-  // its text whole characters — the shape the bug broke and this test exists to keep.
+  // its text whole characters.
   const notification = it.applies[0];
   assert.ok(notification);
   const line = wire(notification);
@@ -1181,8 +1179,8 @@ test('the bound counts UTF-8 bytes, not code units', () => {
 
 test('a line that arrives over many chunks is read whole, once', () => {
   // A whole-document `open` is one line and arrives in pipe-sized pieces: each piece is searched
-  // for its newline once, and the pieces are joined once, when the newline comes — a reader that
-  // re-searched the whole line on every piece cost the square of the line's length.
+  // for its newline once, and the pieces are joined once, when the newline comes — re-searching
+  // the whole line on every piece would cost the square of the line's length.
   const lines: string[] = [];
   const reader = new LineReader((line) => lines.push(line));
   const piece = `${'a'.repeat(64 * 1024 - 1)}€`;
@@ -1765,8 +1763,8 @@ test('a change that leaves the listing as it was is not republished', async (t) 
 
 test('saving a file the listing already names walks nothing', async (t) => {
   // While a guest types, the room's autosave writes the document about twice a second, and a
-  // walk of the tree per write kept a large host walking for the whole session. A write that
-  // leaves the file a listing names as one it still names cannot move the listing.
+  // walk of the tree per write would keep a large host walking for the whole session. A write
+  // that leaves the file a listing names as one it still names cannot move the listing.
   const root = folder(t);
   tree(root, 'notes.txt', 'a note\n');
   let walks = 0;

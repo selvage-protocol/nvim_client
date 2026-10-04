@@ -159,8 +159,7 @@ vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 -- -- a bare command reaches the plugin's own guard ---------------------------------
 --
 -- `:SelvageHost` and `:SelvageJoin` take an optional argument. With none, they ask for it, and
--- where there is nobody to ask they refuse in this plugin's words: before, the command demanded
--- an argument and Neovim raised `E471: Argument required` before any of that could happen.
+-- where there is nobody to ask they refuse in this plugin's words.
 
 vim.ui.input = builtin_input
 vim.g.selvage_server_url = nil
@@ -318,13 +317,11 @@ check(
 
 -- -- an invite link is not a server address ------------------------------------------
 --
--- The address that reproduces the defect is the page invite a host copies —
--- `https://selvage.example:8443/?room=r&token=t#k=KEY&h=HOSTKEY` — whose query is the room and
--- its token and whose fragment the room key. `normalise_server_address` keeps both, so the whole
--- link used to be written to the file beside the mirrors under `stdpath`: the room's key on disk
--- for a host that never opened a room. Everywhere an address is taken — the argument, the box's
--- answer and both writes `:SelvageChangeServer` performs — it is refused now, in the words the
--- other client uses, and nothing is written.
+-- A page invite a host copies — `https://selvage.example:8443/?room=r&token=t#k=KEY&h=HOSTKEY`
+-- — is not a server address: its query is the room and its token and its fragment the room key,
+-- both of which `normalise_server_address` keeps. Everywhere an address is taken — the argument,
+-- the box's answer and both writes `:SelvageChangeServer` performs — it is refused, in the words
+-- the other client uses, and nothing is written.
 
 local invite = 'https://selvage.example:8443/?room=r&token=t#k=KEY&h=HOSTKEY'
 local kept = 'wss://selvage.example'
@@ -663,9 +660,8 @@ check('  and says nothing about it', said_since(before, 'That does not look like
 -- -- an invite that arrives as an argument is checked before anything else --------------
 --
 -- The prompt is not the only way an invite arrives: `:SelvageJoin <link>` hands one straight
--- over, and a wrong one there was resolved as a name first, so the person answered a question
--- about a room that was never going to open and the engine then heard an address it could not
--- use. An argument is refused before anything is asked or dialled, with the box's own sentence.
+-- over. An argument is refused before anything is asked or dialled, with the box's own sentence,
+-- so a wrong one is never resolved as a name and answered for.
 --
 -- No name is configured and there is nobody to ask: were the name resolved first, this would
 -- refuse with the name's own sentence rather than the link's.
@@ -930,8 +926,7 @@ check(
 )
 
 -- A TLS room links at its own https origin: this is the link a person sends, and the page it
--- opens dials the same host. There is no second address for it to name, which is what a page
--- setting used to be — and how a room on one server came to be linked at another's page.
+-- opens dials the same host. There is no second address for it to name.
 report_status('hosting', 'r-tls', 'wss://selvage-demo.dontblameme.dev/session?room=r-tls&token=ttls')
 registers = {}
 vim.cmd('SelvageCopyInvite')
@@ -951,9 +946,8 @@ check(
   'https://selvage.example/prefix/?room=r-prefix&token=tp'
 )
 
--- The page is no longer an address of its own, so the global that used to move it moves
--- nothing: a link that could be sent to a page dialling another server is the defect this
--- removes.
+-- The page is the server's own address, so `vim.g.selvage_web_origin` moves the link nowhere:
+-- a link could otherwise be sent to a page dialling another server.
 vim.g.selvage_web_origin = 'https://custom.example:9443/'
 registers = {}
 vim.cmd('SelvageCopyInvite')

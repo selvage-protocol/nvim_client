@@ -426,8 +426,7 @@ check('  and the whole change is published once', #big_sent, 1)
 -- change at `n` and at `2n` should cost about twice as much (linear) rather than four times as
 -- much (the quadratic that shifting a list at a fixed index gives). Both are compared as a
 -- ratio so the assertion does not depend on the machine, and each is the cheapest of a few
--- runs because one sample is at the mercy of the scheduler. Observed here: about 2.3 with the
--- one-pass rebuild, about 3.9 with the shifting one.
+-- runs because one sample is at the mercy of the scheduler.
 local function whole_change_time(n, tag)
   local lines = {}
   for index = 1, n do
@@ -469,8 +468,7 @@ check('a whole-buffer change scales about linearly', ratio < 3, true)
 -- ten rebuilds in a row and the cheapest of five runs, compared as a ratio so the assertion
 -- does not depend on the machine. `reshadow` is called directly because this is the rebuild's
 -- own cost; the buffer's is the same at either end, and the shadow it leaves behind then drifts
--- from that buffer, which nothing here reads. Observed here: about 1.0 with an explicit
--- destination index, about 4.9 writing each row with `#lines + 1`.
+-- from that buffer, which nothing here reads.
 local spread_lines = {}
 for index = 1, 20000 do
   spread_lines[index] = 'line ' .. index
