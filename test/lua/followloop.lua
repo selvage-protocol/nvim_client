@@ -162,7 +162,7 @@ check(
     end
     return nil
   ]]),
-  'selvage: Stopped following Ada because you moved.'
+  'selvage: Stopped following Ada because you moved your cursor.'
 )
 
 -- -- typing ends a follow ----------------------------------------------------------------

@@ -478,7 +478,7 @@ local before_nodoc_pick = #notices
 nodoc_choice.on_choice(nodoc_row)
 check(
   'choosing them refuses with it',
-  said_since(before_nodoc_pick, 'nothing to go to: Cara is not in a document') ~= nil,
+  said_since(before_nodoc_pick, 'Cara is not in a file.') ~= nil,
   true
 )
 check('  leaving the window where it was', vim.api.nvim_get_current_buf(), buf2)
@@ -1388,7 +1388,7 @@ vim.api.nvim_exec_autocmds('CursorMoved', { buffer = vim.api.nvim_get_current_bu
 check('a local cursor move ends the follow', selvage.following(), nil)
 check(
   '  saying the user moved',
-  said_since(before_move, 'Stopped following Ada Lovelace because you moved.') ~= nil,
+  said_since(before_move, 'Stopped following Ada Lovelace because you moved your cursor.') ~= nil,
   true
 )
 check('  and the caret stays where the user put it', cursor(), '1,0')

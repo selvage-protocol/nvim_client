@@ -1109,9 +1109,11 @@ check(
 --
 -- The one answer to a partial project-wide search: fetch a file, a directory of them, or the
 -- whole listing. What arrives is the room's, and the file is what says so — a fetch waits for
--- the file and not for a message.
+-- the file and not for a message. The notice before it is the companion's, whose words are the
+-- first thing a real one sends.
 
 root = join({}, GRANT)
+handle({ type = 'words', words = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n')) })
 responder = room_holding({
   ['notes/deep.txt'] = 'deep\n',
   ['src/main.rs'] = 'fn main() {}\n',
@@ -1125,7 +1127,7 @@ check('a fetch of one path writes its file', read(root .. '/notes/deep.txt'), 'd
 check('  and says what it did', said_since(before, 'fetched the files') ~= nil, true)
 check(
   '  and scopes the consent to that one path',
-  said_since(before, 'fetching opens notes/deep.txt in the room, so every peer receives it') ~= nil,
+  said_since(before, 'Downloading notes/deep.txt opens it in the room, so everyone there gets its text.') ~= nil,
   true
 )
 
@@ -1141,11 +1143,11 @@ check('a fetch of nothing fetches the whole listing', read(root .. '/README.md')
 check('  and says it finished', said_since(before, 'fetched the files') ~= nil, true)
 check(
   '  and keeps the whole-listing consent plural',
-  said_since(before, 'fetching opens them in the room, so every peer receives them') ~= nil,
+  said_since(before, 'Downloading these files opens them in the room, so everyone there gets their text.') ~= nil,
   true
 )
 check('  and every file it names is held in the room', #selvage.documents(), 4)
-local opened_at = notice_at(before, 'opens them in the room, so every peer receives them')
+local opened_at = notice_at(before, 'opens them in the room, so everyone there gets their text')
 local fetched_at = notice_at(before, 'fetched the files')
 check(
   '  and said it would open them in the room before it did',

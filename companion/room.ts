@@ -11,15 +11,19 @@ import {
   COPIED_LABEL,
   COPIED_STAND_MS,
   COPY_INVITE_LABEL,
-  HOST_LEAVE_QUESTION,
+  DOWNLOAD_COST_MANY_SENTENCE,
+  HOST_LEAVE_CONSEQUENCE,
   LEAVE_ASKING_LABEL,
   LEAVE_CANCEL_LABEL,
   SHARED_SESSION_IDENTITY,
   disconnectingReading,
+  downloadCostSentence,
   followEndedByFileGone,
   followEndedByLeaving,
   followEndedByMoving,
   followEndedByTyping,
+  goToCursorNotFound,
+  goToNotInFile,
   guestIdentity,
   hostLeftSentence,
   hostingIdentity,
@@ -86,30 +90,38 @@ function template(sentence: (name: string) => string): string {
 }
 
 /**
- * The clause of the web page's leave question that is not true in Neovim: the host's own buffers
- * hold every keystroke, and the file is theirs to write, so nothing typed stops short of the folder.
+ * The host's leave question: the web page's first sentence alone. Its second, about the last
+ * keystrokes, is not true in Neovim: the host's own buffers hold every keystroke, and the file is
+ * theirs to write, so nothing typed stops short of the folder.
  */
-const KEYSTROKES_CLAUSE = ', and your last few keystrokes may not reach your folder.';
-
 export function hostLeaveQuestion(): string {
-  if (!HOST_LEAVE_QUESTION.endsWith(KEYSTROKES_CLAUSE)) {
-    return HOST_LEAVE_QUESTION;
-  }
-  return `${HOST_LEAVE_QUESTION.slice(0, -KEYSTROKES_CLAUSE.length)}.`;
+  return HOST_LEAVE_CONSEQUENCE;
 }
 
-/** The fixed words, sent once. A `%s` in a sentence is where the front-end puts a name. */
+/**
+ * The fixed words, sent once. A `%s` in a sentence is where the front-end puts a name or a path,
+ * and a sentence with none is shown as it is.
+ * A go-to's refusal is the bridge's reason with the full stop a notification ends on.
+ */
 export function words(): Record<string, unknown> {
   return {
     copyInvite: COPY_INVITE_LABEL,
     copied: COPIED_LABEL,
     copiedMs: COPIED_STAND_MS,
     reconnecting: 'Reconnecting…',
+    goTo: {
+      notInFile: `${template(goToNotInFile)}.`,
+      cursorNotFound: `${template(goToCursorNotFound)}.`,
+    },
     followEnded: {
       typing: template(followEndedByTyping),
       moving: template(followEndedByMoving),
       leaving: template(followEndedByLeaving),
       fileGone: template(followEndedByFileGone),
+    },
+    download: {
+      one: template(downloadCostSentence),
+      many: DOWNLOAD_COST_MANY_SENTENCE,
     },
     leave: {
       question: hostLeaveQuestion(),
