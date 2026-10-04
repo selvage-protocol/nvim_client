@@ -145,8 +145,8 @@ export const MAX_IPC_LINE_BYTES = 32 * 1024 * 1024;
 export class LineReader {
   // The chunks of the line being collected, none of which holds a newline, joined once when the
   // newline that ends the line arrives. Appending each chunk to one string and searching that
-  // string again on every chunk made a whole-document line cost the square of its length: a
-  // 16 MiB line in 64 KiB chunks took seconds. Each chunk is now searched once, on arrival.
+  // string again on every chunk would make a whole-document line cost the square of its length,
+  // so each chunk is searched once, on arrival.
   private pending: string[] = [];
   // The line in UTF-8 bytes, not code units: stdin is decoded as UTF-8, so a CJK line is three
   // times what `String.length` says, and the bound has to hold for it too. Counted as chunks

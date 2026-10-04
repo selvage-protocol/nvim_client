@@ -296,8 +296,8 @@ selvage.leave()
 --
 -- The room path is the host's working directory plus the path within it — a VS Code host
 -- started above a folder called `workspace` publishes `workspace/README.md` — so it is not a
--- name a guest can guess, and a guest typing it wrong concluded the join had failed. Joining
--- now shows the document, and `:SelvageOpen` reaches the ones that are not shown.
+-- name a guest can guess: joining shows the document, and `:SelvageOpen` reaches the ones that
+-- are not shown.
 
 vim.cmd('edit! ' .. path)
 selvage.join('ws://127.0.0.1:1/session?room=r-guest&token=t')
@@ -1363,9 +1363,8 @@ check('  under its room path', last_of('open') and last_of('open').path, path)
 -- -- the engine gives up ---------------------------------------------------------
 --
 -- A bounded reconnect that runs out of attempts ends the session, and the bridge says so with
--- a `disconnected` report. Nothing said anything before this: the status stayed hosting or
--- joined and the documents stayed attached, so the user went on typing into a replica nobody
--- would hear.
+-- a `disconnected` report. Without it the status would stay hosting or joined and the documents
+-- would stay attached, and the user would go on typing into a replica nobody would hear.
 
 selvage.leave()
 vim.cmd('edit! ' .. path)
@@ -1518,9 +1517,9 @@ check('  and the bar takes it down when the host returns', winbar():find('Discon
 
 -- -- a float is not a place for the session's row -----------------------------------
 --
--- The configuration this was found in shows its notifications through `nvim-notify`, whose popup
--- is a one-line floating window. Writing the row into one is where Neovim raises `E36: Not enough
--- room`. No indicator goes into a float, and the countdown keeps moving with one on screen.
+-- A notification popup like `nvim-notify`'s is a one-line floating window, and writing the row
+-- into one is where Neovim raises `E36: Not enough room`. No indicator goes into a float, and the
+-- countdown keeps moving with one on screen.
 local float_buffer = vim.api.nvim_create_buf(false, true)
 local float_window = vim.api.nvim_open_win(float_buffer, false, {
   relative = 'editor',
@@ -1940,9 +1939,9 @@ vim.uv.fs_chmod(unreadable_path, tonumber('644', 8))
 -- -- a wiped shared buffer -------------------------------------------------------
 --
 -- `:bwipeout` on a shared buffer ends the buffer, so the room has to hear that this client no
--- longer holds the path. Nothing said so: the room kept the document for the life of the
--- session, offering edits to a `Document` that answered every one of them `ok = false` until
--- the companion gave up and reported a refusal about a buffer the user had closed.
+-- longer holds the path. Without the `close` the room would keep the document for the life of
+-- the session, offering edits to a `Document` that answers every one of them `ok = false` until
+-- the companion gives up and reports a refusal about a buffer the user has closed.
 --
 -- The send is on `BufWipeout` and not on the document's own detach, which also fires when the
 -- session ends: sending there would put a `close` on the wire for every document
@@ -2416,9 +2415,9 @@ selvage.leave()
 
 -- -- presence redraws only what moved -----------------------------------------------------
 --
--- Every report recreated every caret's highlight, at a highlight set per cursor per report.
--- A report that moves no colour, fill or background sets nothing now; one that moves a
--- colour repaints.
+-- Recreating every caret's highlight on every report is a highlight set per cursor per report.
+-- A report that moves no colour, fill or background sets nothing; one that moves a colour
+-- repaints.
 
 selvage.host('ws://127.0.0.1:1')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-paint' })

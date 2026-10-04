@@ -4,10 +4,8 @@
 -- editor's own `vim.ui.select`: whatever the person configured (fzf-lua,
 -- telescope-ui-select, dressing.nvim, mini.pick, snacks.nvim) is what opens,
 -- and a Neovim with none of those falls back to the builtin numbered list.
--- No fzf integration was ever added here (`git log -S fzf` is empty over
--- `lua/`, `plugin/`, `companion/` and `test/`; the choosers arrived with
--- `vim.ui.select` in 3b4dd0a and 0f196f3), and none may arrive unnoticed:
--- the scan below fails on any fzf reference in the shipped code.
+-- No fzf integration belongs here: the choosers go through the editor's own `vim.ui.select`,
+-- and the scan below fails on any fzf reference in the shipped code so none arrives unnoticed.
 --
 -- The functional half runs every chooser with a plain recording stub — the
 -- fzf-absent simulation, since this headless Neovim has no picker plugin —

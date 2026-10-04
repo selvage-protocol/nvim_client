@@ -366,8 +366,7 @@ const PINNED_STEPS = existsSync('/proc/self/fd');
  * `core.excludesFile` is not read either.
  *
  * The answer names *which* refusal it is — not one the grant carries, nothing there, not a plain
- * file, over the size a session carries, bytes that are not text — because one sentence for all of
- * them sent a person refused a `.zip` looking for a file that had never been deleted.
+ * file, over the size a session carries, bytes that are not text.
  */
 export async function readGrantedFile(root: string, path: string): Promise<GrantedRead> {
   if (!isGrantedPath(path)) {

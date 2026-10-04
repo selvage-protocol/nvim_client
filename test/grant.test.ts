@@ -413,7 +413,7 @@ test('a walk stops when its work budget is spent, and says so rather than naming
 });
 
 test('a name a room never shares costs the walk nothing', async () => {
-  // The defect this accounting exists for: a tree rich in assets and poor in sources. Every one
+  // The case this accounting is for: a tree rich in assets and poor in sources. Every one
   // of these names is dropped by the name alone — a binary format a room cannot carry — so the
   // walk spends nothing on them, where charging for each entry would spend the whole budget
   // before the first shareable file and publish a listing that names none of them.
@@ -682,8 +682,7 @@ test('a path the grant does not name is refused', async () => {
   await put('refused/dir/file.txt');
   const root = join(ROOT, 'refused');
   // The reasons are not one reason, and the answer says which: a path the grant would never
-  // publish is not a file that has gone, and a refusal that blamed a deletion for all of them
-  // is what sent a person looking for a zip that was never deleted.
+  // publish is not a file that has gone.
   const notTheGrants: Array<[string, GrantRefusal]> = [
     // Outside the folder, by a segment or by an absolute name.
     ['../outside.txt', 'not-granted'],

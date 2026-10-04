@@ -115,9 +115,9 @@ check('  and the line after the shed one arrives', #delivered, before_the_next +
 check('    as itself', delivered[#delivered].state, 'idle')
 
 -- What the bound and the end of a line cost together: the pieces are joined once, so twice as
--- many pieces past the bound must not cost more than the bound did. A mouth that appended each
--- piece to the line as it came copied every piece before it every time, and four times the work
--- for twice the input is what that looks like. The ratio does not depend on the machine.
+-- many pieces past the bound must not cost more than the bound did. Appending each piece to the
+-- line as it came would copy every piece before it every time, four times the work for twice
+-- the input. The ratio does not depend on the machine.
 local function shed_cost(pieces)
   local best
   for _ = 1, 3 do
