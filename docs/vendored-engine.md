@@ -10,7 +10,7 @@ scripts/sync-engine.sh [path-to-vscode_client]
 The script copies `src/engine` and `src/bridge`, removes anything the source has retired, and then
 diffs the result, so a run either brings `vendor/` into agreement or says what it could not.
 
-The copy is `vscode_client`'s `src/engine` and `src/bridge` at `21f6104` (`2026-10-05`, that
+The copy is `vscode_client`'s `src/engine` and `src/bridge` at `b82a70d` (`2026-10-05`, that
 repository's `main`): a reader can name the revision this tree carries without the commit that
 synced it, and re-syncing against a later checkout is what moves it.
 

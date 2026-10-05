@@ -3,11 +3,19 @@
   "copied": "Copied",
   "copiedMs": 1800,
   "reconnecting": "Reconnecting…",
+  "goTo": {
+    "notInFile": "%s is not in a file.",
+    "cursorNotFound": "%s’s cursor could not be found in this file."
+  },
   "followEnded": {
     "typing": "Stopped following %s because you started typing.",
-    "moving": "Stopped following %s because you moved.",
+    "moving": "Stopped following %s because you moved your cursor.",
     "leaving": "%s left the room, so following stopped.",
     "fileGone": "Stopped following %s because the file is gone."
+  },
+  "download": {
+    "one": "Downloading %s opens it in the room, so everyone there gets its text.",
+    "many": "Downloading these files opens them in the room, so everyone there gets their text."
   },
   "leave": {
     "question": "Leaving ends the room for everyone and stops the invite link.",

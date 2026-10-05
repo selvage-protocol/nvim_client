@@ -201,8 +201,11 @@ test('a rename is shown in the roster until the room has it too', () => {
   assert.equal(lastRoom(it.reports()).peers[0]?.roster, 'Ann');
 });
 
-test("the host's leave question leaves out the clause about keystrokes", () => {
-  assert.notEqual(hostLeaveQuestion(), HOST_LEAVE_QUESTION, 'the clause this drops is still the one the web asks');
+test("the host's leave question leaves out the sentence about keystrokes", () => {
+  assert.ok(
+    HOST_LEAVE_QUESTION.startsWith(`${hostLeaveQuestion()} `),
+    'the question asked here is not the first sentence of the one the web asks',
+  );
   assert.equal(hostLeaveQuestion(), 'Leaving ends the room for everyone and stops the invite link.');
 });
 
@@ -210,7 +213,7 @@ test('the words carry each follow ending with a place for the name', () => {
   const said = words() as { followEnded: Record<string, string> };
   assert.deepEqual(said.followEnded, {
     typing: 'Stopped following %s because you started typing.',
-    moving: 'Stopped following %s because you moved.',
+    moving: 'Stopped following %s because you moved your cursor.',
     leaving: '%s left the room, so following stopped.',
     fileGone: 'Stopped following %s because the file is gone.',
   });

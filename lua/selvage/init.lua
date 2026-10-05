@@ -257,6 +257,16 @@ local function notify(message, level)
   vim.notify('selvage: ' .. message, level or vim.log.levels.INFO)
 end
 
+--- Says one of the companion's sentences (`words` in `companion/room.ts`), its `%s` filled with
+--- the arguments. The companion's words are its first message, so they are here before any
+--- session has a participant to go to or a file to download.
+local function notify_words(group, key, level, ...)
+  local sentence = words ~= nil and words[group] ~= nil and words[group][key] or nil
+  if type(sentence) == 'string' then
+    notify(select('#', ...) > 0 and sentence:format(...) or sentence, level)
+  end
+end
+
 --- A duration as a person reads it: whole seconds, rounded, which is the unit the room's
 --- deadlines are named in and the one the other client shows.
 local function seconds(ms)
@@ -1508,9 +1518,9 @@ function M.fetch(path)
     -- a whole listing is a whole project published and the sentence after it is too late to be a
     -- choice (`DESIGN.md` §4.2). A single path names itself; the plural is for the listing.
     if #targets == 1 then
-      notify(('fetching opens %s in the room, so every peer receives it.'):format(targets[1]))
+      notify_words('download', 'one', nil, targets[1])
     else
-      notify('fetching opens them in the room, so every peer receives them.')
+      notify_words('download', 'many')
     end
   end
   -- A listed path this mirror has no file for: there is nowhere for the room's text to arrive, so
@@ -2503,7 +2513,7 @@ local function retry_go_to()
     )
   elseif reason ~= 'unknown' and reason ~= 'waiting' then
     state.pending_go_to = nil
-    notify(("nothing to go to: %s's caret does not resolve here."):format(row.label), vim.log.levels.WARN)
+    notify_words('goTo', 'cursorNotFound', vim.log.levels.WARN, row.label)
   end
 end
 
@@ -2535,7 +2545,7 @@ local function go_to_row(row)
       vim.log.levels.ERROR
     )
   else
-    notify(("nothing to go to: %s's caret does not resolve here."):format(row.label), vim.log.levels.WARN)
+    notify_words('goTo', 'cursorNotFound', vim.log.levels.WARN, row.label)
   end
 end
 
@@ -2592,10 +2602,7 @@ function M.go_to(name)
           if fresh == nil then
             notify(('no participant matches "%s".'):format(row.label), vim.log.levels.WARN)
           elseif fresh.path == nil then
-            notify(
-              ('nothing to go to: %s is not in a document.'):format(fresh.label),
-              vim.log.levels.WARN
-            )
+            notify_words('goTo', 'notInFile', vim.log.levels.WARN, fresh.label)
           else
             go_to_row(fresh)
           end

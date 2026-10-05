@@ -23,11 +23,13 @@
 -- - The expression that fills a hole: `%s` in a pinned sentence is that hole, so the pin is on
 --   the words around it.
 --
--- Nine messages are variables, and their number is pinned so a tenth cannot arrive unnoticed.
+-- Ten messages are variables, and their number is pinned so an eleventh cannot arrive unnoticed.
 -- Four are the front-end's own: the connect failure, the companion's failure to start, the
--- question said where there is nobody to answer it, and what a room's own refusal says. Five are
+-- question said where there is nobody to answer it, and what a room's own refusal says. Six are
 -- the web page's words, which the companion sends and `test/room.test.ts` pins: why a follow
--- ended, the host gone, the host back, the room gone, and the question a host leaving is asked.
+-- ended, the host gone, the host back, the room gone, the question a host leaving is asked, and
+-- the sentence `notify_words` says, which is a refused go-to or the first download's notice. Each
+-- `notify_words` call is pinned below to a sentence the companion sends.
 --
 --   nvim --headless -l test/lua/vocabulary.lua      (or scripts/test-lua.sh)
 
@@ -148,9 +150,7 @@ local MESSAGES = {
   { 'INFO', '%s is not in a document; still following.' },
   { 'WARN', '%s Your copy is kept at %s.' },
   { 'WARN', 'not following anyone.' },
-  { 'WARN', 'nothing to go to: %s is not in a document.' },
   { 'WARN', 'nothing to follow: %s is not in a document.' },
-  { 'WARN', 'nothing to go to: %s\'s caret does not resolve here.' },
   { 'WARN', 'nothing to follow: %s\'s caret does not resolve here.' },
   { 'ERROR', 'could not open %s from the room: %s.' },
   { 'WARN', 'no participant matches "%s".' },
@@ -233,8 +233,6 @@ local MESSAGES = {
   { 'ERROR', '%s could not be written into the mirror.' },
   { 'INFO', 'your files are already on your disk, so there is nothing to fetch while you host.' },
   { 'INFO', 'the room lists no files to fetch.' },
-  { 'INFO', 'fetching opens them in the room, so every peer receives them.' },
-  { 'INFO', 'fetching opens %s in the room, so every peer receives it.' },
   { 'INFO', '%s is opened in the room, so every peer receives it.' },
   { 'WARN', 'no file the room lists matches "%s"; :SelvageOpen and completion name them.' },
   -- The fetch cap: past the most paths one hold may take, the fetch refuses rather than truncates,
@@ -449,7 +447,36 @@ for _, message in ipairs(MESSAGES) do
 end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
-check('the messages that are not literals are the nine this file names', variables, 9)
+check('the messages that are not literals are the ten this file names', variables, 10)
+
+-- The sentences said through `notify_words` are the companion's: each call names a group and a key
+-- of `test/lua/words.json`, which `test/room.test.ts` holds equal to what the companion sends, at
+-- the level the moment is said at.
+local shared = vim.json.decode(table.concat(vim.fn.readfile('test/lua/words.json'), '\n'))
+--- An argument after the first, without the comma `calls` leaves in front of it.
+local function after_comma(arg)
+  if arg == nil then
+    return {}
+  end
+  if arg[1] ~= nil and arg[1].kind == 'punct' and arg[1].text == ',' then
+    return { unpack(arg, 2) }
+  end
+  return arg
+end
+local worded = {}
+for _, call in ipairs(calls(tokens(source), { notify_words = true })) do
+  local group = sentence_of(call.args[1] or {})
+  local key = sentence_of(after_comma(call.args[2]))
+  local level = (written(after_comma(call.args[3])):match('^vim%.log%.levels%.(%u+)$')) or 'INFO'
+  local known = group ~= nil and key ~= nil and type(shared[group]) == 'table' and type(shared[group][key]) == 'string'
+  worded[#worded + 1] = ('%s %s.%s%s'):format(level, tostring(group), tostring(key), known and '' or ' (not sent)')
+end
+check_lines('every sentence notify_words says is one the companion sends', worded, {
+  'INFO download.one',
+  'INFO download.many',
+  'WARN goTo.cursorNotFound',
+  'WARN goTo.notInFile',
+})
 
 -- The number the fetch refuses at is the other client's too, and it is not a sentence hole this
 -- file pins: the literal is read out of the source, so a silent edit on this side is caught and not
