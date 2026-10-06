@@ -322,6 +322,61 @@ test('a link the client will not read is refused with the engine\'s own sentence
   }
 });
 
+test('a page link that repeats a room or a token is refused by name, before any socket', async () => {
+  // `§5.1`: `room` and `token` appear at most once, and a receiver refuses a page link that
+  // repeats either **locally, before it opens a socket**, naming the parameter. The engine is
+  // what resolves the page form, so this is the refusal that reaches a guest who pasted one: an
+  // adapter that read the first of the two and rebuilt the query would hand `parseInvite` a link
+  // it can no longer refuse, and the join below would reach a server that is not there — a
+  // connection failure rather than this sentence.
+  const sent: Notification[] = [];
+  const companion = new Companion({
+    send: (notification) => sent.push(notification),
+    engines: realEngines,
+  });
+  // A whole fragment, so the repeat is the only thing wrong with the links below: a short one
+  // would be refused for its own sake and the test would pass without the rule.
+  const roomKey = 'FgWuVJM2nsQn9DqDaRVQ4c2LmdmK3XWbczlKBUHu57A';
+  const hostKey = 'dQAm9nhUso4fDxMD3qDBfVQ9kojiU03k4PonWTjEla4';
+
+  for (const [invite, named] of [
+    [`https://127.0.0.1:1/?room=r-1&room=r-2&token=t#k=${roomKey}&h=${hostKey}`, 'room'],
+    [`https://127.0.0.1:1/?room=r-1&token=t&token=t-2#k=${roomKey}&h=${hostKey}`, 'token'],
+  ] as const) {
+    sent.length = 0;
+    await companion.handle({ type: 'join', invite });
+    const heard = sent.filter(
+      (notification): notification is Extract<Notification, { type: 'status' }> =>
+        notification.type === 'status',
+    );
+    assert.deepEqual(
+      heard.map((status) => status.state),
+      ['connecting', 'error'],
+      `a repeated parameter is a refused invite rather than a dial: ${invite}`,
+    );
+    assert.equal(heard[1]?.code, INVITE_REFUSED, `the refusal carries a code: ${invite}`);
+    assert.equal(
+      heard[1]?.message,
+      `the invite names \`${named}\` twice`,
+      `and names the parameter that repeats: ${invite}`,
+    );
+  }
+
+  // The whole link beside them, over the same keys and the same server, is not this refusal: it
+  // is dialled and fails to connect, which is what tells a link this client read from one it
+  // refused to. Nothing is listening on port 1, so the dial ends at once.
+  sent.length = 0;
+  await companion.handle({
+    type: 'join',
+    invite: `https://127.0.0.1:1/?room=r-1&token=t#k=${roomKey}&h=${hostKey}`,
+  });
+  const whole = sent.filter(
+    (notification): notification is Extract<Notification, { type: 'status' }> =>
+      notification.type === 'status',
+  );
+  assert.notEqual(whole[1]?.code, INVITE_REFUSED, 'a whole page link was refused as one that repeats a name');
+});
+
 test('a role the state gives this connection after the seat reaches the front-end', async () => {
   // `§13.4`: the role is the applied state's word about this connection's key, and the state that
   // commits the key is published after the connection announced it — so the status sent at the seat
