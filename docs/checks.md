@@ -19,7 +19,7 @@ built `selvaged` and so cannot run on a runner.
 file is the checkout as the installed plugin, and it starts its Neovim with no plugin of its own, so
 a machine whose editor arrives with a `selvage` installed cannot answer for the checkout.
 
-`nix flake check` runs `typecheck`, the companion suite and the thirteen files under `test/lua/`,
+`nix flake check` runs `typecheck`, the companion suite and the fourteen files under `test/lua/`,
 each in its own Neovim, with no network and no editor session, and then the `plugin` check, which is
 the only one that starts Neovim against the built package rather than a checkout: the plugin that
 `packages.<system>.default` is, on the runtime path of the wrapped Neovim that
@@ -79,6 +79,11 @@ suite here rather than drifting away from the other editor's. `test/lua/leave.lu
 job, one that ignores its stdin, to check what `:SelvageLeave` does to a companion that does not
 go on its own, and reads the framing of what the companion writes off the same object: a line
 arriving in pieces, and one past the bound being shed to the newline that ends it.
+`test/lua/health.lua` is the two floors this plugin states: the comparison itself against
+the suite's own versions, the refusal sentence, and the bound on the spawn that reads Node's —
+with that spawn stubbed, so nothing here depends on the Node or the Neovim the suite runs on —
+plus the promise that an editor or a Node below either floor starts no job at all, and that the
+README and the npm manifest state the floors the code holds.
 
 `scripts/e2e/run-two-instance.sh` is the proof end to end: two real headless Neovim processes, each
 loading the real plugin and starting its own real companion, one minting a room on a real `selvaged`

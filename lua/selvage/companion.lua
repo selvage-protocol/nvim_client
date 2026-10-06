@@ -5,6 +5,8 @@
 -- reassembled here the way `companion/ipc.ts` reassembles the other direction's: to the same
 -- byte bound, and with the chunks of a line kept apart until the newline that ends it arrives.
 
+local versions = require('selvage.versions')
+
 local M = {}
 
 --- @class selvage.Companion
@@ -52,11 +54,21 @@ function M.start(handlers, command)
     flushing = false,
     exited = false,
   }, Companion)
+  -- A job started on a version that cannot run the companion fails later, in the companion's own
+  -- words or in none at all, so both floors are read here: before anything is spawned.
+  local refusal = versions.neovim_refusal()
+  if refusal ~= nil then
+    return nil, refusal
+  end
   local argv = command
   if argv == nil then
     local node = vim.fn.exepath('node')
     if node == '' then
-      return nil, 'node is not on PATH; the companion needs Node 22.18 or newer'
+      return nil, versions.no_node()
+    end
+    refusal = versions.node_refusal(node)
+    if refusal ~= nil then
+      return nil, refusal
     end
     local entry = root() .. '/companion/main.ts'
     if vim.fn.filereadable(entry) == 0 then
