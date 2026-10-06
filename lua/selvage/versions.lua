@@ -72,7 +72,8 @@ function M.no_node()
   return ('node is not on PATH; the companion needs Node %s or newer.'):format(M.node)
 end
 
---- What `exe --version` printed, or nil and why it could not be read.
+--- The version `exe --version` printed — its first line, which is where a `--version` puts it —
+--- or nil and why it could not be read.
 ---
 --- Bounded: a `node` that never answers is killed rather than holding the editor, and one that
 --- does not run at all is a sentence rather than a traceback out of a job that was never started.
@@ -91,7 +92,13 @@ function M.read_version(exe)
   if out.code ~= 0 then
     return nil, ('%s --version did not answer (exit %s).'):format(exe, tostring(out.code))
   end
-  return out.stdout
+  -- The first line alone, so that what a wrapper prints after the version cannot reach a
+  -- sentence a user reads as one line.
+  local line = out.stdout:match('^[^\n]*')
+  if line == '' then
+    return nil, ('%s --version answered nothing.'):format(exe)
+  end
+  return line
 end
 
 --- Why the Node named would not run the companion, or nil when it would.

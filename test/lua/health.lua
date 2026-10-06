@@ -117,25 +117,43 @@ vim.system = function(command, options)
 end
 
 local text, why = versions.read_version('/usr/bin/node')
-check('the version Node printed is read', text, 'v22.18.0\n')
+check('the version Node printed is read', text, 'v22.18.0')
 check('  and nothing failed', why, nil)
 check('  and Node was asked for its version', table.concat(asked or {}, ' '), '/usr/bin/node --version')
 check('  with a bound on how long it may take', type(opts ~= nil and opts.timeout), 'number')
 check('  and its output read as text', opts ~= nil and opts.text, true)
 
 vim.system = function()
+  return answers('node: not found\nbut 22.18.0 is here\n', 0)
+end
+text, why = versions.read_version('/usr/bin/node')
+check('an answer with more than one line is read up to the first', text, 'node: not found')
+check(
+  '  and no version the later lines carry is believed',
+  versions.node_refusal('/usr/bin/node'),
+  'this plugin needs Node 22.18 or newer; this is node: not found.'
+)
+
+vim.system = function()
+  return answers('', 0)
+end
+text, why = versions.read_version('/usr/bin/node')
+check('a Node that answered nothing is not a version', text, nil)
+check('  and says so', why ~= nil and why:find('answered nothing', 1, true) ~= nil, true)
+
+vim.system = function()
   return answers('', 124)
 end
 text, why = versions.read_version('/usr/bin/node')
 check('a Node that had to be killed is not a version', text, nil)
-check('  and says so', why:find('did not answer (exit 124)', 1, true) ~= nil, true)
+check('  and says so', why ~= nil and why:find('did not answer (exit 124)', 1, true) ~= nil, true)
 
 vim.system = function()
   error('ENOENT: no such file or directory')
 end
 text, why = versions.read_version('/nowhere/node')
 check('a Node that cannot be run is not a version', text, nil)
-check('  and says so', why:find('could not be run', 1, true) ~= nil, true)
+check('  and says so', why ~= nil and why:find('could not be run', 1, true) ~= nil, true)
 
 vim.system = function()
   return answers('v22.17.9\n', 0)
@@ -203,7 +221,7 @@ process, refusal = companion.start(handlers)
 check('a Node that does not answer is not started either', process, nil)
 check(
   '  and the reason is the one the probe gave',
-  refusal:find('did not answer', 1, true) ~= nil,
+  refusal ~= nil and refusal:find('did not answer', 1, true) ~= nil,
   true
 )
 check('  and no job was started for it', #started, 0)
