@@ -26,6 +26,7 @@ local seen = nil
 local exepath = vim.fn.exepath
 local filereadable = vim.fn.filereadable
 local jobstart = vim.fn.jobstart
+local system = vim.system
 vim.fn.exepath = function(_)
   return '/usr/bin/node'
 end
@@ -36,6 +37,15 @@ vim.fn.jobstart = function(argv, _)
   seen = argv
   return 1
 end
+-- Starting the companion now reads Node's version first, and the Node resolved above is a path
+-- this machine need not have: the version it would print is handed in, as the process itself is.
+vim.system = function(_, _)
+  return {
+    wait = function()
+      return { code = 0, stdout = 'v22.18.0\n', stderr = '' }
+    end,
+  }
+end
 
 local process, err = companion.start({
   on_message = function() end,
@@ -45,6 +55,7 @@ local process, err = companion.start({
 vim.fn.exepath = exepath
 vim.fn.filereadable = filereadable
 vim.fn.jobstart = jobstart
+vim.system = system
 
 check('the companion starts', process ~= nil, true)
 check('  and starts without an error', err, nil)

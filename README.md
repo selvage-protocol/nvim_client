@@ -32,6 +32,10 @@ vim.pack.add({
 
 Run `npm ci` in the plugin directory once; `vim.pack.update()` keeps it current after that.
 
+`:checkhealth selvage` reports what this machine has against those two floors, where the plugin
+was loaded from, and whether the companion is all there. A launch below either floor is refused
+with one sentence naming the version needed and the one found, and starts nothing.
+
 Any other manager works. These run `npm ci` for you:
 
 ```lua

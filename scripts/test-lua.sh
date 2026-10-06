@@ -9,7 +9,8 @@
 # summary a guest's join says whatever order the room speaks in (`test/lua/join.lua` for the
 # listing-first order, `test/lua/joinorder.lua` for documents first), what the
 # commands themselves decide (`test/lua/commands.lua`), the words the two clients share
-# (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), and the
+# (`test/lua/vocabulary.lua`), what starting it suppresses (`test/lua/warnings.lua`), the two
+# floors this plugin states and refuses to start a job below (`test/lua/health.lua`), and the
 # framing of what the companion writes beside what stopping the process does to it
 # (`test/lua/leave.lua`,
 # against a real job), and going to a participant and following one (`test/lua/follow.lua`),
@@ -40,6 +41,7 @@ nvim --headless -l test/lua/pickers.lua
 nvim --headless -l test/lua/commands.lua
 nvim --headless -l test/lua/vocabulary.lua
 nvim --headless -l test/lua/warnings.lua
+nvim --headless -l test/lua/health.lua
 nvim --headless -l test/lua/leave.lua
 nvim --headless -l test/lua/follow.lua
 nvim --headless -l test/lua/followloop.lua

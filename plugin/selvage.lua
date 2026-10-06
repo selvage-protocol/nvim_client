@@ -5,6 +5,15 @@ if vim.g.loaded_selvage then
 end
 vim.g.loaded_selvage = true
 
+-- The Neovim this plugin is written against, said where the plugin is set up rather than left to
+-- the first command: below the floor nothing here works, whatever the commands go on to do. The
+-- Node floor belongs to the companion process and is checked by `lua/selvage/companion.lua`
+-- before it starts one.
+local refusal = require('selvage.versions').neovim_refusal()
+if refusal ~= nil then
+  vim.notify('selvage: ' .. refusal, vim.log.levels.ERROR)
+end
+
 local command = vim.api.nvim_create_user_command
 
 command('SelvageHost', function(args)

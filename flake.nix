@@ -129,6 +129,7 @@
             "test/lua/pickers.lua"
             "test/lua/commands.lua"
             "test/lua/warnings.lua"
+            "test/lua/health.lua"
             "test/lua/vocabulary.lua"
             "test/lua/leave.lua"
             "test/lua/follow.lua"
