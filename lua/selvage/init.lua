@@ -4328,9 +4328,14 @@ local function parse_wire_invite(text)
   }
 end
 
---- Reads a pasted page link back into the room and its token — the page's own parsing,
---- mirrored so a copied link joins the same way it loads. The server is the link's origin, so
---- nothing in the query names one.
+--- Reads a pasted page link back into what this client acts on — the address the guest dials and
+--- the query and fragment it hands on — or answers nil when the value has no page-link shape.
+---
+--- The query crosses to the engine as it arrived rather than as the room and token read out of
+--- it: a link that repeats `room` or `token` is refused there by name (`PROTOCOL.md` §5.1), and a
+--- rewrite built from the first of each would hand it a link it can no longer refuse. So what is
+--- read here is the shape a paste has to have to be offered at all, and the two values are read
+--- only to say whether the link names them.
 local function parse_page_link(text)
   local trimmed = vim.trim(text or '')
   if trimmed:match('^https?://%S+$') == nil then
@@ -4341,15 +4346,13 @@ local function parse_page_link(text)
   if mark == nil then
     return nil
   end
-  local parts = query_parts(address:sub(mark + 1), fragment)
-  if parts == nil then
+  if query_parts(address:sub(mark + 1), fragment) == nil then
     return nil
   end
   return {
-    room = parts.room,
-    token = parts.token,
     origin = address:sub(1, mark - 1),
-    fragment = parts.fragment,
+    query = address:sub(mark + 1),
+    fragment = fragment or '',
   }
 end
 
@@ -4368,18 +4371,18 @@ end
 --- The wire URL an invite joins on: a page link resolves to the server its own origin names,
 --- while a `ws://` invite — a room whose server serves no page, or a guest that reached one
 --- that way — joins as it stands.
+---
+--- The page's query crosses over as it arrived, and never as the two values read out of it: the
+--- engine that reads the link next (`wireInvite` into `parseInvite`) refuses a link that repeats
+--- `room` or `token`, naming the parameter (`PROTOCOL.md` §5.1), and rebuilding the query from
+--- the first of each would hand it a link it can no longer refuse.
 local function resolve_invite_to_wire(link)
   local page = parse_page_link(link)
   if page == nil then
     return link
   end
   local server = (page.origin:gsub('^https://', 'wss://'):gsub('^http://', 'ws://'))
-  return (server:gsub('/+$', ''))
-    .. '/session?room='
-    .. encode_component(page.room)
-    .. '&token='
-    .. encode_component(page.token)
-    .. (page.fragment or '')
+  return (server:gsub('/+$', '')) .. '/session?' .. page.query .. (page.fragment or '')
 end
 
 --- Whether a typed value has an invite link's shape: the page link the host copies,

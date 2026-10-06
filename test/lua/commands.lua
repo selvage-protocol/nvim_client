@@ -561,12 +561,34 @@ check(
 
 -- The link *is* the server, so a link that names one in its query names nothing: `server` is
 -- an unknown parameter, ignored the way an unknown query parameter is, and the origin stands.
+-- It is handed on with the rest of the query, and the engine ignores it there.
 clipboard = 'https://selvage.example/?room=r-older&token=t&server=ws%3A%2F%2F127.0.0.1%3A9'
 vim.cmd('SelvageJoin')
 check(
   '  a stale server= parameter moves the link nowhere',
   last_of('join') and last_of('join').invite,
-  'wss://selvage.example/session?room=r-older&token=t'
+  'wss://selvage.example/session?room=r-older&token=t&server=ws%3A%2F%2F127.0.0.1%3A9'
+)
+
+-- `PROTOCOL.md` §5.1 has `room` and `token` appear at most once, and a page link that repeats
+-- either be refused by name rather than joined at the first value. The query crosses to the
+-- engine as it arrived, so the repeat is still there for it to refuse: a rewrite built from the
+-- two values read here would hand the engine a link it cannot tell from a whole one, and the
+-- guest would join a room the link does not name.
+clipboard = 'https://selvage.example:8443/?room=r-one&room=r-two&token=t#k=KEY&h=HOSTKEY'
+vim.cmd('SelvageJoin')
+check(
+  '  a page link that repeats the room crosses over whole',
+  last_of('join') and last_of('join').invite,
+  'wss://selvage.example:8443/session?room=r-one&room=r-two&token=t#k=KEY&h=HOSTKEY'
+)
+
+clipboard = 'https://selvage.example:8443/?room=r-one&token=t&token=t-two'
+vim.cmd('SelvageJoin')
+check(
+  '  and so does one that repeats the token',
+  last_of('join') and last_of('join').invite,
+  'wss://selvage.example:8443/session?room=r-one&token=t&token=t-two'
 )
 
 clipboard = 'a note the person copied instead'
