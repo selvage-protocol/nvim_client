@@ -3271,15 +3271,19 @@ local function connect_failure(connect, code, message)
     why = 'That invite names a room the server does not have. Ask the host for a fresh invite.'
   elseif code == 'token_invalid' then
     why = 'That invite is no longer valid. Ask the host for a fresh invite.'
-  elseif code == 'host_present' then
-    why = 'That room already has a host.'
+  elseif code == 'x.server_full' or code == 'try_again_later' then
+    -- The server's capacity policy, said from its code and not from the reason beside it:
+    -- `x.server_full` is the mint refusal this client's server names (`§2.1`), and
+    -- `try_again_later` is the `1013` a handshake close at that cap is read as (`closeCode`).
+    why = 'The server is full. Try again in a few minutes.'
   elseif code == 'x.room_full' then
     why = 'The room is full — it seats no more people.'
   elseif code == 'room_gone' then
     why = 'That room is gone.'
   elseif tostring(message or ''):find('^server full') ~= nil then
-    -- The server's own capacity policy, stated in the close reason rather than in a code:
-    -- the room is up, so this is not a connection that failed to reach one.
+    -- The reason regex, kept as the fallback for a close whose number never reached this
+    -- client: before the engine read the close code this wording was the only signal, and a
+    -- server whose 1013 carries it is still recognised here.
     why = 'The server is full. Try again in a few minutes.'
   elseif code == nil or code == '' or code == 'hello_required' then
     if what == 'host' then
@@ -3536,9 +3540,9 @@ local function on_report(report)
     if type(report.identity) == 'string' then
       state.identity = report.identity
     end
-    local host_present = false
+    local host_here = false
     for _, peer in ipairs(state.room_peers) do
-      host_present = host_present or peer.role == 'host'
+      host_here = host_here or peer.role == 'host'
       if peer.colour ~= nil then
         peer_highlight({ peerId = peer.peer_id, colour = peer.colour })
       end
@@ -3547,7 +3551,7 @@ local function on_report(report)
     -- that says the host is back, and a guest whose socket was down when it arrived would
     -- otherwise keep a countdown — and then a deadline that has already passed — standing for
     -- the rest of the session. A report that names the host means the host is here.
-    if host_present and state.host_away ~= nil then
+    if host_here and state.host_away ~= nil then
       state.host_away = nil
     end
     -- The report is the room's own membership, so a peer it no longer names is gone even

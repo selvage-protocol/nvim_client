@@ -225,16 +225,51 @@ check(
 )
 check('  in words a person uses, not the wire code', said_since(before_token, 'token_invalid') == nil, true)
 
-local before_present = #notices
+-- The engine reads a handshake close by number (`closeCode`): a `1013` capacity close reaches
+-- this adapter as `try_again_later` and a refused mint as `x.server_full`, and each names the
+-- capacity sentence rather than repeating the server's own wording about the cap. The regex
+-- that reads a `1013` reason stays as the fallback for a close whose number reached no client.
+local before_retry = #notices
 handlers().on_message({
   type = 'status',
   state = 'error',
-  code = 'host_present',
-  message = 'the room already has a host',
+  code = 'try_again_later',
+  message = 'the socket closed before the session was seated: 1013 capacity reached',
 })
 check(
-  'a room that already has a host says so',
-  said_since(before_present, 'That room already has a host.') ~= nil,
+  'a 1013 handshake close names the capacity sentence, not its reason',
+  said_since(before_retry, 'The server is full. Try again in a few minutes.') ~= nil,
+  true
+)
+check(
+  '  and neither the number nor the socket wording is on screen',
+  said_since(before_retry, '1013') == nil and said_since(before_retry, 'socket') == nil,
+  true
+)
+
+local before_mint_full = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  code = 'x.server_full',
+  message = 'the server holds at most 1024 rooms',
+})
+check(
+  'a mint refused at the server cap is the capacity sentence, not the server’s own words',
+  said_since(before_mint_full, 'The server is full. Try again in a few minutes.') ~= nil,
+  true
+)
+check('  and not the message it came with', said_since(before_mint_full, '1024') == nil, true)
+
+local before_full_reason = #notices
+handlers().on_message({
+  type = 'status',
+  state = 'error',
+  message = 'server full, try again later',
+})
+check(
+  'a close reason is still the fallback when no code carries the capacity fault',
+  said_since(before_full_reason, 'The server is full. Try again in a few minutes.') ~= nil,
   true
 )
 
