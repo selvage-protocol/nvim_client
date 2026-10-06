@@ -19,15 +19,16 @@ M.node = '22.18'
 --- and the editor must not wait on that.
 local PROBE_TIMEOUT_MS = 5000
 
---- The numbers a version text carries: `v22.18.0`, `22.18`, `0.12.5-dev`. A text with no version
---- in it is nil rather than a guess.
+--- The numbers a version text starts with: `v22.18.0`, `22.18`, `0.12.5-dev`. A text that starts
+--- with anything else is nil rather than a guess: the version a program prints is the one its
+--- `--version` begins with, and a number further in is something else's.
 --- @param text string
 --- @return table|nil {major, minor, patch}
 function M.parse(text)
   if type(text) ~= 'string' then
     return nil
   end
-  local major, minor, patch = text:match('(%d+)%.(%d+)%.?(%d*)')
+  local major, minor, patch = text:match('^%s*v?(%d+)%.(%d+)%.?(%d*)')
   if major == nil then
     return nil
   end
@@ -89,6 +90,11 @@ function M.read_version(exe)
     return nil, ('%s could not be run: %s.'):format(exe, tostring(answer))
   end
   local out = answer:wait()
+  -- `wait` answers nil when the process is still there after the timeout and the kill that
+  -- follows it: a probe that cannot be ended is a refusal, not an error out of this function.
+  if out == nil then
+    return nil, ('%s --version did not answer and would not stop.'):format(exe)
+  end
   if out.code ~= 0 then
     return nil, ('%s --version did not answer (exit %s).'):format(exe, tostring(out.code))
   end

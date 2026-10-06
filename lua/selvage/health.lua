@@ -35,6 +35,29 @@ local function report_version(what, found, floor, at)
   end
 end
 
+--- What the companion needs that is not beside it: the packages `package.json` names as
+--- dependencies, so the list has one home and a half-finished `npm ci` is caught rather than
+--- counted. The manifest itself is named when it is missing or unreadable.
+--- @param root string
+--- @return string[]
+local function missing_dependencies(root)
+  local manifest = root .. '/package.json'
+  local named = { 'package.json' }
+  if vim.fn.filereadable(manifest) == 1 then
+    local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(manifest), '\n'))
+    if ok and type(decoded) == 'table' and type(decoded.dependencies) == 'table' then
+      named = {}
+      for name in pairs(decoded.dependencies) do
+        if vim.fn.isdirectory(root .. '/node_modules/' .. name) == 0 then
+          named[#named + 1] = name
+        end
+      end
+      table.sort(named)
+    end
+  end
+  return named
+end
+
 function M.check()
   vim.health.start('selvage')
 
@@ -70,11 +93,15 @@ function M.check()
   else
     vim.health.error(('the companion entry point is missing at %s.'):format(entry))
   end
-  if vim.fn.isdirectory(root .. '/node_modules') == 1 then
+  local missing = missing_dependencies(root)
+  if #missing == 0 then
     vim.health.ok("the companion's dependencies are installed.")
   else
     vim.health.error(
-      ("the companion's dependencies are not installed; run `npm ci` in %s."):format(root)
+      ("the companion's dependencies are not installed; run `npm ci` in %s (%s)."):format(
+        root,
+        table.concat(missing, ', ')
+      )
     )
   end
 end

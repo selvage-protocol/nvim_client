@@ -71,6 +71,11 @@ check('the numbers in a two-part version are read', numbers(versions.parse('22.1
 check('the numbers in a prerelease are read', numbers(versions.parse('0.12.5-dev')), '0.12.5')
 check('a text with no version in it reads as none', numbers(versions.parse('node: not found')), 'nil')
 check('a text that is not a string reads as none', numbers(versions.parse(nil)), 'nil')
+check(
+  'a version the text only mentions reads as none',
+  numbers(versions.parse('node is not installed; 22.18.0 is available')),
+  'nil'
+)
 
 check('a minor below the floor is below it', versions.at_least('0.11.9', '0.12'), false)
 check('the floor itself is not below it', versions.at_least('0.12.0', '0.12'), true)
@@ -147,6 +152,14 @@ end
 text, why = versions.read_version('/usr/bin/node')
 check('a Node that had to be killed is not a version', text, nil)
 check('  and says so', why ~= nil and why:find('did not answer (exit 124)', 1, true) ~= nil, true)
+
+vim.system = function()
+  return { wait = function() end }
+end
+local probed, text, why = pcall(versions.read_version, '/usr/bin/node')
+check('a Node that will not stop is not a version', text, nil)
+check('  and nothing was raised', probed, true)
+check('  and it says so', why ~= nil and why:find('would not stop', 1, true) ~= nil, true)
 
 vim.system = function()
   error('ENOENT: no such file or directory')
@@ -274,6 +287,7 @@ vim.system = system
 
 local reported = {}
 local health = vim.health
+local isdirectory = vim.fn.isdirectory
 vim.health = {
   start = function(name)
     reported[#reported + 1] = 'start ' .. name
@@ -294,12 +308,11 @@ end
 vim.fn.exepath = function()
   return '/usr/bin/node'
 end
+vim.fn.isdirectory = function()
+  return 1
+end
 
 require('selvage.health').check()
-
-vim.health = health
-vim.system = system
-vim.fn.exepath = exepath
 
 check('the report starts under the plugin\'s name', reported[1], 'start selvage')
 check(
@@ -312,6 +325,30 @@ check(
   reported[3],
   'error this plugin needs Node 22.18 or newer; this is v20.11.0.'
 )
+check("and the dependencies it needs are counted installed", reported[6], "ok the companion's dependencies are installed.")
+
+-- A `node_modules` that is there and short of a package the manifest names: the check reads the
+-- manifest rather than the directory, so a half-finished `npm ci` is a failure here.
+for index = #reported, 1, -1 do
+  reported[index] = nil
+end
+vim.fn.isdirectory = function(path)
+  return path:find('node_modules/yjs', 1, true) ~= nil and 0 or 1
+end
+require('selvage.health').check()
+
+check(
+  'a package under node_modules is still one the manifest names',
+  reported[6] ~= nil
+    and reported[6]:find('run `npm ci` in ', 1, true) ~= nil
+    and reported[6]:find('(yjs)', 1, true) ~= nil,
+  true
+)
+
+vim.health = health
+vim.system = system
+vim.fn.exepath = exepath
+vim.fn.isdirectory = isdirectory
 
 -- -- the floors have one home ------------------------------------------------------------
 --
