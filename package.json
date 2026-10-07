@@ -18,10 +18,10 @@
     "e2e": "node test/e2e/run.ts"
   },
   "dependencies": {
-    "lib0": "0.2.117",
+    "lib0": "0.2.119",
     "ws": "8.22.0",
     "y-protocols": "1.0.7",
-    "yjs": "13.6.32"
+    "yjs": "13.6.33"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
