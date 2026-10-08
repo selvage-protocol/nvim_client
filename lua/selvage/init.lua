@@ -646,7 +646,14 @@ local function past(document, row, col, line_break)
 end
 
 --- The caret as the two UTF-16 offsets the room counts. In Visual mode the selection's other
---- end is the anchor; a caret is both ends alike.
+--- end is the anchor; a caret is both ends alike. Select mode shows the same range as the Visual
+--- mode it is named after — only the keys accepted differ, and `'selection'` is documented as
+--- used in both — so a Select selection is read here as the Visual one of its shape. Neovim
+--- spells Select mode `s`, `S` and CTRL-S, and `vs`, `Vs` and CTRL-Vs while `CTRL-O` has it
+--- paused in Visual for one command (`mode()`, `v_CTRL-O`, `Select-mode`). `v`, `V` and CTRL-V
+--- enter Select mode rather than Visual when `'selectmode'` names `cmd`, and `gh`, `gH` and
+--- `g_CTRL-H` always do, so the two spellings are the same selection on screen and the same two
+--- offsets here.
 ---
 --- A charwise selection includes the character its later end is on, whichever end that is, as
 --- Neovim's operators do. With `'selection'` set to `exclusive` it does not, except when the two
@@ -666,6 +673,14 @@ local function caret(document)
   local head = document:offset(cursor[1] - 1, cursor[2])
   local anchor = head
   local mode = vim.fn.mode(1)
+  -- Select mode, and the state `CTRL-O` pauses it in, as the Visual mode of the same shape.
+  if mode == 's' or mode == 'vs' then
+    mode = 'v'
+  elseif mode == 'S' or mode == 'Vs' then
+    mode = 'V'
+  elseif mode == '\19' or mode == '\22s' then
+    mode = '\22'
+  end
   if mode == 'v' or mode == 'V' or mode == '\22' then
     local start = vim.fn.getpos('v')
     if mode == 'V' and start[2] > 0 then

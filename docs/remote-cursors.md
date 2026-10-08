@@ -28,7 +28,10 @@ is the one past the text, except on the last line, which has none. With `'select
 `exclusive` that last character is left out, again as the operators do. A linewise Visual
 selection is published as its lines whole, from the start of the first to the end of the last one's
 text, so there the head, and the block drawn for it, is at the start or the end of the line the
-cursor is on rather than on its character.
+cursor is on rather than on its character. A Select-mode selection is published as the Visual
+selection of the same shape, which is the same range on screen with other keys accepted: the `s`,
+`S` and CTRL-S Neovim reports for Select mode, and the `vs`, `Vs` and CTRL-Vs it reports while
+CTRL-O has Select mode paused in Visual for one command, are read as `v`, `V` and CTRL-V.
 
 The sign column carries the first two characters of a peer's name, coloured with the peer's own
 highlight, so two peers whose names share an initial, `pi` and `pc`, are not identical signs. Two

@@ -527,13 +527,18 @@ check(
 -- the head on the end the cursor is on. Both columns sit mid-line and after a multi-byte
 -- character, so a column that leaked through, or a byte count, would move an offset.
 --- `to` is where the cursor is put once Visual mode is on, or the keys that move it there.
-local function select_as(visual, from, to)
+--- `paused` sends CTRL-O first, which in Select mode switches to Visual for one command
+--- (|v_CTRL-O|) and is the one state Neovim spells with a trailing `s`.
+local function select_as(visual, from, to, paused)
   vim.api.nvim_win_set_cursor(0, from)
   vim.cmd('normal! ' .. visual)
   if type(to) == 'string' then
     vim.cmd('normal! ' .. to)
   else
     vim.api.nvim_win_set_cursor(0, to)
+  end
+  if paused then
+    vim.cmd('normal! \15')
   end
   local before = count_type('selection')
   vim.api.nvim_exec_autocmds('CursorMoved', { buffer = presence_buf })
@@ -560,6 +565,26 @@ check('  and one ending on the last line ends the document', select_lines({ 3, 2
 check('  and one made upward from the last line starts there', select_lines({ 4, 0 }, { 2, 3 }), 'V 17:5')
 check('  and an empty line alone has nothing to fill', select_lines({ 4, 0 }, { 4, 0 }), 'V 17:17')
 
+-- Select mode is the same range on screen as the Visual mode it is named after; only the keys it
+-- accepts differ, and `'selection'` is documented as used in both. Neovim spells it `s`, `S` and
+-- CTRL-S, so the plugin has to read those as `v`, `V` and CTRL-V or a peer is sent a collapsed
+-- caret where a fill belongs. `'selectmode'` naming `cmd` is what makes `v`, `V` and CTRL-V start
+-- Select mode instead of Visual (|Select-mode|, |'selectmode'|), which is how a person reaches it,
+-- and the option is put back so the rest of this file sees the default. The mode the flush itself
+-- saw is part of every expectation, so a case that somehow left Visual mode would fail too.
+local function select_mode_as(visual, from, to, paused)
+  local selectmode = vim.o.selectmode
+  vim.o.selectmode = 'cmd'
+  local result = select_as(visual, from, to, paused)
+  vim.o.selectmode = selectmode
+  return result
+end
+
+check('a Select-linewise selection is shared as the lines it is', select_mode_as('V', { 1, 1 }, { 2, 3 }), 'S 0:10')
+check('  and one line alone is that line whole', select_mode_as('V', { 2, 3 }, { 2, 1 }), 'S 5:10')
+check('  and one made upward stays backwards', select_mode_as('V', { 3, 2 }, { 1, 5 }), 'S 16:0')
+check('  and an empty line alone has nothing to fill', select_mode_as('V', { 4, 0 }, { 4, 0 }), 'S 17:17')
+
 -- A charwise selection takes the character its later end is on, as Neovim's operators do, so the
 -- range reaches past it by that character's UTF-16 width: two for the emoji, one for `ö` (two
 -- bytes). An anchor beyond a line's text takes the line break, which the last line does not
@@ -579,6 +604,14 @@ check('  but one started there and made backward takes its line break', select_c
 check('  and one on the empty last line has no line break to take', select_chars({ 3, 2 }, { 4, 0 }), 'v 13:17')
 check('  and that line alone has nothing to fill', select_chars({ 4, 0 }, { 4, 0 }), 'v 17:17')
 
+-- A Select-charwise selection is the Visual-charwise range, character under the later end and
+-- all: the arithmetic reads `'selection'` the same way in both modes (|'selection'|).
+check('a Select-charwise selection is shared as its characters', select_mode_as('v', { 3, 1 }, { 3, 3 }), 's 12:15')
+check('  and one made backward includes the one it started on', select_mode_as('v', { 3, 3 }, { 3, 1 }), 's 15:12')
+check('  and one character alone is that character', select_mode_as('v', { 3, 2 }, { 3, 2 }), 's 13:14')
+check('  and one ending on an astral character takes all of it', select_mode_as('v', { 1, 0 }, { 1, 1 }), 's 0:3')
+check('  and one on the empty last line has nothing to fill', select_mode_as('v', { 4, 0 }, { 4, 0 }), 's 17:17')
+
 -- `'selection'` set to `exclusive` leaves the last character out, except of a selection whose two
 -- ends meet, which an operator still takes whole.
 vim.o.selection = 'exclusive'
@@ -587,10 +620,26 @@ check('  and made backward too', select_chars({ 3, 3 }, { 3, 1 }), 'v 14:12')
 check('  but one character alone is still that character', select_chars({ 1, 1 }, { 1, 1 }), 'v 1:3')
 check('  and one made forward beyond the end of a line ends with its text', select_chars({ 3, 1 }, '$'), 'v 12:16')
 check('  and so does one started there and made backward', select_chars({ 2, 3 }, '$o'), 'v 10:7')
+check('and an exclusive Select-charwise selection leaves it out too', select_mode_as('v', { 3, 1 }, { 3, 3 }), 's 12:14')
+check('  but one character alone is still that character', select_mode_as('v', { 1, 1 }, { 1, 1 }), 's 1:3')
 vim.o.selection = 'inclusive'
 
 -- A blockwise selection is still the two corners the cursor and the other end stand on.
 check('a blockwise selection is its two corners', select_as('\22', { 2, 1 }, { 3, 3 }), '\22 6:14')
+check('  and a Select-blockwise one is those corners too', select_mode_as('\22', { 2, 1 }, { 3, 3 }), '\19 6:14')
+
+-- `CTRL-O` in Select mode switches to Visual mode for one command (|v_CTRL-O|), and until that
+-- command is given Neovim spells the mode with the Visual letter and a trailing `s`: `vs`, `Vs`
+-- and CTRL-Vs. The range on screen has not changed, and entering the paused state fires the
+-- `ModeChanged` that arms the same flush, so the offsets published from it must not change
+-- either.
+local function select_mode_paused(visual, from, to)
+  return select_mode_as(visual, from, to, true)
+end
+
+check('a Select-linewise selection paused with CTRL-O is shared as its line', select_mode_paused('V', { 2, 3 }, { 2, 1 }), 'Vs 5:10')
+check('  and a Select-charwise one as its characters', select_mode_paused('v', { 3, 1 }, { 3, 3 }), 'vs 12:15')
+check('  and a Select-blockwise one as its corners', select_mode_paused('\22', { 2, 1 }, { 3, 3 }), '\22s 6:14')
 
 -- An empty line that is not the last one has a line break and no text. A selection made forward
 -- onto it ends at its start, where the caret is drawn on that line; one made backward from it
