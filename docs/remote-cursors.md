@@ -69,8 +69,8 @@ window has not opened is not that: the presence entry carries their document, so
 opens it — a `selvage://` buffer or the mirror's file, the way `:SelvageOpen` opens any room path —
 takes the hold, and lands on their caret when the room's text brings it. A host opens a peer's
 document only when it resolves to a readable file inside the shared folder, never creating it;
-anything else says `could not open <path> from the room: <reason>`, and the follow stands for
-nothing rather than landing.
+anything else says `could not open <path> from the room: <reason>`, and such a follow is refused
+rather than established.
 
 The session is on screen without any statusline configuration: the window's `winbar` is the web
 page's session bar. It opens with what the session is called, `Sharing “notes”` for a host and
