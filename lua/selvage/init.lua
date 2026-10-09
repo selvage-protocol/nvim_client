@@ -1862,6 +1862,27 @@ local function resolve_peer(wanted)
   return nil, 'none'
 end
 
+--- Shares `bufnr` as the room's document at `path`, answering whether the room now holds it.
+---
+--- `share` takes a buffer and refuses one in the same silence: a name the buffer is read through
+--- that is not a regular file, text the room cannot carry, a session whose process has gone. The
+--- refusal is said where it happens, in `share`'s own words; a caller that must know what the room
+--- received reads the document set rather than the call.
+---
+--- @param bufnr integer
+--- @param path string
+--- @return boolean, string|nil
+local function share_document(bufnr, path)
+  local shared, err = pcall(share, bufnr, path)
+  if not shared then
+    return false, tostring(err)
+  end
+  if state.documents[path] == nil then
+    return false, 'this window does not share it'
+  end
+  return true
+end
+
 --- Opens the room's document at `path` so a landing has a buffer to place: a guest's
 --- `selvage://` buffer or mirror file through the ordinary share, a host's own file under
 --- the folder the session started in.
@@ -1877,11 +1898,7 @@ local function open_room_path(path)
     if not made then
       return false, tostring(bufnr_or_err)
     end
-    local shared, share_err = pcall(share, bufnr_or_err, path)
-    if not shared then
-      return false, tostring(share_err)
-    end
-    return true
+    return share_document(bufnr_or_err, path)
   end
   local root = vim.fn.resolve(state.root or '')
   if root == '' then
@@ -1911,11 +1928,7 @@ local function open_room_path(path)
   if not loaded then
     return false, tostring(bufnr_or_err)
   end
-  local shared, share_err = pcall(share, bufnr_or_err, path)
-  if not shared then
-    return false, tostring(share_err)
-  end
-  return true
+  return share_document(bufnr_or_err, path)
 end
 
 --- The document the room puts the peer in: the path the companion resolved a caret in, or, when
