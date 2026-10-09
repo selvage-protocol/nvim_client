@@ -518,17 +518,21 @@ handlers().on_message({
 check('a set that stops naming a path holds nothing for it', #selvage.documents(), 1)
 check('  and offers only what it names', table.concat(selvage.offered(), ','), 'open/one.lua')
 
--- The path the landing held goes when the room stops naming it: no peer holds it open, and a
--- hold taken because the room named the path is the room's to take back.
-local before_release = #sent
+-- The path the landing holds stays held, however the room's set reads. The room's set is its
+-- own holds together with each peer's (`roomDocuments`), so a path this window opened is in it
+-- from the moment the companion has read the `open` — and this report is one the companion
+-- computed before that read, about a room that has not heard the hold yet. Taking the hold back
+-- on it would leave the buffer here unshared with nothing to open it again. A hold is released
+-- by this window's own acts: a wiped buffer, a listing that took the path away, leaving.
+local before_kept = #sent
 handlers().on_message({ type = 'report', report = { kind = 'documents', documents = {} } })
 check(
-  'a set that stops naming the landing gives its hold back',
-  sent_of('close', 'open/one.lua', before_release),
-  1
+  'a set that stops naming the landing does not take its hold back',
+  sent_of('close', 'open/one.lua', before_kept),
+  0
 )
-check('  and it is no longer held', #selvage.documents(), 0)
-check('  and no longer offered', #selvage.offered(), 0)
+check('  so it is still held', #selvage.documents(), 1)
+check('  and still offered', table.concat(selvage.offered(), ','), 'open/one.lua')
 check('  while the buffer it was shown in stays', vim.fn.bufnr('selvage://open/one.lua') ~= -1, true)
 
 -- -- presence: the caret out, the peers' carets in ------------------------------

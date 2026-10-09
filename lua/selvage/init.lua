@@ -3565,15 +3565,14 @@ local function on_report(report)
           first = path
         end
       end
-      -- A path the room's set stops naming is one no peer holds open any more. A hold this
-      -- window takes is in that set — taking it is what puts it there — so what the set no
-      -- longer names is a hold the room's own naming took, the join's landing, and the room's
-      -- word is the one that governs: the path goes with the name.
-      for path in pairs(state.room_documents) do
-        if not named[path] and state.documents[path] ~= nil then
-          let_go(state.documents[path])
-        end
-      end
+      -- A path this window holds is not released here, however this report reads. The room's set
+      -- is its own holds together with each peer's (`roomDocuments`), so a path this window
+      -- opened is in it from the moment the companion has read the `open` — and this report may
+      -- be one the companion computed before that read, which is a report about a room that has
+      -- not heard the hold yet. Releasing on it takes back the hold the person just asked for:
+      -- the buffer stands here unshared and nothing opens it again. This window's own acts are
+      -- what release a hold — a wiped buffer, a listing that took the path away, leaving — and
+      -- the next report names this one again, because this window holds it.
       state.room_documents = named
       -- The join is said here, where the room's document set is known, rather than when the
       -- handshake named the room: the sentence carries the landing, and a room with nothing in
