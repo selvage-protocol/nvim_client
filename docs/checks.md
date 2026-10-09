@@ -6,6 +6,7 @@ npm test                    # the companion, against a replica with no server be
 scripts/ci-local.sh all     # the workflow's commands, plus actionlint and the proof below
 scripts/test-lua.sh         # the Lua side, in a real headless Neovim (not in `all`: see below)
 scripts/e2e/run-two-instance.sh   # two real Neovims, a real companion each, a real selvaged
+scripts/screenshots/capture.sh    # the README's screenshot: two real Neovims, one of them visible
 
 nix flake check             # the same three suites, the built package and the workflow guard
 nix develop                 # Node 22 and a Neovim of a named version; no git hooks
@@ -95,3 +96,22 @@ opens a granted path the host's own window never opened, so the text can only be
 copy read on the guest's hold, and — unless `SELVAGE_E2E_RECONNECT=0` — cuts the guest's socket and
 checks that both windows re-converge once it has re-established. It is not part of `npm test` or CI,
 because it needs a `nvim` and a built `selvaged`.
+
+`scripts/screenshots/capture.sh` is the README's screenshot, a manual step run when the plugin's
+look changes and never part of the gate. It is the proof's own shape with a window in it: two real
+Neovim instances in one room on a real `selvaged`, the host as a visible editor in a terminal on an
+Xvfb display at 1280×800 and the guest headless behind it, staged through the driver scripts under
+`test/screenshots/`, which reuse `test/e2e/harness.lua` and wait on what the drawing reads — the
+guest's own row in `require('selvage').peers()`, and her caret's and her selection's marks in the
+presence namespace — before the display is captured. The capture happens once three readings of the
+display in a row are byte-for-byte the same, so the picture is of a frame that had stopped moving,
+and a display that is blank fails there rather than being saved as a picture of nothing. A failure
+saves the screen as a PNG: what a visible editor has to say about one is on its screen rather than
+in its log. The image is recompressed losslessly with optipng and has to come out under 1 MB. Each
+editor's `HOME` is its own sandbox under `.tmp/screenshots/` and the project opens under its folder,
+so no path of the machine taking the picture is in the window.
+
+What that window is showing is a stock Neovim — `--clean`, with no configuration of the machine at
+all — with a line-number column and `'termguicolors'` on. The second is not decoration: a peer's
+colour is a hex value the bridge derived, and Neovim's own default leaves `'termguicolors'` off, so
+a highlight carrying only such a value draws as nothing.
