@@ -667,12 +667,28 @@ local function drawn_by_id()
   return drawn
 end
 
+--- Every presence entry the last report named, drawn or not, keyed by peer id. `drawn_by_id` is
+--- the subset this window holds a buffer for; this is the room's whole word about where people
+--- are, which is what a path is read from when no caret could be resolved for a peer here.
+local function presence_by_id()
+  local said = {}
+  for _, cursor in ipairs(state.cursors) do
+    if type(cursor) == 'table' and type(cursor.peerId) == 'string' then
+      said[cursor.peerId] = cursor
+    end
+  end
+  return said
+end
+
 --- The room's participants: every peer the room names, each with what this session knows about
 --- it. A peer the room names whose document this client does not hold is listed all the same: the
 --- list is the room's, and someone looking for a person here should find them whether or not their
 --- caret is on screen. That row carries no `sign`, `highlight` or `colour`, because those are the
 --- two cells and the colour the gutter draws — a list that explains the gutter has to agree with
---- it cell for cell, and a peer the gutter drew nothing for has nothing there to explain.
+--- it cell for cell, and a peer the gutter drew nothing for has nothing there to explain. Its
+--- `path` is still there: a presence entry the companion could not resolve a caret in carries the
+--- room's own document for the peer, which is what `:SelvageFollow` and `:SelvageGoTo` open to
+--- reach them.
 ---
 --- `label` is the whole display name the two cells abbreviate, or the peer id when the room left
 --- the name blank; `path` is the document the peer is in as the room's presence said. `sign` is
@@ -680,11 +696,13 @@ end
 --- `highlight` is the very group the caret and the sign are drawn with.
 function M.peers()
   local drawn = drawn_by_id()
+  local said = presence_by_id()
   local peers = {}
   local named = {}
   for _, peer in ipairs(state.room_peers) do
     local name = tostring(peer.display_name or '')
     local mine = drawn[peer.peer_id]
+    local presence = said[peer.peer_id]
     named[peer.peer_id] = true
     peers[#peers + 1] = {
       peerId = peer.peer_id,
@@ -693,17 +711,27 @@ function M.peers()
       initials = peer.initials,
       seat = peer.colour,
       role = peer.role,
-      path = mine and mine.path or nil,
+      path = mine and mine.path or (presence and presence.path or nil),
       sign = mine and mine.sign or nil,
       colour = mine and mine.colour or nil,
       highlight = mine and mine.highlight or nil,
     }
   end
-  -- A peer the last presence report drew and the room has not named: there is no session report
-  -- to list them from, and the caret on screen is still someone.
-  for _, peer in ipairs(state.peers) do
-    if not named[peer.peerId] then
-      peers[#peers + 1] = vim.deepcopy(peer)
+  -- A peer the last presence report named and the room has not named: there is no session report
+  -- to list them from, and the caret — or the document they are in — is still someone.
+  for _, peer in ipairs(state.cursors) do
+    if type(peer) == 'table' and type(peer.peerId) == 'string' and not named[peer.peerId] then
+      named[peer.peerId] = true
+      local mine = drawn[peer.peerId]
+      peers[#peers + 1] = {
+        peerId = peer.peerId,
+        label = peer.label or peer.peerId,
+        role = peer.role,
+        path = peer.path,
+        sign = mine and mine.sign or nil,
+        colour = mine and mine.colour or nil,
+        highlight = mine and mine.highlight or nil,
+      }
     end
   end
   return peers
@@ -1882,54 +1910,85 @@ local function open_room_path(path)
   return true
 end
 
+--- The document the room puts the peer in: the path the companion resolved a caret in, or, when
+--- it resolved none, the path the room's own presence names for them. The two are one presence
+--- entry read twice, because a companion draws a cursor only against a replica it holds: a peer
+--- in a room document this window has not opened arrives with their document and no caret, and
+--- that document is what a follow or a go-to opens to reach them.
+---
+--- @param peer_id string
+--- @return string|nil
+local function peer_path(peer_id)
+  local cursor = cursor_for(peer_id)
+  if cursor ~= nil and type(cursor.path) == 'string' then
+    return cursor.path
+  end
+  local row = peer_row(peer_id)
+  return row ~= nil and row.path or nil
+end
+
 --- Puts the window on the peer's caret: their document shown, the cursor on the head
 --- offset the last presence report resolved. The row and column come through
 --- `Document:position`, which is in range for any offset by construction; the set itself is
 --- still guarded, because the buffer may have gone while the report stood.
 ---
---- Returns true on landing; false with 'unknown' when no caret is drawn for the peer,
---- with 'waiting' when their document opened here and its text still arrives, with
+--- A peer the room puts in a document this window does not hold is opened here first: the hold
+--- is what makes the room send the text, so a guest's landing waits a frame for it, and a host's
+--- own file is read by the open itself. Nothing is placed until the caret resolves against that
+--- text, so a landing that cannot be made yet is 'waiting' rather than a refusal — the frame
+--- that draws the caret is the one that lands.
+---
+--- Returns true on landing; false with 'unknown' when the room puts the peer in no document,
+--- with 'waiting' when their document is open here and its caret has not resolved, with
 --- 'open-failed' and the reason when it cannot be opened, with 'missing' when showing it
 --- failed even so, or 'unresolvable' when the cursor cannot be placed.
 local function land(peer_id)
   local cursor = cursor_for(peer_id)
-  if cursor == nil or cursor.path == nil or cursor.head == nil then
+  local path = peer_path(peer_id)
+  if path == nil then
     return false, 'unknown'
   end
-  local document = state.documents[cursor.path]
+  local document = state.documents[path]
   if document == nil or not api.nvim_buf_is_valid(document.bufnr) then
     if document ~= nil then
       -- A wiped buffer is not a buffer anymore: the entry points nowhere, and the share
       -- below makes the document the room still holds, the way the stale-entry repair the
       -- documents report would make does.
       document:detach()
-      state.documents[cursor.path] = nil
+      state.documents[path] = nil
     end
     -- The hold is what makes the room send the text, so a document that was never opened
     -- here opens now. A host's own file is read by the open itself, so the landing
     -- carries on onto it; a guest's text still arrives over the sync, so the landing waits
     -- for the frame it unlocks rather than placing at offset zero of an empty buffer.
-    local opened, err = open_room_path(cursor.path)
+    local opened, err = open_room_path(path)
     if not opened then
       return false, 'open-failed', err
     end
     -- A landing that opens takes a hold: the document joins the room's open set, so every
     -- peer receives it, the way a fetch does. Said once, where the hold is taken, in the
     -- fetch's own sentence shape — not on every frame that lands on it afterwards.
-    notify(('%s is opened in the room, so every peer receives it.'):format(cursor.path))
+    notify(('%s is opened in the room, so every peer receives it.'):format(path))
     if state.role ~= 'host' then
       return false, 'waiting'
     end
-    document = state.documents[cursor.path]
+    document = state.documents[path]
     if document == nil or not api.nvim_buf_is_valid(document.bufnr) then
       return false, 'missing'
     end
+  end
+  local head = cursor ~= nil and cursor.head or nil
+  if type(head) ~= 'number' then
+    -- No caret to place: the document this window holds has no text for the peer's anchor yet,
+    -- or the anchor names content this replica does not have (§8.1). Offset zero would be an
+    -- invention, so nothing lands here and the frame that resolves the caret is the one that does.
+    return false, 'waiting'
   end
   local win = show(document.bufnr)
   if win == nil then
     return false, 'missing'
   end
-  local row, col = document:position(cursor.head)
+  local row, col = document:position(head)
   -- The follow's own placement is not a move the user made: Neovim reports no reason for a cursor
   -- change, so the flag is what tells the move handler this caret is the follow's, not theirs.
   state.applying_follow = true
@@ -2152,7 +2211,7 @@ function M.room(win)
   local own = state.self_seat ~= nil and state.self_seat.peer_id or nil
   local followed = state.following ~= nil and state.following.peerId or nil
   local where = {}
-  for _, peer in ipairs(state.peers) do
+  for _, peer in ipairs(M.peers()) do
     where[peer.peerId] = peer.path
   end
   local here = document_for_buf(api.nvim_win_get_buf(win or 0))
@@ -2506,10 +2565,12 @@ local function land_follow()
   return ok, reason, err
 end
 
---- Lands the follow again on a new frame: the peer moved, or their text arrived. A frame
---- with nothing drawn for them is a frame with nothing to land on — they may be between
---- documents, or in one this client does not hold — so the follow stands, saying so once on
---- the first such frame and never per frame.
+--- Lands the follow again on a new frame: the peer moved, or their text arrived. A frame the
+--- room draws no document in for them is a frame with nothing to land on — they are between
+--- documents — so the follow stands, saying so once on the first such frame and never per frame.
+--- A frame where the room *does* name their document and the caret has not resolved is 'waiting':
+--- the opening and the text arriving are frames away, and saying anything there would be a
+--- sentence about a moment rather than about a person.
 local function follow_frame()
   local following = state.following
   if following == nil then
@@ -2524,8 +2585,7 @@ local function follow_frame()
   if reason == 'open-failed' then
     -- Said once per document: every frame retries the same refusal, and the second saying
     -- carries nothing the first did not.
-    local cursor = cursor_for(following.peerId)
-    local path = cursor ~= nil and cursor.path or nil
+    local path = peer_path(following.peerId)
     if following.open_warned_for ~= path then
       following.open_warned_for = path
       notify(
@@ -2552,13 +2612,15 @@ end
 --- follow standing nowhere has no indicator and no stop state, which is the branch's own
 --- contract broken silently. A failed re-target puts the standing follow back as it was;
 --- the attempt itself says and indicates nothing, so there is nothing to put back with it.
+---
+--- A first landing that is still *on its way* is not that: a peer in a room document this window
+--- has not opened has their document opened by the landing — the buffer and the hold — and then
+--- waits a frame for the caret the hold's text resolves, which is the state 'waiting'.
 local function begin_follow(row)
-  -- A peer the room names but draws nothing for is in no document this client holds:
-  -- there is nothing to land on, so the command refuses rather than landing at zero. A
-  -- peer in an unheld-but-listed document reads exactly the same here — the bridge only
-  -- forwards held, resolvable cursors, so their path never reaches Lua — and opening it
-  -- blind is not possible: closing that gap needs the companion to forward unresolved
-  -- presence, a companion change rather than a wire one.
+  -- A peer the room's presence puts in no document is in none this client can reach: there is
+  -- nowhere to land, so the command refuses rather than landing at zero. The room's own word is
+  -- what this reads: a presence entry the companion could not resolve a caret in still carries
+  -- the document the room names for the peer, which is what a follow opens to reach them.
   if row.path == nil then
     notify(('nothing to follow: %s is not in a document.'):format(row.label), vim.log.levels.WARN)
     return
@@ -2574,15 +2636,13 @@ local function begin_follow(row)
     open_warned_for = nil,
   }
   local ok, reason, err = land_follow()
-  if not ok then
+  if not ok and reason ~= 'waiting' then
     state.following = previous
     -- A window the landing attempt entered drew the bar with the refused follow on it.
     refresh_indicators()
     if reason == 'open-failed' then
-      local cursor = cursor_for(row.peerId)
-      local path = cursor ~= nil and cursor.path or row.path
       notify(
-        ('could not open %s from the room: %s.'):format(tostring(path), tostring(err)),
+        ('could not open %s from the room: %s.'):format(tostring(peer_path(row.peerId) or row.path), tostring(err)),
         vim.log.levels.ERROR
       )
     else
