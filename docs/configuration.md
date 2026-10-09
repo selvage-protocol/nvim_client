@@ -28,6 +28,11 @@ a copied invite links to is the room's own server, over the scheme a browser spe
 its own origin.
 `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
 
+`SELVAGE_COMPANION_LOG=<path>` makes the companion append every message it sends and receives, with
+the time and the process id. The file shows one end's order and not what crossed in between: the
+plugin and the companion are two processes. An invite's fragment is never in it, because the room
+key and the host key travel there and are not logged.
+
 Presence is drawn with the terminal's own colours when `'termguicolors'` is off, as it is by
 default: beside each truecolor value the client sets, a peer's caret and selection fill, the seat
 faces on the session bar and its crown, your own face and the follow mark each carry the nearest
