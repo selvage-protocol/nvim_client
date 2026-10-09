@@ -117,5 +117,6 @@ caret wears a block in the peer's own colour, the sign column their initials, an
 names them in full with the file they are in. The same peers are published for everyone else as
 `vim.g.selvage_file_peers`, a map of room path to
 `{ initials, colour, label, peerId }`, with a `User SelvagePresence` autocmd fired whenever it
-changes. netrw, oil.nvim, nvim-tree, telescope, lualine and heirline each decorate from that one
+changes. A peer the room puts in a document this window has not opened is named there under their
+path all the same: the key is the room path, which is what a file list decorates. netrw, oil.nvim, nvim-tree, telescope, lualine and heirline each decorate from that one
 table, and this client depends on none of them.
