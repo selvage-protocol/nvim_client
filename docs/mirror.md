@@ -45,7 +45,7 @@ refused has none.
 A listed path's buffer is the mirror's file, a real path on disk rather than a `selvage://`
 buffer, so a language server gets a `file://` URI and ctags and ripgrep read the file being
 edited. A document the room holds and its listing does not name (a listing can be truncated by the
-host's own bounds) keeps the `selvage://` buffer, the fallback for everything the mirror cannot
+host's own bounds) opens as the `selvage://` buffer, the fallback for everything the mirror cannot
 name. The buffer is a real file with a real name, so the
 editor's own filetype detection answers for it: a listed path with a known extension carries that
 filetype (`lua`, `markdown`, `rust`), and `'syntax'` and an ftplugin hook onto it as they do for
