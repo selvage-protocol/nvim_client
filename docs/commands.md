@@ -12,12 +12,17 @@ what the command would have done and leaves the session alone.
 chooser, so no picker plugin is ever required. Whatever overrides `vim.ui.select` is what opens
 (fzf-lua, telescope-ui-select, dressing.nvim, mini.pick, snacks.nvim, or any other provider, in
 whatever order that override resolves); with none installed, Neovim's builtin numbered list asks
-instead. `test/lua/pickers.lua` pins both halves: no fzf or picker reference in the shipped code,
-and every chooser completing on plain `vim.ui.select`.
+instead.
 
 A join says one summary sentence plus errors: `joined the room, opening <path>. <n> more files are
 open.` The exception is a room that had nothing open at the join and grants files afterwards:
 that guest landed no document and has no tree to read, so the listing is said once. The mirror's
-location is `require('selvage').session().mirror`. Pinned by `test/lua/join.lua` (listing first),
-`test/lua/joinorder.lua` (documents first) and `test/lua/granted.lua` (a listing after an empty
-join).
+location is `require('selvage').session().mirror`.
+
+## A room can seat you as a viewer
+
+The room's state assigns roles, and a connection seated as `viewer` gets the room's documents with
+`modifiable` off: a viewer publishes no content (`PROTOCOL.md` §13.9), so a buffer that accepted a
+keystroke would show text the room never receives. It says so once, in as many words: `you are a
+viewer in this room, so its documents are read-only.` Leaving gives every buffer back the
+`modifiable` it had.

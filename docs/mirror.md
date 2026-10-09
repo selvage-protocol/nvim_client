@@ -78,8 +78,7 @@ A room that dies under a guest does not leave its buffers in the window: `roomGo
 connection the engine gave up on, land every window showing one on a fresh empty buffer, wipe the
 room's buffers that hold nothing the person changed, and keep the ones that do, saying how many,
 and keep the mirror itself, the notice that says why the room ended adding `Your copy is kept at
-<path>.` A host is left alone: its buffers, and its files, are its own. Pinned by
-`test/lua/session.lua`.
+<path>.` A host is left alone: its buffers, and its files, are its own.
 
 A save in the mirror is routed: the editor does not run its write path for `:w` in a mirror
 buffer, and this client writes the file from the buffer as the save the room is told about.
@@ -107,7 +106,7 @@ Four things the mirror does not do, all deliberately:
   with the buffer left holding the edit.
 
 Create, rename and delete are not implemented as document operations: the protocol has no
-frame for them and `DESIGN.md` §11 keeps them out of v1. A file created in the mirror is not
+frame for them and v1 carries none. A file created in the mirror is not
 shared; a file deleted or renamed in it does not reach the room, and the room's copy comes back
 the next time the path is fetched. Trying one says so where it happens: creating a file in the
 mirror, renaming a buffer onto a mirror name, or deleting a listed file's cache each say
