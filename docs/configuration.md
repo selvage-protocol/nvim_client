@@ -26,7 +26,9 @@ same way an argument is, so a domain on its own there is enough and means `wss:/
 a copied invite links to is the room's own server, over the scheme a browser speaks (`wss://` as
 `https://`, `ws://` as `http://`). A server started with `--page <dir>` serves the guest page from
 its own origin.
-`vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
+`vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer, and
+`vim.g.selvage_landing_timeout_ms` how long a follow or a jump waits for the caret that a document
+it just opened resolves against; a landing that reaches its deadline gives up and says so.
 
 `SELVAGE_COMPANION_LOG=<path>` makes the companion append every message it sends and receives, with
 the time and the process id. The file shows one end's order and not what crossed in between: the

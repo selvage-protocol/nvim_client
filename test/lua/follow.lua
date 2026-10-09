@@ -1420,6 +1420,92 @@ check('  and following them on the next frame', cursor(), '1,0')
 check('  saying nothing about it', #notices, notices_after_follow_landing)
 selvage.stop_following()
 
+-- -- a landing that stalls says so, and is not left standing for ever -----------------
+--
+-- The room puts Zed in a document this window opens for him, and then never sends the text the
+-- caret resolves against: the hold is taken, the buffer stands, and no frame ever draws a caret
+-- there. That is the stall a deadline is for. The wait is on the room's text as the effect, so a
+-- landing that arrives stands the timer down and a session that works never reaches it; what
+-- reaches it is silence, and the establishment is refused rather than left as a chip saying the
+-- follow is where he is when nothing established that.
+
+local landing_timeout = 200
+vim.g.selvage_landing_timeout_ms = landing_timeout
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/late.txt',
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+local before_stalled_follow = #notices
+selvage.follow('Zed')
+check('a follow whose document never draws a caret stands', selvage.following(), 'Zed')
+local refused = vim.wait(3000, function()
+  return said_since(before_stalled_follow, 'caret did not arrive') ~= nil
+end, 20)
+check('  and the deadline refuses it rather than waiting for ever', refused, true)
+check(
+  '    saying what it saw, and that the follow stopped',
+  said_since(before_stalled_follow, "Zed's caret did not arrive within 0s; stopped following.") ~= nil,
+  true
+)
+check('  with the indicator down', selvage.following(), nil)
+check('  and its global cleared', vim.g.selvage_following, nil)
+
+-- The wait a first frame armed is the establishment's own: a caret that arrives before the
+-- deadline stands the timer down, and nothing is said past it. The wait is bounded on the clock
+-- the deadline itself runs on, so the absence is observed rather than hoped for.
+local before_landed_follow = #notices
+selvage.follow('Zed')
+check('  a follow onto it waits again while its caret is unresolved', selvage.following(), 'Zed')
+presence({ cursor_for('p-zed', 'g/late.txt', 2, '#e06c75') })
+check('    landing when the caret arrives', cursor(), '1,2')
+local past_the_deadline = vim.uv.hrtime() + (landing_timeout + 400) * 1000000
+vim.wait(3000, function()
+  return vim.uv.hrtime() >= past_the_deadline
+end, 20)
+check('  and the deadline the stalled frame armed says nothing after it', said_since(before_landed_follow, 'caret did not arrive'), nil)
+check('  while the follow stands where it landed', selvage.following(), 'Zed')
+selvage.stop_following()
+
+-- A go-to that has to open a document and never gets its caret is bounded the same way: the
+-- pending landing is one slot that no frame will fill, so the deadline drops it and says so
+-- rather than swallowing the navigation without a word.
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/late.txt',
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+local before_stalled_go = #notices
+selvage.go_to('Zed')
+check('a jump that cannot land yet says nothing', said_since(before_stalled_go, 'caret did not arrive'), nil)
+local refused_go = vim.wait(3000, function()
+  return said_since(before_stalled_go, 'caret did not arrive') ~= nil
+end, 20)
+check('  and the deadline reports it', refused_go, true)
+check(
+  '    in the same words, naming what did not arrive',
+  said_since(before_stalled_go, "Zed's caret did not arrive within 0s.") ~= nil,
+  true
+)
+-- The dropped landing is dropped: the frame that would have landed it now takes nothing, which
+-- is what tells a deadline that ended the wait from one that only said so.
+local stalled_window = vim.fn.bufname('%')
+local stalled_cursor = cursor()
+presence({ cursor_for('p-zed', 'g/late.txt', 2, '#e06c75') })
+check('  so the frame that resolves the caret takes nothing with it', vim.fn.bufname('%'), stalled_window)
+check('    and the caret stays where it was', cursor(), stalled_cursor)
+vim.g.selvage_landing_timeout_ms = nil
+
 
 -- The text arriving over the sync retries a pending jump: a wiped buffer re-opens on the
 -- attempt and lands when the room's text arrives, with no new presence frame needed. The

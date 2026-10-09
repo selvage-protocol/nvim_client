@@ -152,6 +152,10 @@ local MESSAGES = {
   { 'WARN', 'not following anyone.' },
   { 'WARN', 'nothing to follow: %s is not in a document.' },
   { 'WARN', 'nothing to follow: %s\'s caret does not resolve here.' },
+  -- The deadline a landing gets when the document it opened never draws the peer's caret: the
+  -- wait is named rather than the establishment left standing over a place it never reached.
+  { 'WARN', "%s's caret did not arrive within %ds." },
+  { 'WARN', "%s's caret did not arrive within %ds; stopped following." },
   { 'ERROR', 'could not open %s from the room: %s.' },
   { 'WARN', 'no participant matches "%s".' },
   { 'WARN', 'no other participants yet.' },

@@ -67,7 +67,10 @@ own statusline. A typed jump to a peer in no document waits for the frame that d
 picker refuses its own rows where the row says they are in no document. A peer in a document this
 window has not opened is not that: the presence entry carries their document, so a jump or a follow
 opens it — a `selvage://` buffer or the mirror's file, the way `:SelvageOpen` opens any room path —
-takes the hold, and lands on their caret when the room's text brings it. A host opens a peer's
+takes the hold, and lands on their caret when the room's text brings it. That wait is bounded: a
+document opened for a landing whose caret has not arrived within `vim.g.selvage_landing_timeout_ms`
+gives up, saying `<name>'s caret did not arrive within <n>s` — a follow stops rather than standing
+over a place it never reached, and a jump is dropped. A host opens a peer's
 document only when it resolves to a readable file inside the shared folder, never creating it;
 anything else says `could not open <path> from the room: <reason>`, and such a follow is refused
 rather than established.
