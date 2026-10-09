@@ -73,7 +73,7 @@ local function room_text(path, text, version)
 end
 
 --- A companion that answers every hold with the room's text, the way a real one
---- does, so the landing's documents are fetched the moment the join opens them.
+--- does, so the landing is fetched the moment the join opens it.
 local function room_holding(texts)
   return function(message)
     if message.type ~= 'open' then
@@ -85,6 +85,18 @@ local function room_holding(texts)
     end
     room_text(message.path, text, 0)
   end
+end
+
+--- The paths this session sent an `open` for, in order: the holds it took. A guest holds the
+--- paths its own window opened — the join's landing among them — and nothing else the room names.
+local function opened_paths()
+  local paths = {}
+  for _, message in ipairs(sent) do
+    if message.type == 'open' then
+      paths[#paths + 1] = message.path
+    end
+  end
+  return table.concat(paths, ',')
 end
 
 --- Joins a room the way a real companion reports it: the status, then the
@@ -102,7 +114,7 @@ end
 
 -- -- the join is one summary ------------------------------------------------------
 --
--- Six files mirrored, two of them the landing, both fetched by the room's answer: the join says
+-- Six files mirrored, one of them the landing, fetched by the room's answer: the join says
 -- one sentence and nothing else. What the sentence says is the landing and how many
 -- other documents the room holds: where the mirror lives and how much of it has arrived read
 -- as a row of counts, and the session's own row and `:SelvageOpen` are where a person looks.
@@ -120,9 +132,16 @@ check('  counting the room\'s other documents', summary:find('1 more file is ope
 check('  and nothing about the mirror', summary:find('mirror', 1, true) == nil, true)
 check('  at info level', notices[#notices] ~= nil and notices[#notices].level or nil, vim.log.levels.INFO)
 
+-- Only the landing is opened. The second document the room names is a path this window has not
+-- opened — a peer's, or one nobody has opened yet — so nothing is read for it and no hold goes
+-- out: the room's answer above is the landing's, and `README.md` waits for `:SelvageOpen`.
+check('the join opens only the landing', opened_paths(), 'a/one.lua')
+check('  and holds only it', table.concat(selvage.documents(), ','), 'a/one.lua')
+check('  while the other document is offered all the same', vim.tbl_contains(selvage.offered(), 'README.md'), true)
+
 -- -- a remote edit arms the caret again ---------------------------------------------
 --
--- A room document's buffer exists as soon as the handshake names it, and the room's text is a
+-- The landing's buffer exists as soon as the join opens it, and the room's text is a
 -- later message: the caret the plugin publishes in between is a caret for a document the
 -- companion does not hold yet, and the bridge drops one of those rather than inventing a
 -- document for it. A `nvim_buf_set_text` fires no `TextChanged`, so the edit that fills the

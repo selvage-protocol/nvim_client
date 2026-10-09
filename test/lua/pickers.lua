@@ -72,9 +72,10 @@ end
 
 -- -- every chooser completes on plain vim.ui.select ----------------------------------
 --
--- A guest holding two documents with two peers in the room. The stub records
--- each picker call and answers it the way a person would; nothing external
--- is installed (this Neovim has no picker plugin, which is the point).
+-- A guest whose room holds two documents, with two peers in the room: this window holds the
+-- one the join landed on, and the room's other document is offered all the same. The stub records
+-- each picker call and answers it the way a person would; nothing external is installed (this
+-- Neovim has no picker plugin, which is the point).
 
 local builtin_select = vim.ui.select
 local picked = {}
@@ -145,6 +146,13 @@ handle({
   },
 })
 check('two peers in two documents', #selvage.peers(), 2)
+
+-- The room's set names two documents and this window holds one — the join's landing. The other
+-- is a path the room names that this window does not show: no buffer here, no hold, and offered
+-- all the same, which is what the picker below reads.
+check('the room offers two documents and this window holds one', #selvage.documents(), 1)
+check('  the one it landed on', selvage.documents()[1], 'a/one.lua')
+check('  with the other offered and openable', vim.tbl_contains(selvage.offered(), 'a/two.lua'), true)
 
 -- `:SelvageOpen` with several documents asks through the editor's picker, and
 -- the answer opens.

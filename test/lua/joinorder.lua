@@ -59,7 +59,9 @@ vim.g.selvage_display_name = 'Test User'
 --
 -- The room names four documents before it publishes its listing, and answers
 -- no hold: the landing opens empty and stays empty, and the join is still the
--- summary and nothing else.
+-- summary and nothing else. Only the landing is opened — the other three are
+-- paths the room names and this window shows none of — and the listing that
+-- arrives afterwards is what re-points the landing's buffer at its mirror file.
 
 selvage.leave()
 local before = #notices
@@ -76,6 +78,17 @@ check('a late listing joins as one summary, not three notices', #notices, before
 local summary = notices[#notices] ~= nil and notices[#notices].message or ''
 check('  saying the landing, never the room id', summary:find('joined the room, opening ra.lua. 3 more files are open.', 1, true) ~= nil, true)
 check('  at info level', notices[#notices] ~= nil and notices[#notices].level or nil, vim.log.levels.INFO)
+
+-- The room names four documents and this window holds one: a path the room names that a window
+-- does not show is offered and not held, so nothing is read for it and no hold goes out.
+check('the room names four documents and this window holds one', #selvage.documents(), 1)
+check('  the one it landed on', selvage.documents()[1], 'ra.lua')
+check('  while the others are held by nobody here', vim.tbl_contains(selvage.documents(), 'rb.lua'), false)
+check(
+  '  and are offered all the same',
+  table.concat(selvage.offered(), ','),
+  'ra.lua,rb.lua,rc.lua,rd.lua'
+)
 
 local mirror_said = false
 local hint_said = false

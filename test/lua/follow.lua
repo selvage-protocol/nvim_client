@@ -735,8 +735,10 @@ handlers().on_message({
 })
 peers_report({ { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' } })
 
---- The room's text for a held document, as an `applyEdit` carrying the version the shadow
---- counts: what the sync sends a guest that opened the buffer before the text arrived.
+--- The room's text for a document this window opened, as an `applyEdit` carrying the version
+--- the shadow counts: what the sync sends a guest that took the hold before the text arrived.
+--- Only a document this window opened is held, so the room's text for a peer's other files
+--- arrives when a landing opens one of them, and not before.
 local applied_ids = 0
 local function arrive(path, text)
   applied_ids = applied_ids + 1
@@ -751,8 +753,10 @@ local function arrive(path, text)
   })
 end
 
+-- The join's landing is the room's first document, and the hold it takes is what makes the room
+-- send its text. The room's other document is offered — `:SelvageGoTo` and `:SelvageFollow`
+-- reach it — and gets no text here until a landing opens it.
 arrive('g/one.txt', 'alpha\nbeta\ngamma\n')
-arrive('g/two.txt', 'one\ntwo\n')
 presence({ cursor_for('p-ada', 'g/one.txt', 7) })
 
 check('following nobody before anything begins', selvage.following(), nil)
@@ -818,9 +822,17 @@ check('a frame that moves the peer moves the follower', cursor(), '3,2')
 check('  in the same document', vim.fn.bufname('%'), 'selvage://g/one.txt')
 check('  without saying so again', #notices, notices_after_landing)
 
--- The peer changes document: the follow goes through the ordinary open path again, leaving
--- the previous document open and landing in the new one.
+-- The peer changes document: the follow goes through the ordinary open path again — a buffer
+-- and a hold, the previous document left open — and the window moves onto it when the room's
+-- text for it arrives, which the hold is what asks for.
 presence({ cursor_for('p-ada', 'g/two.txt', 4) })
+check(
+  'a peer changing document opens their document here',
+  vim.fn.bufnr('selvage://g/two.txt') ~= -1,
+  true
+)
+check('  without taking the window before its text is here', vim.fn.bufname('%'), 'selvage://g/one.txt')
+arrive('g/two.txt', 'one\ntwo\n')
 check('a peer changing document takes the follow with them', vim.fn.bufname('%'), 'selvage://g/two.txt')
 check('  with the cursor on their caret', cursor(), '2,0')
 check(
@@ -1221,11 +1233,14 @@ presence({
   cursor_for('p-bob', 'g/two.txt', 4, '#98c379'),
 })
 
--- -- landing where the text has not arrived yet --------------------------------------
+-- -- a peer in a document this window has not opened --------------------------------
 --
--- The room names a document nobody here has text for. The buffer the listing made is empty
--- and the peer is already there: the jump goes through the ordinary open path — the buffer
--- the room offered — and the follow lands again once the text arrives.
+-- The room names a document this window has not opened, and Zed is in it. Nothing here holds
+-- it, so no caret is drawn for him and there is no document to land on: the room's own set
+-- offers the path, `:SelvageOpen` is what makes the buffer and takes the hold — the way any
+-- path this window has not opened is made — and a jump that was waiting lands when that hold
+-- brings the text. A caret the companion cannot place against a buffer is not forwarded, so a
+-- document this window has not opened reads here as a peer in no document of his.
 
 handlers().on_message({
   type = 'report',
@@ -1235,6 +1250,12 @@ check(
   'a document opened later does not steal the window',
   vim.fn.bufname('%'),
   'selvage://g/two.txt'
+)
+check('  and no buffer is made for it here', vim.fn.bufnr('selvage://g/late.txt'), -1)
+check(
+  '  while the room holding it open offers it',
+  vim.tbl_contains(selvage.offered(), 'g/late.txt'),
+  true
 )
 peers_report({
   { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' },
@@ -1253,19 +1274,29 @@ presence({
     fill = '#e06c7540',
   },
 })
+-- Zed is in the room and listed; the document the room names him in is not one this window
+-- holds, so he reads as a peer in no document here and nothing can be landed on.
+local zed = nil
+for _, person in ipairs(selvage.peers()) do
+  if person.peerId == 'p-zed' then
+    zed = person
+  end
+end
+check('a peer in a document nobody here holds is listed all the same', zed ~= nil, true)
+check('  without a path to land on', zed ~= nil and zed.path, nil)
+local before_late = #notices
 selvage.go_to('Zed')
-check(
-  'jumping where the text has not arrived shows the room document',
-  vim.fn.bufname('%'),
-  'selvage://g/late.txt'
-)
-check('  the buffer the listing offered', vim.fn.bufnr('selvage://g/late.txt') ~= -1, true)
+check('  so a jump to him waits, opening nothing', vim.fn.bufnr('selvage://g/late.txt'), -1)
+check('  and saying nothing about it', #notices, before_late)
 
--- The text arrives; the follow that starts now lands where the caret resolves rather than
--- where the empty buffer clamped it.
+-- The room's file is opened the way any path this window has not opened is, and the jump that
+-- was waiting lands when the room's text for it arrives.
+selvage.open('g/late.txt')
+check('the room\'s file opens through :SelvageOpen', vim.fn.bufname('%'), 'selvage://g/late.txt')
 arrive('g/late.txt', 'hey\n')
+check('  and the jump that waited lands on the caret', cursor(), '1,2')
 selvage.follow('Zed')
-check('following into arrived text lands on the caret', cursor(), '1,2')
+check('following there lands on the caret', cursor(), '1,2')
 check('  in the arrived document', vim.fn.bufname('%'), 'selvage://g/late.txt')
 check('  saying so', selvage.following(), 'Zed')
 
