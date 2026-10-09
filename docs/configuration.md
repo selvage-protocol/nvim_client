@@ -14,8 +14,8 @@ shortened. A name typed at the prompt that is too long says how long it is and a
 arrived from the global or the environment has nobody to re-ask, so the session is not started and
 the refusal names the setting to change.
 
-`vim.g.selvage_open_on_join = false` keeps the join from changing the window, while still opening
-the room's documents as buffers `:SelvageOpen` reaches.
+`vim.g.selvage_open_on_join = false` keeps the join from opening the room's document at all — no
+window, no buffer and no hold for it — and leaves the room's documents to `:SelvageOpen`.
 
 `vim.g.selvage_auto_save = false` keeps the room's changes out of the files on disk: a host writes
 a document the room changed by default, while a guest's mirror is not refreshed either way, so a
