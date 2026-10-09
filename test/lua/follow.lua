@@ -654,6 +654,45 @@ check(
 check('  leaving the window where it was', vim.api.nvim_get_current_buf(), nancy_buf)
 vim.fn.delete(vim.fn.getcwd() .. '/' .. link_file)
 
+-- A link that stays inside the folder is outside nothing, so the jump reaches the share itself:
+-- the name is read through a link, which is not this window's to publish, and the share takes no
+-- hold for it. There is then no document here to place on, and the jump reads that as what could
+-- not be opened rather than announcing a hold the room never received.
+local inlink_target = '.tmp/lua-follow-inlink-target.txt'
+local inlink_file = '.tmp/lua-follow-inlink.txt'
+vim.fn.writefile({ 'behind' }, inlink_target)
+vim.fn.writefile({ 'inside' }, inlink_file)
+vim.cmd('edit ' .. vim.fn.fnameescape(inlink_file))
+local inlink_path = last_of('open') and last_of('open').path
+check('the in-folder link file is held while it is a file', inlink_path ~= nil, true)
+peers_report({
+  { peer_id = 'p-ada', display_name = 'Ada', role = 'guest' },
+  { peer_id = 'p-iris', display_name = 'Iris', role = 'guest' },
+})
+presence({
+  cursor_for('p-ada', path1, 7),
+  cursor_for('p-iris', inlink_path, 1),
+})
+vim.api.nvim_buf_delete(vim.fn.bufnr(vim.fn.getcwd() .. '/' .. inlink_file), { force = true })
+vim.fn.delete(inlink_file)
+vim.uv.fs_symlink(vim.fn.getcwd() .. '/' .. inlink_target, vim.fn.getcwd() .. '/' .. inlink_file)
+local iris_buf = vim.api.nvim_get_current_buf()
+local before_inlink = #notices
+selvage.go_to('Iris')
+check(
+  'a jump through a link inside the folder refuses as not shared',
+  said_since(before_inlink, 'could not open ' .. inlink_path .. ' from the room: this window does not share it') ~= nil,
+  true
+)
+check(
+  '  and announces no hold the room never took',
+  said_since(before_inlink, inlink_path .. ' is opened in the room, so every peer receives it.') == nil,
+  true
+)
+check('  leaving the window where it was', vim.api.nvim_get_current_buf(), iris_buf)
+vim.fn.delete(inlink_file)
+vim.fn.delete(inlink_target)
+
 -- A standing follow whose document will not open says so once: every frame retries the
 -- same refusal, and the second saying carries nothing the first did not.
 local tmp_file = '.tmp/lua-follow-unopen.txt'
@@ -1469,6 +1508,48 @@ check(
   said_since(before_gone_follow, 'no participant matches "Zed"') ~= nil,
   true
 )
+
+-- A room document this window cannot share is not one a landing can open, whatever the cause: the
+-- room's listing materialises the file here, and a link standing in the mirror at that name is
+-- refused by the share rather than read through. There is no document here to stand on then, and
+-- the follow is refused with what could not be opened instead of announcing a hold the room never
+-- received — on this frame or on the next, which is where a standing follow would have reopened it.
+handlers().on_message({ type = 'report', report = { kind = 'grant', paths = { 'g/link.txt' } } })
+local mirror_root = require('selvage.mirror').root()
+vim.fn.writefile({ 'behind' }, mirror_root .. '/g/behind.txt')
+vim.fn.delete(mirror_root .. '/g/link.txt')
+vim.uv.fs_symlink(mirror_root .. '/g/behind.txt', mirror_root .. '/g/link.txt')
+peers_report({
+  { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' },
+  { peer_id = 'p-bob', display_name = 'Bob', role = 'guest' },
+  { peer_id = 'p-lin', display_name = 'Lin', role = 'guest' },
+})
+local lin = {
+  peerId = 'p-lin',
+  label = 'Lin',
+  role = 'guest',
+  path = 'g/link.txt',
+  colour = '#56b6c2',
+  fill = '#56b6c240',
+}
+presence({ cursor_for('p-ada', 'g/one.txt', 13), lin })
+local before_unsharable = #notices
+selvage.follow('Lin')
+check(
+  'a follow to a room document this window cannot share refuses with the reason',
+  said_since(before_unsharable, 'could not open g/link.txt from the room: this window does not share it') ~= nil,
+  true
+)
+check('  establishing nothing', selvage.following(), nil)
+check('  and raising no indicator', vim.g.selvage_following, nil)
+check(
+  '  and announcing no hold the room never received',
+  said_since(before_unsharable, 'g/link.txt is opened in the room, so every peer receives it.') == nil,
+  true
+)
+local after_refused_follow = #notices
+presence({ cursor_for('p-ada', 'g/one.txt', 13), lin })
+check('  and saying nothing on the frame after', #notices, after_refused_follow)
 
 -- -- a deliberate local move ends the follow ------------------------------------------
 --
