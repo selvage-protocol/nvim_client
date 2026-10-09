@@ -5,7 +5,7 @@ it to the room, and nothing outside it is ever served. The root is fixed for the
 `:cd`, `:lcd` or `:tcd` afterwards moves where Neovim looks, not what the room can see, and
 opening a file outside it earns a warning.
 
-That listing is the room's **grant** (`DESIGN.md` §4.2, `PROTOCOL.md` §5): files and never content,
+That listing is the room's **grant** (`PROTOCOL.md` §5): files and never content,
 replaced wholesale. A host reads its own working copy when the session starts and writes the files
 it holds: no directories, ascending by UTF-16 code unit, with dependency and build trees and
 environment files left out, a file whose own name declares a format a room cannot carry left out
