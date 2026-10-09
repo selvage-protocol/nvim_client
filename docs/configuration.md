@@ -27,3 +27,9 @@ a copied invite links to is the room's own server, over the scheme a browser spe
 `https://`, `ws://` as `http://`). A server started with `--page <dir>` serves the guest page from
 its own origin.
 `vim.g.selvage_fetch_timeout_ms` bounds how long a fetch waits for the room to answer.
+
+Presence is drawn with the terminal's own colours when `'termguicolors'` is off, as it is by
+default: beside each truecolor value the client sets, a peer's caret and selection fill, the seat
+faces on the session bar and its crown, your own face and the follow mark each carry the nearest
+xterm-256 colour, so a peer is visible on a stock Neovim and on a 256-colour terminal with
+nothing configured. Turn `'termguicolors'` on and the same groups keep the truecolor values.
