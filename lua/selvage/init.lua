@@ -47,6 +47,11 @@ local state = {
   invite = nil,
   --- @type table<string, table> room path to document
   documents = {},
+  --- The room's open-document set, as the room's own reports name it: every path some peer
+  --- holds open, which is each peer's statement about itself (`PROTOCOL.md` §13.7) and not
+  --- this session's set. A path in it with no buffer here is offered and opened lazily, the
+  --- way a granted path is; this session holds a buffer only for what its own window opened.
+  room_documents = {},
   --- The room's grant: the paths the host listed when the session started, in the order the
   --- room carries them. A listing, never content — a path here may have no buffer and no text
   --- behind it yet (`DESIGN.md` §4.2).
@@ -186,27 +191,36 @@ function M.documents()
   return paths
 end
 
---- What the room offers: its grant, and the paths it holds open, ordered as `documents()` is.
+--- What the room offers: its grant, the paths the room holds open, and the documents this
+--- session holds, ordered as `documents()` is.
 ---
 --- The union is deliberate rather than the grant alone, so a server that has no grant — one
 --- older than `doc.grant` — still offers everything the room knows, and a document shared after
 --- the listing was published is reachable as well. What this is *not* is a statement of what
---- this session holds: a granted path with no buffer behind it is offered and openable, and
---- `documents()` is still the answer to which paths it holds.
+--- this session holds. The room's open-document set is a peer's statement about itself
+--- (`PROTOCOL.md` §13.7): a path in it with no buffer behind it is offered and openable, and
+--- `documents()` is still the answer to which paths this session holds. A path a listing took
+--- away is not offered from the room's set again while another peer holds it — `drop_documents`
+--- is what takes it away and `state.dropped` is what keeps it away.
 function M.offered()
   local seen = {}
   local paths = {}
-  for _, path in ipairs(state.grant) do
+  local function add(path)
     if not seen[path] then
       seen[path] = true
       paths[#paths + 1] = path
     end
   end
-  for _, path in ipairs(M.documents()) do
-    if not seen[path] then
-      seen[path] = true
-      paths[#paths + 1] = path
+  for _, path in ipairs(state.grant) do
+    add(path)
+  end
+  for path in pairs(state.room_documents) do
+    if not state.dropped[path] then
+      add(path)
     end
+  end
+  for _, path in ipairs(M.documents()) do
+    add(path)
   end
   table.sort(paths)
   return paths
@@ -1363,8 +1377,9 @@ end
 --- Opens one of the room's documents in the current window.
 ---
 --- With no argument and one document, that document; with several, the user is asked which.
---- What is offered is the room's grant unioned with the documents it holds, so a path the host
---- listed and nobody has opened yet is offered too.
+--- What is offered is the room's grant unioned with the documents the room holds open and the
+--- ones this session holds, so a path the host listed and nobody has opened yet is offered too,
+--- and so is a path a peer holds open that this window has no buffer for.
 ---
 --- A host is refused: the room's documents are the host's own files, already in its buffer list,
 --- and the command means the copy the room holds that a window does not have. Its own set is not
@@ -3291,6 +3306,7 @@ local function reset(land, keep_mirror)
   -- says the room closed under the person and the cache holds the only copy of their work.
   state.root = nil
   state.grant = {}
+  state.room_documents = {}
   state.unlisted = {}
   state.unwritable = {}
   state.unmutated = {}
@@ -3473,21 +3489,39 @@ local function on_report(report)
   end
   if report.kind == 'documents' then
     if is_peer() then
+      -- The room's open-document set is the room's own word about who holds what, and it is
+      -- not this session's set: this session holds a buffer only for a path its own window
+      -- opened — the join's landing, `:SelvageOpen`, a follow, a fetch — so a path in the
+      -- room's set with no buffer here is offered and opened then, the way a granted path is.
+      -- A buffer and a hold for every path the room names would put every peer's open files
+      -- in this editor, and the hold would keep the room naming them for the life of the
+      -- session.
+      local named = {}
       local first = nil
       for _, path in ipairs(report.documents) do
+        named[path] = true
         -- A path the listing took away is still in the room's set while another peer holds it.
-        if not state.dropped[path] then
-          local bufnr = guest_buffer(path)
-          first = first or bufnr
-          share(bufnr, path)
+        if first == nil and not state.dropped[path] then
+          first = path
         end
       end
+      -- A path the room's set stops naming is one no peer holds open any more. A hold this
+      -- window takes is in that set — taking it is what puts it there — so what the set no
+      -- longer names is a hold the room's own naming took, the join's landing, and the room's
+      -- word is the one that governs: the path goes with the name.
+      for path in pairs(state.room_documents) do
+        if not named[path] and state.documents[path] ~= nil then
+          let_go(state.documents[path])
+        end
+      end
+      state.room_documents = named
       -- The join is said here, where the room's document set is known, rather than when the
       -- handshake named the room: the sentence carries the landing, and a room with nothing in
       -- it is a join with a sentence of its own. The landing is the first document the room
-      -- names after the join — a later one gets a buffer and waits for `:SelvageOpen`, because
-      -- taking the window then would interrupt what the guest is already editing — so a room
-      -- that was empty at the join still lands the first document that fills it.
+      -- names after the join — a later one waits for `:SelvageOpen`, because taking the window
+      -- then would interrupt what the guest is already editing — so a room that was empty at
+      -- the join still lands the first document that fills it. It is the one document opened
+      -- without being asked for, and it goes through the open `:SelvageOpen` uses.
       local lands = vim.g.selvage_open_on_join ~= false
       if state.auto_open and first ~= nil then
         state.auto_open = false
@@ -3495,7 +3529,7 @@ local function on_report(report)
           -- The landing is the join's own window placement: its empty buffer is what the
           -- summary's fetched count already accounts for, so the unfetched hint stays silent.
           state.suppress_unfetched = true
-          show(first)
+          reveal(first)
           state.suppress_unfetched = false
         end
         if not state.join_said then

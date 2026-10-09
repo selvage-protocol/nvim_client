@@ -126,6 +126,20 @@ local function said_since(from, needle)
   return nil
 end
 
+--- How many messages of `kind` this session sent for `path` since `from`. The buffers a session
+--- made outlive it — leaving leaves them where they are — so a buffer left by an earlier section
+--- is not evidence about this one, and the wire is: an `open` is what takes a hold in the room,
+--- and a `close` is what gives it back.
+local function sent_of(kind, path, from)
+  local count = 0
+  for index = from + 1, #sent do
+    if sent[index].type == kind and sent[index].path == path then
+      count = count + 1
+    end
+  end
+  return count
+end
+
 -- The host confirm names the folder the session shares: the root is otherwise invisible until
 -- a file outside it is opened. (The session at the top of this file hosted before `vim.notify`
 -- was captured, so the check below names the next hosting instead.)
@@ -359,14 +373,20 @@ check(
   true
 )
 
--- A document the host opens afterwards gets a buffer but does not take the window: the guest
--- may be editing the first one.
+-- A document the host opens afterwards is offered without taking the window: the guest may be
+-- editing the first one, and a path the room holds open that this window has not opened gets no
+-- buffer and no hold here — it is one `:SelvageOpen` reaches, the way a granted path is.
 handlers().on_message({
   type = 'report',
   report = { kind = 'documents', documents = { 'workspace/README.md', 'workspace/other.lua' } },
 })
 check('a document opened later does not steal the window', vim.fn.bufname('%'), 'selvage://workspace/README.md')
-check('  and it is reachable as a buffer', vim.fn.bufnr('selvage://workspace/other.lua') ~= -1, true)
+check('  and no buffer is made for it here', vim.fn.bufnr('selvage://workspace/other.lua'), -1)
+check(
+  '  while the room holding it open still offers it',
+  vim.tbl_contains(selvage.offered(), 'workspace/other.lua'),
+  true
+)
 
 vim.cmd('SelvageOpen workspace/other.lua')
 check(':SelvageOpen shows a document by its room path', vim.fn.bufname('%'), 'selvage://workspace/other.lua')
@@ -437,25 +457,81 @@ handlers().on_message({ type = 'report', report = { kind = 'documents', document
 check('  and the first document to arrive is shown', vim.fn.bufname('%'), 'selvage://late.md')
 check('  without a sentence about it', #notices, before_late)
 
--- The escape hatch: `vim.g.selvage_open_on_join = false` keeps the buffer but not the window.
+-- The escape hatch: `vim.g.selvage_open_on_join = false` keeps the join from opening the room's
+-- document at all — no window, no buffer and no hold — and `:SelvageOpen` is what reaches it.
 selvage.leave()
 vim.g.selvage_open_on_join = false
 selvage.join('ws://127.0.0.1:1/session?room=r-off&token=t')
 vim.cmd('edit! ' .. path)
 local before_off = #notices
+local before_off_sent = #sent
 handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-off' })
 handlers().on_message({
   type = 'report',
   report = { kind = 'documents', documents = { 'workspace/README.md' } },
 })
 check('the escape hatch leaves the window alone', vim.fn.bufname('%'), unrelated)
-check('  and the document is still opened as a buffer', vim.fn.bufnr('selvage://workspace/README.md') ~= -1, true)
+check('  and opens nothing for the room', sent_of('open', 'workspace/README.md', before_off_sent), 0)
+check('  and holds nothing', #selvage.documents(), 0)
+check(
+  '  while the room holding it open still offers it',
+  vim.tbl_contains(selvage.offered(), 'workspace/README.md'),
+  true
+)
 check(
   '  and the join claims no landing',
   said_since(before_off, 'joined the room') ~= nil,
   true
 )
 vim.g.selvage_open_on_join = nil
+
+-- -- the room's open-document set, and what this window holds ---------------------------------
+--
+-- A guest holds the path the join landed on and nothing else: a document the room names that
+-- this window does not show is offered — `:SelvageOpen` and a follow reach it — and gets no
+-- buffer and no hold here. Taking a hold is what puts a path in the room's set, so a path the
+-- set stops naming is one no peer holds open any more, and the hold the room's own naming took
+-- goes with the name.
+
+selvage.leave()
+vim.cmd('edit! ' .. path)
+selvage.join('ws://127.0.0.1:1/session?room=r-docs&token=t')
+handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-docs' })
+local before_docs = #sent
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'open/one.lua', 'open/two.lua' } },
+})
+check('the join lands on the first document', vim.fn.bufname('%'), 'selvage://open/one.lua')
+check('  and opens it in the room', sent_of('open', 'open/one.lua', before_docs), 1)
+check('  while a document it does not show is not opened', sent_of('open', 'open/two.lua', before_docs), 0)
+check('  and not held', #selvage.documents(), 1)
+check(
+  '  and both are offered, so :SelvageOpen reaches it',
+  table.concat(selvage.offered(), ','),
+  'open/one.lua,open/two.lua'
+)
+
+-- The room's set shrinks: a path no peer holds open any more.
+handlers().on_message({
+  type = 'report',
+  report = { kind = 'documents', documents = { 'open/one.lua' } },
+})
+check('a set that stops naming a path holds nothing for it', #selvage.documents(), 1)
+check('  and offers only what it names', table.concat(selvage.offered(), ','), 'open/one.lua')
+
+-- The path the landing held goes when the room stops naming it: no peer holds it open, and a
+-- hold taken because the room named the path is the room's to take back.
+local before_release = #sent
+handlers().on_message({ type = 'report', report = { kind = 'documents', documents = {} } })
+check(
+  'a set that stops naming the landing gives its hold back',
+  sent_of('close', 'open/one.lua', before_release),
+  1
+)
+check('  and it is no longer held', #selvage.documents(), 0)
+check('  and no longer offered', #selvage.offered(), 0)
+check('  while the buffer it was shown in stays', vim.fn.bufnr('selvage://open/one.lua') ~= -1, true)
 
 -- -- presence: the caret out, the peers' carets in ------------------------------
 --
