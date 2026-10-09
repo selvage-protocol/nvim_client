@@ -1059,14 +1059,102 @@ test('a document opened after a peer moved draws the peer', async () => {
     },
   ];
   it.engine.resolved.set('notes.txt', { anchor: 0, head: 2 });
-  assert.equal(it.sent.filter((notification) => notification.type === 'presence').length, 0);
-
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
   const presence = it.sent.filter((notification) => notification.type === 'presence').at(-1);
   assert.equal(presence?.cursors.length, 1);
   assert.equal(presence?.cursors[0]?.label, 'Bob');
   assert.equal(presence?.cursors[0]?.path, 'notes.txt');
   assert.equal(presence?.cursors[0]?.head, 2);
+});
+
+test('a peer in a document this window has not opened is forwarded with its path', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  it.engine.presences = [
+    {
+      clientId: 2,
+      peer: { peer_id: 'p-bob', display_name: 'Bob', role: 'guest' },
+      state: { path: 'notes.txt', selection: { anchor: { assoc: 0 }, head: { assoc: 0 } } },
+    },
+  ];
+  // Nothing resolves it: the replica holds no document for the path, which is what a window
+  // that has not opened it looks like from here.
+  it.engine.emit({ type: 'presenceChanged', presence: it.engine.presences });
+  const presence = it.sent.filter((notification) => notification.type === 'presence').at(-1);
+  assert.equal(presence?.cursors.length, 1, 'the peer reaches the front-end, drawn or not');
+  assert.deepEqual(presence?.cursors[0], {
+    peerId: 'p-bob',
+    label: 'Bob',
+    role: 'guest',
+    path: 'notes.txt',
+  });
+  assert.equal(presence?.cursors[0]?.head, undefined, 'and no caret this replica cannot place');
+  assert.equal(presence?.cursors[0]?.anchor, undefined);
+
+  // A state that carries a document and no selection is one of these too: a peer in an empty
+  // document publishes no anchors, and their document is still where they are. This window's
+  // own presence is nobody's cursor to draw.
+  it.engine.presences = [
+    {
+      clientId: 3,
+      peer: { peer_id: 'p-ann', display_name: 'Ann', role: 'guest' },
+      state: { path: 'empty.txt' },
+    },
+    {
+      clientId: 4,
+      peer: { peer_id: 'p-local', display_name: 'neovim', role: 'host' },
+      state: { path: 'notes.txt' },
+    },
+  ];
+  it.engine.emit({ type: 'presenceChanged', presence: it.engine.presences });
+  const second = it.sent.filter((notification) => notification.type === 'presence').at(-1);
+  assert.deepEqual(second?.cursors, [
+    { peerId: 'p-ann', label: 'Ann', role: 'guest', path: 'empty.txt' },
+  ]);
+});
+
+test('an unresolved peer wears the colour of their seat', async () => {
+  const it = harness('host', [], [{ peer_id: 'p-bob', display_name: 'Bob', role: 'guest' }]);
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  it.engine.presences = [
+    {
+      clientId: 2,
+      peer: { peer_id: 'p-bob', display_name: 'Bob', role: 'guest' },
+      state: { path: 'notes.txt' },
+    },
+  ];
+  it.engine.emit({ type: 'presenceChanged', presence: it.engine.presences });
+  const cursor = it.sent.filter((notification) => notification.type === 'presence').at(-1)?.cursors[0];
+  assert.equal(cursor?.colour, '#94e2d5', 'the seat Bob is drawn in');
+  assert.equal(cursor?.fill, '#94e2d540');
+  assert.equal(cursor?.head, undefined, 'with still no caret this replica can place');
+});
+
+test('a peer that leaves a document this window does not hold is no longer named', async () => {
+  const it = harness('host');
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
+  it.engine.presences = [
+    {
+      clientId: 2,
+      peer: { peer_id: 'p-bob', display_name: 'Bob', role: 'guest' },
+      state: { path: 'notes.txt' },
+    },
+  ];
+  it.engine.emit({ type: 'presenceChanged', presence: it.engine.presences });
+  assert.equal(
+    it.sent.filter((notification) => notification.type === 'presence').at(-1)?.cursors.length,
+    1,
+  );
+  // The peer closes the document: their awareness carries no path, and the front-end is told so
+  // by their absence rather than by an entry with nothing in it.
+  it.engine.presences = [
+    { clientId: 2, peer: { peer_id: 'p-bob', display_name: 'Bob', role: 'guest' }, state: {} },
+  ];
+  it.engine.emit({ type: 'presenceChanged', presence: it.engine.presences });
+  assert.deepEqual(
+    it.sent.filter((notification) => notification.type === 'presence').at(-1)?.cursors,
+    [],
+  );
 });
 
 test('a mid-session rename reaches the engine and moves no document', async () => {

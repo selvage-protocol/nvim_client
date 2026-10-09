@@ -17,6 +17,26 @@
 
 import type { Cursor } from '../vendor/bridge/index.ts';
 
+/**
+ * One entry of a `presence` message: a session peer, the document the room's presence puts
+ * them in, and the caret this replica can place for them where it can place one.
+ *
+ * `anchor` and `head` are absent when this replica could not resolve the peer's selection — a
+ * document this window has not opened, or a state whose anchors name content that is not here
+ * yet. The peer and their document are the room's own word about where they are (`§8.1`), and
+ * they are what a front-end needs to open the document and take the hold that brings the caret;
+ * a cursor at offset zero would be an invention, which is why the offsets are left out rather
+ * than clamped.
+ */
+export interface PresenceCursor extends Omit<Cursor, 'anchor' | 'head' | 'colour' | 'fill'> {
+  /** Selection endpoints as buffer offsets, where this replica could resolve them. */
+  anchor?: number;
+  head?: number;
+  /** The peer's colour, filled in by the editor host from the seat the room gave them. */
+  colour?: string;
+  fill?: string;
+}
+
 /** A message the front-end sends. */
 export type Request =
   /**
@@ -122,8 +142,12 @@ export type Notification =
    * the status it was told at the seat (`PROTOCOL.md` §13.4).
    */
   | { type: 'report'; report: unknown }
-  /** The remote carets this replica can resolve, in buffer offsets. */
-  | { type: 'presence'; cursors: Cursor[] }
+  /**
+   * The remote carets: each peer the room's presence names, with the offsets this replica
+   * resolved for them where it could. An entry with no `anchor`/`head` is a peer in a document
+   * whose caret this replica cannot place yet.
+   */
+  | { type: 'presence'; cursors: PresenceCursor[] }
   /**
    * The fixed words the front-end shows and says, sent once as the process starts. They are the
    * web client's, from `vendor/bridge/words.ts`; a `%s` in a sentence is where a name goes.

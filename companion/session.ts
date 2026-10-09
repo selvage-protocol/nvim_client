@@ -17,7 +17,7 @@ import {
   isBinaryNamedPath,
   isGrantedPath,
 } from '../vendor/bridge/index.ts';
-import type { Engine, TextChange } from '../vendor/bridge/index.ts';
+import type { Cursor, Engine, TextChange } from '../vendor/bridge/index.ts';
 import { code as errCode, isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
@@ -26,7 +26,7 @@ import type { GrantCut, GrantEnumeration } from './grant.ts';
 import { isRequest } from './ipc.ts';
 import { UnreadableInvite, hostRoom, joinRoom } from './relay.ts';
 import type { ListingSource } from './relay.ts';
-import type { Notification, Request } from './ipc.ts';
+import type { Notification, PresenceCursor, Request } from './ipc.ts';
 
 /**
  * How long a burst of file-system events is gathered for before the shared folder is read again.
@@ -438,8 +438,51 @@ export class Companion {
    */
   private renderCursors(): void {
     if (this.bridge !== undefined) {
-      this.editor.renderCursors(this.bridge.cursors());
+      this.paintCursors(this.bridge.cursors());
     }
+  }
+
+  /**
+   * One `presence` message: every caret the bridge resolved, and every peer it could not for
+   * the reason above, each in the document the room's presence names for them.
+   */
+  private paintCursors(resolved: Cursor[]): void {
+    this.editor.renderCursors([...resolved, ...this.unresolvedPresence(resolved)]);
+  }
+
+  /**
+   * The peers the room's presence names whose caret this replica could not resolve, which is
+   * every presence with a document that the bridge's own `cursors()` did not answer with.
+   *
+   * The two are read from one awareness state in one turn, so a peer is in exactly one of them.
+   * A state carrying a document and no selection is one of these too: a peer in an empty
+   * document publishes no anchors, and their document is still where they are.
+   */
+  private unresolvedPresence(resolved: readonly Cursor[]): PresenceCursor[] {
+    const engine = this.engine;
+    if (engine === undefined) {
+      return [];
+    }
+    const local = engine.session().peer.peer_id;
+    const drawn = new Set(resolved.map((cursor) => cursor.peerId));
+    const unresolved: PresenceCursor[] = [];
+    for (const presence of engine.presence()) {
+      const peer = presence.peer;
+      const path = presence.state?.path;
+      if (peer === undefined || path === undefined || peer.peer_id === local) {
+        continue;
+      }
+      if (drawn.has(peer.peer_id)) {
+        continue;
+      }
+      unresolved.push({
+        peerId: peer.peer_id,
+        label: peer.display_name === '' ? peer.peer_id : peer.display_name,
+        role: peer.role,
+        path,
+      });
+    }
+    return unresolved;
   }
 
   /** Stops sharing a document, whether or not the room's text ever arrived for it. */
@@ -548,7 +591,21 @@ export class Companion {
     this.grantReported = false;
     this.bridge = new SessionBridge({
       engine,
-      host: this.editor,
+      // The bridge draws remote carets itself, on every presence change, and it can resolve a
+      // caret only against a document this replica holds. Its drawing goes through the session
+      // so that one message carries the room's whole presence: what the bridge resolved, and —
+      // from `unresolvedPresence` — the peers it could not, each with the document the room's
+      // own presence puts them in. A front-end opens that document to reach them, and the hold
+      // it takes is what brings the text the caret resolves against.
+      host: {
+        text: (path) => this.editor.text(path),
+        lineEnding: (path) => this.editor.lineEnding(path),
+        applyChange: (path, change) => this.editor.applyChange(path, change),
+        save: (path) => this.editor.save(path),
+        readGrantedFile: (path) => this.editor.readGrantedFile(path),
+        renderCursors: (cursors) => this.paintCursors(cursors),
+        report: (report) => this.editor.report(report),
+      },
       autoSave: autoSave ?? this.autoSave,
     });
     // The event that brings a document's text is the moment a document opened before it can be
