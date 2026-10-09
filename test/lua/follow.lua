@@ -785,6 +785,12 @@ check(
   true
 )
 check(
+  '  as an xterm index too, for a terminal with no truecolor',
+  vim.api.nvim_get_hl(0, { name = 'SelvageFollow' }).ctermbg,
+  75
+)
+check('  with the name in the terminal\'s black', vim.api.nvim_get_hl(0, { name = 'SelvageFollow' }).ctermfg, 0)
+check(
   '  and marks the face it follows on the bar',
   vim.api.nvim_get_option_value('winbar', { win = 0 }):find('%%#SelvageFollowed#◉%%#SelvagePeer%d+# Ad %%%*') ~= nil,
   true
