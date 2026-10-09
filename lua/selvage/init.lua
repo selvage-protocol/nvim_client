@@ -3030,6 +3030,33 @@ local function let_go(document)
   state.documents[document.path] = nil
 end
 
+--- The path a refusal report names, where this window holds one, or nil.
+---
+--- The companion reports a hold the server refused as its sentence — `the server refused to open
+--- <path>: <reason>` — and the bridge behind it spells the same one, so the sentence is what
+--- carries the path. This window acts on the path, and the paths it holds are the whole
+--- candidate set, so the sentence is read back against them rather than against a pattern: the
+--- longest match wins, because a path is an opaque string and one path can be another's prefix
+--- followed by the same separator. A refusal naming a path this window holds nothing for is none
+--- of its business and answers nil.
+---
+--- @param message unknown
+--- @return string|nil
+local function refused_open_path(message)
+  local prefix = 'the server refused to open '
+  if type(message) ~= 'string' or message:sub(1, #prefix) ~= prefix then
+    return nil
+  end
+  local rest = message:sub(#prefix + 1)
+  local best = nil
+  for path in pairs(state.documents) do
+    if (best == nil or #path > #best) and rest:sub(1, #path + 2) == path .. ': ' then
+      best = path
+    end
+  end
+  return best
+end
+
 --- A wiped buffer is not a buffer anymore: the room is told, and the path stops being held
 --- here. Without this the room keeps the document for the life of the session, offering
 --- edits to a `Document` that answers every one of them `ok = false`, and the companion
@@ -3995,6 +4022,16 @@ local function on_report(report)
       notify('the room is full — it seats no more people.', vim.log.levels.ERROR)
     else
       notify(tostring(report.message or ''), vim.log.levels.ERROR)
+    end
+    -- A hold the server refused is one no text will ever fill. The room never took the `open`, so
+    -- the documents report that follows never names the path and no frame reconciles the buffer:
+    -- left standing, the hold is offered to the room for the rest of the session and the person
+    -- has a document nobody else can see. It is let go the way the room's own word releases one,
+    -- and the buffer stays where it is — the refusal is about the room, not about the window the
+    -- person may be looking at.
+    local refused = refused_open_path(report.message)
+    if refused ~= nil then
+      let_go(state.documents[refused])
     end
   elseif report.kind == 'applyRefused' then
     notify(

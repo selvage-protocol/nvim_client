@@ -535,6 +535,35 @@ check('  so it is still held', #selvage.documents(), 1)
 check('  and still offered', table.concat(selvage.offered(), ','), 'open/one.lua')
 check('  while the buffer it was shown in stays', vim.fn.bufnr('selvage://open/one.lua') ~= -1, true)
 
+-- A hold the server refused is the other half of the same question, and the companion says which
+-- one it is: the refusal arrives as its own sentence naming the path, where a set that has not
+-- heard the hold yet arrives as a set. The room never took this `open`, so no documents report
+-- will ever name it and no frame reconciles the buffer — left standing, the path would be offered
+-- to the room for the rest of the session. It is let go the way the room's own word releases one,
+-- and the buffer stays where it is: the refusal is about the room, not about the person's window.
+local before_refusal = #sent
+handlers().on_message({
+  type = 'report',
+  report = {
+    kind = 'sessionError',
+    code = 'error',
+    message = 'the server refused to open open/one.lua: the connection is gone',
+  },
+})
+check('a refusal names the path it refused, and the hold goes', #selvage.documents(), 0)
+check(
+  '  with the room told, the way the release loop tells it',
+  sent_of('close', 'open/one.lua', before_refusal),
+  1
+)
+check('  and the path no longer offered', vim.tbl_contains(selvage.offered(), 'open/one.lua'), false)
+check('  while the person keeps the buffer', vim.fn.bufnr('selvage://open/one.lua') ~= -1, true)
+check(
+  '  and the refusal is still said to them',
+  said_since(before_refusal, 'the server refused to open open/one.lua') ~= nil,
+  true
+)
+
 -- -- presence: the caret out, the peers' carets in ------------------------------
 --
 -- The two directions of the IPC's `selection`/`presence`. This user's caret reaches the room
