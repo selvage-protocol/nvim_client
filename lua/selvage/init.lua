@@ -116,6 +116,9 @@ local state = {
   --- report, on top of the marks the draw already recreates.
   peer_paints = {},
   peer_count = 0,
+  --- The last presence report, whole: every peer the room puts in a document, with the offsets
+  --- this window resolved for them where it could. `peers` below is the subset it drew; a path
+  --- is read from here for a peer whose caret is not drawn here (`presence_by_id`).
   cursors = {},
   -- The peers the last presence report drew, as rows for `:SelvagePeers` to print.
   peers = {},
@@ -551,6 +554,11 @@ end
 --- selected something. Every mark is recreated rather than moved: a mark travels with the
 --- buffer's edits, but where a peer *is* changes, and a mark for a peer the report no longer
 --- names would otherwise stay behind.
+---
+--- An entry this window cannot draw — a document it has not opened, or an anchor that does not
+--- resolve here — draws nothing and is kept in `state.cursors` all the same: the peer and their
+--- document are still the room's word about where they are, which is what a follow or a jump
+--- opens to reach them, and what `M.peers()` reads a row's `path` from.
 ---
 --- The caret is a block cursor on the cell *before* the room's offset: the character the peer
 --- is in front of, not the one it has reached. The room's offset names a position between two
