@@ -151,6 +151,11 @@ local state = {
   --- name. A one-shot follow — every room event that could have brought the text tries it
   --- again, and the first landing, refusal or departure clears it.
   pending_go_to = nil,
+  --- The stalled landing a deadline is armed for: the establishment it belongs to (the follow or
+  --- the pending go-to table itself, compared by identity), the label its sentence names, and the
+  --- session it was armed in. A landing that arrives clears the slot, a second establishment
+  --- replaces it, and a timer that finds another one is a landing the room has already moved past.
+  landing_wait = nil,
   generation = 0,
   -- Whether the next document the room names is still the one to put in front of the user.
   -- Set when a guest joins; cleared by the first document shown.
@@ -2536,6 +2541,9 @@ end_follow = function(why)
   end
   state.following = nil
   state.follow_landed = nil
+  -- A deadline armed for this establishment has nothing left to refuse: a second follow that
+  -- starts before it fires arms its own, and the timer that finds this one gone stands down.
+  state.landing_wait = nil
   vim.g.selvage_following = nil
   if why == 'silent' then
     clear_indicator()
@@ -2564,6 +2572,71 @@ end_follow = function(why)
   end
 end
 
+--- How long a landing that has opened a document waits for the peer's caret before giving up.
+---
+--- A landing takes its document from the room's own presence and opens it, and what resolves the
+--- caret is the room's text arriving over the ordinary sync — a frame or two away in a working
+--- session. What this bounds is silence rather than work: a room that never sends the text, or
+--- anchors this replica never resolves, would otherwise leave the establishment standing for ever
+--- with nothing said. A landing that arrives clears the wait, so a session that works never
+--- reaches the deadline — it is not a sleep, it is the end of a wait no frame answered.
+--- `vim.g.selvage_landing_timeout_ms` sets it for a run that knows better than the default.
+---
+--- @return integer milliseconds
+local function landing_timeout_ms()
+  local configured = tonumber(vim.g.selvage_landing_timeout_ms)
+  if configured ~= nil and configured > 0 then
+    return configured
+  end
+  return 10000
+end
+
+--- Arms the one deadline a stalled landing gets.
+---
+--- `subject` is the establishment itself — the follow table or the pending go-to table — and its
+--- identity is the guard: a landing that arrives clears the slot, a second follow or go-to fills
+--- it with its own table, and a timer that finds either is one whose establishment has already
+--- been answered or replaced, and is not this one's to refuse. `kind` is which establishment it
+--- is, so the deadline ends the right one, and the session counter keeps a timer armed in a room
+--- that has since gone from speaking into the next one.
+---
+--- @param subject table
+--- @param kind 'follow'|'goTo'
+--- @param label string
+local function wait_for_caret(subject, kind, label)
+  local wait = { subject = subject, kind = kind, label = label, generation = state.generation }
+  state.landing_wait = wait
+  vim.defer_fn(function()
+    if state.landing_wait ~= wait or state.generation ~= wait.generation then
+      return
+    end
+    state.landing_wait = nil
+    if wait.kind == 'follow' then
+      -- The establishment is refused rather than left standing: the chip would say the follow
+      -- is where the peer is, which is the one thing this deadline is the witness it never did.
+      end_follow('stopped')
+    else
+      state.pending_go_to = nil
+    end
+    local waited = seconds(landing_timeout_ms())
+    if wait.kind == 'follow' then
+      notify(
+        ("%s's caret did not arrive within %ds; stopped following."):format(wait.label, waited),
+        vim.log.levels.WARN
+      )
+    else
+      notify(("%s's caret did not arrive within %ds."):format(wait.label, waited), vim.log.levels.WARN)
+    end
+  end, landing_timeout_ms())
+  return wait
+end
+
+--- Ends a wait whose establishment has been answered: a landing, a terminal refusal or a
+--- departure clears it, so the deadline is left for the state that is still waiting alone.
+local function caret_arrived()
+  state.landing_wait = nil
+end
+
 --- Attempts one landing of the standing follow. Indicates only on success: a miss leaves the
 --- indicator where it was, so refusing an establishment touches nothing a standing follow owns.
 --- Nothing is said when a follow begins, as on the web: the window's `Following` chip shows it.
@@ -2582,6 +2655,7 @@ local function land_follow()
   local ok, reason, err = land(following.peerId)
   if ok then
     set_indicator()
+    caret_arrived()
   end
   return ok, reason, err
 end
@@ -2602,6 +2676,18 @@ local function follow_frame()
     -- Drawable again: the next undrawable stretch is news again too.
     following.gone_warned = false
     return true
+  end
+  if reason == 'waiting' then
+    -- The stall this deadline exists for: the room has the document and its text has not
+    -- resolved the caret here yet. Armed once and not per frame, so frames that name the peer
+    -- without resolving them are not what the wait measures; a landing clears it above.
+    if state.landing_wait == nil then
+      wait_for_caret(following, 'follow', following.label)
+    end
+  else
+    -- Every other miss has a sentence of its own or nothing to wait for: a peer between
+    -- documents, an open the room refused. The wait belongs to the stall above alone.
+    caret_arrived()
   end
   if reason == 'open-failed' then
     -- Said once per document: every frame retries the same refusal, and the second saying
@@ -2649,6 +2735,7 @@ local function begin_follow(row)
   -- A pending go-to is superseded: the follow is the newer navigation, and a late frame
   -- for the old target must not yank the window back to it.
   state.pending_go_to = nil
+  caret_arrived()
   local previous = state.following
   state.following = {
     peerId = row.peerId,
@@ -2669,6 +2756,10 @@ local function begin_follow(row)
     else
       notify(("nothing to follow: %s's caret does not resolve here."):format(row.label), vim.log.levels.WARN)
     end
+  elseif reason == 'waiting' then
+    -- The establishment is on its way rather than refused, and this is the deadline it gets:
+    -- the document is opened and its text is what the caret resolves against.
+    wait_for_caret(state.following, 'follow', row.label)
   end
 end
 
@@ -2678,9 +2769,18 @@ end
 --- follow: every room event that could have brought the text tries it again, and the first
 --- landing, refusal or departure clears it. It holds no resources — one slot, replaced by
 --- the next go-to, cleared by a follow — and reports nothing while it waits: waiting is not
---- a failure yet, and any timer here would be a magic number.
+--- a failure yet. What bounds it is the deadline a document already opened gets: the peer's
+--- document is here and the caret has not resolved against it, so the room's text is the
+--- effect being waited on and silence is what the deadline answers.
 local function pend_go_to(row)
   state.pending_go_to = { peerId = row.peerId, label = row.label }
+  if row.path ~= nil then
+    wait_for_caret(state.pending_go_to, 'goTo', row.label)
+  else
+    -- A peer in no document has nothing to resolve a caret against, so there is no stall to
+    -- bound yet: the presence frame that puts them in one is what arms the deadline.
+    caret_arrived()
+  end
 end
 
 --- Tries the pending go-to again: presence, an applied edit, the documents and the
@@ -2695,25 +2795,36 @@ local function retry_go_to()
     -- The room no longer names them: a peer who left between the command and the text
     -- matches nobody now, the same refusal a stale picker choice reads.
     state.pending_go_to = nil
+    caret_arrived()
     notify(('no participant matches "%s".'):format(pending.label), vim.log.levels.WARN)
     return
   end
   pending.label = row.label
   if row.path == nil then
+    -- Back in no document: there is no text to arrive for, so the deadline goes with the
+    -- document rather than speaking for a peer who is nowhere to land.
+    caret_arrived()
     return
   end
   local ok, reason, err = land(pending.peerId)
   if ok then
     state.pending_go_to = nil
+    caret_arrived()
   elseif reason == 'open-failed' then
     state.pending_go_to = nil
+    caret_arrived()
     notify(
       ('could not open %s from the room: %s.'):format(row.path, tostring(err)),
       vim.log.levels.ERROR
     )
   elseif reason ~= 'unknown' and reason ~= 'waiting' then
     state.pending_go_to = nil
+    caret_arrived()
     notify_words('goTo', 'cursorNotFound', vim.log.levels.WARN, row.label)
+  elseif state.landing_wait == nil then
+    -- Still waiting on the document's text, and no deadline stands for it: arm the one this
+    -- landing gets, so a hold the room answers with silence is not a wait without an end.
+    wait_for_caret(pending, 'goTo', pending.label)
   end
 end
 
@@ -3368,6 +3479,7 @@ local function reset(land, keep_mirror)
   -- pending go-to goes with it, for the same reason and with the same silence.
   end_follow('silent')
   state.pending_go_to = nil
+  state.landing_wait = nil
   land_room_buffers(held)
   state.role = nil
   state.viewer_said = false
