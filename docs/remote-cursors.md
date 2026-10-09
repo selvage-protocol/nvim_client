@@ -53,17 +53,24 @@ being where a peer is means the cursor is there, and the next keystroke lands th
 why a local edit of a shared document ends the follow while a remote edit only re-lands it. A follow
 that ends by itself says why in the web page's words: `Stopped following <name> because you
 started typing.`, `… because you moved.`, `… because the file is gone.`, or `<name> left the room,
-so following stopped.`. Starting a follow says nothing, and neither does going somewhere or
-stopping it yourself, as on the web. A rename keeps it. While a follow stands, the session bar
+so following stopped.`. Starting a follow says nothing about the landing, and neither does going
+somewhere or stopping it yourself, as on the web. A follow or a jump that has to *open* a
+document to reach the peer says what that costs the room, in the fetch's own words: `<path> is
+opened in the room, so every peer receives it.` — and then waits for the room's text, because that
+is what the caret resolves against. A rename keeps it. While a follow stands, the session bar
 carries a `Following <name> ✕` chip in the peer's own colour and marks their face with `◉`; clicking
 the chip stops the follow, where the editor takes a mouse. Every buffer's own row is saved as the
 bar arrives and put back as it leaves, so re-targeting across documents leaves nothing behind.
 `vim.g.selvage_following` holds the followed peer's id meanwhile, and
 `%{v:lua.require'selvage'.statusline()}` is the snippet for whoever wants the same words in their
 own statusline. A typed jump to a peer in no document waits for the frame that draws them; the
-picker refuses its own rows where the row says they are in no document. A host opens a peer's
+picker refuses its own rows where the row says they are in no document. A peer in a document this
+window has not opened is not that: the presence entry carries their document, so a jump or a follow
+opens it — a `selvage://` buffer or the mirror's file, the way `:SelvageOpen` opens any room path —
+takes the hold, and lands on their caret when the room's text brings it. A host opens a peer's
 document only when it resolves to a readable file inside the shared folder, never creating it;
-anything else says `could not open <path> from the room: <reason>`.
+anything else says `could not open <path> from the room: <reason>`, and the follow stands for
+nothing rather than landing.
 
 The session is on screen without any statusline configuration: the window's `winbar` is the web
 page's session bar. It opens with what the session is called, `Sharing “notes”` for a host and
