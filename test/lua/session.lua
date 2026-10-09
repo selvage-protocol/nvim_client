@@ -488,10 +488,8 @@ vim.g.selvage_open_on_join = nil
 -- -- the room's open-document set, and what this window holds ---------------------------------
 --
 -- A guest holds the path the join landed on and nothing else: a document the room names that
--- this window does not show is offered — `:SelvageOpen` and a follow reach it — and gets no
--- buffer and no hold here. Taking a hold is what puts a path in the room's set, so a path the
--- set stops naming is one no peer holds open any more, and the hold the room's own naming took
--- goes with the name.
+-- this window does not show is offered — `:SelvageOpen`, a follow and a jump reach it — and gets
+-- no buffer and no hold here.
 
 selvage.leave()
 vim.cmd('edit! ' .. path)
@@ -1086,7 +1084,18 @@ check(
 -- line and a half of the buffer covered whenever that peer moves, which is worse than the two
 -- cells it explains. The gutter is where the name lives, and the caret is a block.
 
-check('a peer whose document this client does not hold has no gutter sign to explain', #selvage.peers(), 0)
+check(
+  'a peer whose document this client does not hold is listed without a gutter sign to explain',
+  #selvage.peers(),
+  1
+)
+check(
+  '  in the document the room puts them in',
+  selvage.peers()[1] and selvage.peers()[1].path,
+  'a-document-nobody-holds.txt'
+)
+check('  and with no sign', selvage.peers()[1] and selvage.peers()[1].sign, nil)
+check('  and no colour of its own', selvage.peers()[1] and selvage.peers()[1].colour, nil)
 
 --- The floating windows on screen, which is where a name over the document would have to be.
 local function overlay_windows()
