@@ -27,6 +27,13 @@ local function check(name, got, want)
   end
 end
 
+--- What the editor would draw a group's foreground or background with on a terminal that has
+--- no truecolor, as Vim's own cterm attribute for it. Empty when the group carries only a gui
+--- colour, which is what draws as nothing there.
+local function cterm_attr(name, what)
+  return vim.fn.synIDattr(vim.fn.hlID(name), what, 'cterm')
+end
+
 --- Replaces the companion with one that records what it is asked to send and answers nothing,
 --- so that a test can say what a session did without a process on the other end of a pipe.
 local function stub_companion()
@@ -729,6 +736,18 @@ check(
   marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].hl_group }).fg,
   tonumber('000000', 16)
 )
+-- `'termguicolors'` is off here, as it is by default, so the peer's colour needs its xterm index
+-- beside it: the gui value alone is a highlight the editor would draw as nothing.
+check(
+  '  and the peer colour as an xterm index, for a terminal with no truecolor',
+  marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].hl_group }).ctermbg,
+  75
+)
+check(
+  '  with the character under it the terminal\'s black',
+  marks[1] and vim.api.nvim_get_hl(0, { name = marks[1][4].hl_group }).ctermfg,
+  0
+)
 check("  and the sign keeps the name's first two characters", marks[1] and marks[1][4].sign_text, 'Bo')
 
 -- The owner's case, and the one an off-by-one shows up in: a caret between two characters is
@@ -890,6 +909,14 @@ check(
   '  leaving the text its own colour',
   selection ~= nil and vim.api.nvim_get_hl(0, { name = selection[4].hl_group }).fg == nil,
   true
+)
+-- The fill is computed at runtime from the peer's colour and the editor's background, so its
+-- xterm index is the one the blend lands on rather than the seat colour's own: `#61afef40` over
+-- this Neovim's default `Normal` background is `#273c50`, whose nearest terminal colour is 237.
+check(
+  '  and as an xterm index for the blended tint, on a terminal with no truecolor',
+  selection ~= nil and vim.api.nvim_get_hl(0, { name = selection[4].hl_group }).ctermbg,
+  237
 )
 
 -- A selection made backwards — `v` from the right end — is still a selection, and the same
@@ -2166,6 +2193,13 @@ check(
   'Title'
 )
 check('  with your own face in your seat\'s colour', vim.api.nvim_get_hl(0, { name = 'SelvageYou' }).bg, 0xcba6f7)
+-- The bar's own groups carry cterm values beside their gui ones, so what a stock Neovim — with
+-- `'termguicolors'` off, as this suite has it — resolves for the terminal is not empty.
+check('  on a terminal with no truecolor, as a stock Neovim has it', vim.o.termguicolors, false)
+check('  and your face as the terminal colour of your seat', cterm_attr('SelvageYou', 'bg'), '183')
+check('  with your initials the terminal\'s black', cterm_attr('SelvageYou', 'fg'), '0')
+check('  and the crown in the terminal\'s colour', cterm_attr('SelvageCrown', 'fg'), '223')
+check('  and the follow mark in the terminal\'s colour', cterm_attr('SelvageFollowed', 'fg'), '183')
 
 -- Everyone the room names has a face, in the colour of their seat.
 room({ ADA })
