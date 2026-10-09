@@ -17,7 +17,6 @@
 import { basename } from 'node:path';
 
 import type {
-  Cursor,
   EditorHost,
   GrantedRead,
   LineEnding,
@@ -34,7 +33,7 @@ import {
 import type { PeerInfo } from '../vendor/engine/index.ts';
 
 import { grantReport, readGrantedFile } from './grant.ts';
-import type { Notification } from './ipc.ts';
+import type { Notification, PresenceCursor } from './ipc.ts';
 import { hostAwayLine, identity, seatViews } from './room.ts';
 
 interface Document {
@@ -373,7 +372,7 @@ export class NvimEditorHost implements EditorHost {
   }
 
   /** The carets, each in the colour its seat wears. */
-  renderCursors(cursors: Cursor[]): void {
+  renderCursors(cursors: PresenceCursor[]): void {
     const colours = new Map<string, string>();
     const room = this.room();
     for (const seat of [room.self, ...room.peers]) {
