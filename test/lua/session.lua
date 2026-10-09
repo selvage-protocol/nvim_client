@@ -2441,6 +2441,39 @@ local file_peers = vim.g.selvage_file_peers
 local here = type(file_peers) == 'table' and file_peers[peers_path] or nil
 check('the file-peers seam names them too', here ~= nil and #here, 1)
 check('  with the gutter cells', here ~= nil and here[1].initials, 'Ad')
+-- A peer the room puts in a document this window has not opened has no caret to draw here, but
+-- the room still says where they are. The key is the room path, and a file list decorates the
+-- mirror: a path whose buffer this window never opened is exactly the file a badge is for, so
+-- the seam names them under it rather than hiding them with the undrawable caret.
+local FAR = 'notes/far-away.txt'
+handlers().on_message({
+  type = 'presence',
+  cursors = {
+    {
+      peerId = 'p-ada',
+      label = 'Ada Lovelace',
+      role = 'guest',
+      path = peers_path,
+      anchor = 0,
+      head = 0,
+      colour = '#94e2d5',
+      fill = '#94e2d540',
+    },
+    {
+      peerId = 'p-grace',
+      label = 'Grace Hopper',
+      role = 'guest',
+      path = FAR,
+      colour = '#c678dd',
+      fill = '#c678dd40',
+    },
+  },
+})
+local away = type(vim.g.selvage_file_peers) == 'table' and vim.g.selvage_file_peers[FAR] or nil
+check('a peer in an unopened document is named under its room path', away ~= nil and #away, 1)
+check('  with the two cells the gutter uses', away ~= nil and away[1].initials, 'Gr')
+check('  and the peer id a decorator keys on', away ~= nil and away[1].peerId, 'p-grace')
+check('  while the drawn peer keeps their own path', #vim.g.selvage_file_peers[peers_path], 1)
 check('  and a User event fires with it', presence_events > 0, true)
 vim.api.nvim_del_autocmd(seam_autocmd)
 

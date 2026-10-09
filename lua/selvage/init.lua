@@ -530,24 +530,31 @@ end
 --- Declared here so the draw can call it; assigned where the row is drawn.
 local refresh_indicators
 
---- Publishes where every drawn peer is, for a plugin that decorates a file list of its own
---- (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is `{ [room_path] = { { initials,
---- colour, label, peerId } } }` and `User SelvagePresence` fires whenever it changes. This client
---- draws the row itself and depends on none of them.
+--- Publishes where every peer the room put in a document is, for a plugin that decorates a file
+--- list of its own (netrw, oil, nvim-tree, telescope): `vim.g.selvage_file_peers` is
+--- `{ [room_path] = { { initials, colour, label, peerId } } }` and `User SelvagePresence` fires
+--- whenever it changes. This client draws the row itself and depends on none of them.
+---
+--- The room's own presence is what this is built from, not the rows the gutter drew: the key is
+--- the room path, and a peer in a document this window has not opened has a path and no caret
+--- here. A file-tree plugin decorating the mirror shows their badge whether or not this window
+--- holds their buffer, which is what the key is for. `initials` is the same two cells the gutter
+--- signs them with, so a decorator that draws both agrees with itself.
 local function publish_file_peers()
   local by_path = {}
-  for _, peer in ipairs(state.peers) do
-    if type(peer.path) == 'string' then
-      local list = by_path[peer.path]
+  for _, cursor in ipairs(state.cursors) do
+    if type(cursor) == 'table' and type(cursor.path) == 'string' and type(cursor.peerId) == 'string' then
+      local label = cursor.label or cursor.peerId
+      local list = by_path[cursor.path]
       if list == nil then
         list = {}
-        by_path[peer.path] = list
+        by_path[cursor.path] = list
       end
       list[#list + 1] = {
-        initials = peer.sign,
-        colour = peer.colour,
-        label = peer.label,
-        peerId = peer.peerId,
+        initials = peer_sign(label),
+        colour = cursor.colour,
+        label = label,
+        peerId = cursor.peerId,
       }
     end
   end
