@@ -812,20 +812,21 @@ test('a guest whose text arrived before the hold was answered is opened too', as
   const it = harness('guest', ['notes.txt']);
   await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
 
-  // The hold goes out against a replica that has nothing, and the answer to it and the sync
-  // that carries the text are two messages on one connection: which arrives first is the
-  // server's to decide. This is the text arriving first — the engine has nothing left to report
-  // an arrival for, so the answer to the hold is the moment the document is opened.
-  const opened = it.companion.handle({ type: 'open', path: 'notes.txt', text: '' });
+  // A buffer holding text of its own — a tab kept across a session — is held back until the
+  // room's text is here. The hold goes out against a replica that has nothing, and the answer to
+  // it and the sync that carries the text are two messages on one connection: which arrives first
+  // is the server's to decide. This is the text arriving first — the engine has nothing left to
+  // report an arrival for, so the answer to the hold is the moment the document is opened.
+  const opened = it.companion.handle({ type: 'open', path: 'notes.txt', text: 'a guest disk copy' });
   it.engine.texts.set('notes.txt', 'from the room\n');
   await opened;
   await settle();
 
   assert.deepEqual(it.applies, [
-    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 0, text: 'from the room\n', version: 0 },
+    { type: 'applyEdit', id: 1, path: 'notes.txt', start: 0, end: 17, text: 'from the room\n', version: 0 },
   ]);
 });
-test("a guest's edit before the room's text arrives keeps the two counts together", async () => {
+test("a guest's edit before the room's text arrives is published and merges with it", async () => {
   const it = harness('guest', ['notes.txt']);
   const toCompanion: Request[] = [];
   const front = new FrontEnd(toCompanion, '');
@@ -853,24 +854,30 @@ test("a guest's edit before the room's text arrives keeps the two counts togethe
   await it.companion.handle({ type: 'open', path: 'notes.txt', text: front.text });
   await drain();
 
-  // The user types into the buffer before the room's text arrives. The front-end counts the
-  // edit the moment it makes it, and the companion is told a moment later.
+  // The user types into the window before the room's text arrives. The buffer is empty and holds
+  // nothing to publish, so the document is in front of the bridge from the open: the front-end
+  // counts the edit and the companion is told a moment later.
   front.edit('notes.txt', { start: 0, end: 0, text: 'x' });
   await drain();
   assert.equal(front.version, 1, 'the front-end has counted the edit');
+  assert.equal(
+    it.engine.text('notes.txt'),
+    'x',
+    'the keystroke reached the room rather than being parked here',
+  );
 
-  // The room's text lands. The count the companion offers the seed against has to be the
-  // front-end's own, or the range is refused — and a range refused at a version the mirror
-  // has already reached cannot be rebased, so the buffer never takes the room's text and the
-  // next keystroke publishes the buffer's difference from the replica into the room.
-  it.engine.remote('notes.txt', 'from the room\n');
+  // The room's text lands, as the host's own insert concurrent with that keystroke: the room
+  // keeps both, and the buffer is brought to the same text. A buffer the room's text replaced
+  // would carry the keystroke in neither.
+  it.engine.remoteInsert('notes.txt', 0, 'from the room\n');
   await drain();
 
-  assert.equal(it.applies.length, 1, 'the buffer is seeded once the text arrives');
+  assert.equal(it.engine.text('notes.txt'), 'from the room\nx', 'the room holds both texts');
+  assert.equal(it.applies.length, 1, 'the room\'s text is applied to the buffer once');
   assert.deepEqual(
     change(it.applies[0]),
-    { start: 0, end: 1, text: 'from the room\n', version: 1 },
-    "the seed is offered against the count the front-end's own document has reached",
+    { start: 0, end: 0, text: 'from the room\n', version: 1 },
+    "the insertion is offered against the count the front-end's own document has reached",
   );
   const complaints = it.sent.filter(
     (notification) =>
@@ -878,15 +885,14 @@ test("a guest's edit before the room's text arrives keeps the two counts togethe
       ['applyRefused', 'divergence'].includes((notification.report as { kind: string }).kind),
   );
   assert.deepEqual(complaints, [], 'the buffer takes the room\'s text without a complaint');
-  assert.equal(front.text, 'from the room\n');
-  assert.equal(it.engine.text('notes.txt'), 'from the room\n');
+  assert.equal(front.text, 'from the room\nx');
 
   // A keystroke after the arrival is a keystroke: the buffer already holds the room's text, so
   // what reaches the room is the user's edit and not the buffer's difference from it.
   front.edit('notes.txt', { start: 0, end: 0, text: 'y' });
   await drain();
-  assert.equal(it.engine.text('notes.txt'), 'yfrom the room\n');
-  assert.equal(front.text, 'yfrom the room\n');
+  assert.equal(it.engine.text('notes.txt'), 'yfrom the room\nx');
+  assert.equal(front.text, 'yfrom the room\nx');
 });
 
 test('a local change reaches the replica as the smallest edit', async () => {

@@ -90,6 +90,19 @@ export class FakeEngine implements CompanionEngine {
     }
   }
 
+  /**
+   * A peer's own insert, the way the room's text arrives for a document this client has already
+   * written into: the two inserts are concurrent and the room keeps both, so what the buffer is
+   * brought to is the merge rather than either text. `remote` is the whole-text form, for a
+   * document this client has published nothing for.
+   */
+  remoteInsert(path: string, index: number, text: string): void {
+    this.insert(path, index, text);
+    if (this.opened.includes(path)) {
+      this.emit({ type: 'documentChanged', path });
+    }
+  }
+
   emit(event: EngineEvent): void {
     for (const listener of [...this.listeners]) {
       listener(event);

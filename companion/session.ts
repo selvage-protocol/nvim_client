@@ -341,6 +341,13 @@ export class Companion {
    *
    * A document opened this way has no mirror until the text arrives, and a change made to it in
    * the meantime is kept rather than dropped — see `changed`.
+   *
+   * What is deferred is a document that *holds* text. An empty one holds nothing to publish, so
+   * it goes in front of the bridge at once — the same exception the bridge makes for an empty
+   * buffer — and a keystroke typed into a window the room's text has not reached yet is an
+   * ordinary local edit: the bridge publishes it into the replica, the room merges its text with
+   * it, and the buffer ends holding both. Deferring it instead would put the keystroke in
+   * neither: `arrive` would replay it into a mirror that the room's own text then replaced.
    */
   private open(path: string, text: string): void {
     const engine = this.engine;
@@ -349,7 +356,7 @@ export class Companion {
     // A peer, not the room's host: the room seats a `viewer` too, and a viewer is
     // handed the room's documents exactly as a guest is — it differs in what it may publish
     // (`§13.9`), not in what it holds, which is the same rule the front-end's `is_peer` reads.
-    if (engine !== undefined && engine.session().role !== 'host' && !engine.has(path)) {
+    if (engine !== undefined && engine.session().role !== 'host' && !engine.has(path) && text !== '') {
       this.unarrived.set(path, { text, changes: [] });
       void engine
         .open(path)
