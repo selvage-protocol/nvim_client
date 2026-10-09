@@ -1472,6 +1472,158 @@ check('  and the deadline the stalled frame armed says nothing after it', said_s
 check('  while the follow stands where it landed', selvage.following(), 'Zed')
 selvage.stop_following()
 
+-- A peer who moves from one document this window has not opened to another gets the second
+-- document's own window: the deadline standing was the first document's, and a follow refused by
+-- it before the second had its timeout is a follow withdrawn over a document the peer is no longer
+-- in. The two windows are deliberately different lengths — 200 ms, then 2000 ms — so that "after
+-- the first would have expired, inside the second" is a moment the assertions can stand in.
+vim.g.selvage_landing_timeout_ms = 200
+handlers().on_message({
+  type = 'report',
+  report = {
+    kind = 'documents',
+    documents = { 'g/one.txt', 'g/two.txt', 'g/late.txt', 'g/far.txt', 'g/farther.txt' },
+  },
+})
+peers_report({
+  { peer_id = 'p-ada', display_name = 'Ada Lovelace', role = 'guest' },
+  { peer_id = 'p-zed', display_name = 'Zed', role = 'guest' },
+})
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/far.txt',
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+local before_moved_follow = #notices
+selvage.follow('Zed')
+check(
+  'a follow into the first unopened document stands while its caret is unresolved',
+  selvage.following(),
+  'Zed'
+)
+check('  with that document opened for it', vim.fn.bufnr('selvage://g/far.txt') ~= -1, true)
+vim.g.selvage_landing_timeout_ms = 2000
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/farther.txt',
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+check('  and moving to a second unopened document keeps it standing', selvage.following(), 'Zed')
+check('    with that one opened as well', vim.fn.bufnr('selvage://g/farther.txt') ~= -1, true)
+local first_window_past = vim.uv.hrtime() + (200 + 400) * 1000000
+vim.wait(3000, function()
+  return vim.uv.hrtime() >= first_window_past
+end, 20)
+check(
+  "  and the first document's deadline, expired, says nothing over the second",
+  said_since(before_moved_follow, 'caret did not arrive'),
+  nil
+)
+check('    while the follow still stands', selvage.following(), 'Zed')
+arrive('g/farther.txt', 'later\n')
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/farther.txt',
+    anchor = 2,
+    head = 2,
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+check("  landing inside the second document's window", vim.fn.bufname('%'), 'selvage://g/farther.txt')
+check('    on the caret the room drew', cursor(), '1,2')
+check(
+  '    and saying nothing about a caret that did arrive',
+  said_since(before_moved_follow, 'caret did not arrive'),
+  nil
+)
+selvage.stop_following()
+vim.g.selvage_landing_timeout_ms = landing_timeout
+
+-- The pending landing a jump leaves has the same window and the same re-arming on a move: the
+-- timer standing was the first document's, and dropping the jump over the second document before
+-- it had its timeout would be a navigation refused for a document the peer is no longer in.
+vim.g.selvage_landing_timeout_ms = 200
+handlers().on_message({
+  type = 'report',
+  report = {
+    kind = 'documents',
+    documents = {
+      'g/one.txt',
+      'g/two.txt',
+      'g/late.txt',
+      'g/far.txt',
+      'g/farther.txt',
+      'g/near.txt',
+      'g/nearest.txt',
+    },
+  },
+})
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/near.txt',
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+local before_moved_go = #notices
+local kept_window = vim.fn.bufname('%')
+selvage.go_to('Zed')
+check('a jump into the first unopened document pends while its caret remains unresolved', vim.fn.bufname('%'), kept_window)
+check('  with that document opened for it', vim.fn.bufnr('selvage://g/near.txt') ~= -1, true)
+vim.g.selvage_landing_timeout_ms = 2000
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/nearest.txt',
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+check('  and moving to a second unopened document keeps it pended', vim.fn.bufnr('selvage://g/nearest.txt') ~= -1, true)
+local go_first_window_past = vim.uv.hrtime() + (200 + 400) * 1000000
+vim.wait(3000, function()
+  return vim.uv.hrtime() >= go_first_window_past
+end, 20)
+check(
+  "  and the first document's deadline, expired, says nothing over the second",
+  said_since(before_moved_go, 'caret did not arrive'),
+  nil
+)
+arrive('g/nearest.txt', 'nearer\n')
+presence({
+  {
+    peerId = 'p-zed',
+    label = 'Zed',
+    role = 'guest',
+    path = 'g/nearest.txt',
+    anchor = 2,
+    head = 2,
+    colour = '#e06c75',
+    fill = '#e06c7540',
+  },
+})
+check("  landing inside the second document's window", vim.fn.bufname('%'), 'selvage://g/nearest.txt')
+vim.g.selvage_landing_timeout_ms = landing_timeout
+
 -- A go-to that has to open a document and never gets its caret is bounded the same way: the
 -- pending landing is one slot that no frame will fill, so the deadline drops it and says so
 -- rather than swallowing the navigation without a word.

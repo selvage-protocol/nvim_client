@@ -152,9 +152,10 @@ local state = {
   --- again, and the first landing, refusal or departure clears it.
   pending_go_to = nil,
   --- The stalled landing a deadline is armed for: the establishment it belongs to (the follow or
-  --- the pending go-to table itself, compared by identity), the label its sentence names, and the
-  --- session it was armed in. A landing that arrives clears the slot, a second establishment
-  --- replaces it, and a timer that finds another one is a landing the room has already moved past.
+  --- the pending go-to table itself, compared by identity), the document it is waiting in, the
+  --- label its sentence names, and the session it was armed in. A landing that arrives clears the
+  --- slot, a second establishment replaces it, and a timer that finds another one is a landing the
+  --- room has already moved past.
   landing_wait = nil,
   generation = 0,
   -- Whether the next document the room names is still the one to put in front of the user.
@@ -2603,15 +2604,23 @@ end
 --- `subject` is the establishment itself — the follow table or the pending go-to table — and its
 --- identity is the guard: a landing that arrives clears the slot, a second follow or go-to fills
 --- it with its own table, and a timer that finds either is one whose establishment has already
---- been answered or replaced, and is not this one's to refuse. `kind` is which establishment it
---- is, so the deadline ends the right one, and the session counter keeps a timer armed in a room
---- that has since gone from speaking into the next one.
+--- been answered or replaced, and is not this one's to refuse. The document the wait stands in is
+--- carried too, so a peer who moves from one document into another is waiting somewhere else and
+--- the deadline for the first has nothing left to measure. `kind` is which establishment it is, so
+--- the deadline ends the right one, and the session counter keeps a timer armed in a room that has
+--- since gone from speaking into the next one.
 ---
 --- @param subject table
 --- @param kind 'follow'|'goTo'
 --- @param label string
 local function wait_for_caret(subject, kind, label)
-  local wait = { subject = subject, kind = kind, label = label, generation = state.generation }
+  local wait = {
+    subject = subject,
+    kind = kind,
+    label = label,
+    path = peer_path(subject.peerId),
+    generation = state.generation,
+  }
   state.landing_wait = wait
   vim.defer_fn(function()
     if state.landing_wait ~= wait or state.generation ~= wait.generation then
@@ -2642,6 +2651,15 @@ end
 --- departure clears it, so the deadline is left for the state that is still waiting alone.
 local function caret_arrived()
   state.landing_wait = nil
+end
+
+--- Whether the deadline standing is this stall's own: the same establishment waiting in the same
+--- document. A landing that arrived cleared the slot, and a peer who moved into another document
+--- left the deadline behind — both are a wait this landing has not got, so a new one is armed, and
+--- the timer that finds its own replaced stands down on that identity alone.
+local function waiting_in(subject)
+  local wait = state.landing_wait
+  return wait ~= nil and wait.subject == subject and wait.path == peer_path(subject.peerId)
 end
 
 --- Attempts one landing of the standing follow. Indicates only on success: a miss leaves the
@@ -2686,9 +2704,11 @@ local function follow_frame()
   end
   if reason == 'waiting' then
     -- The stall this deadline exists for: the room has the document and its text has not
-    -- resolved the caret here yet. Armed once and not per frame, so frames that name the peer
-    -- without resolving them are not what the wait measures; a landing clears it above.
-    if state.landing_wait == nil then
+    -- resolved the caret here yet. Armed once per document and not per frame, so frames that name
+    -- the peer without resolving them are not what the wait measures; a landing clears it above.
+    -- A frame that moves them into another document is a wait of its own, so the deadline standing
+    -- for the first is replaced: left alone it would expire over the second.
+    if not waiting_in(following) then
       wait_for_caret(following, 'follow', following.label)
     end
   else
@@ -2828,9 +2848,10 @@ local function retry_go_to()
     state.pending_go_to = nil
     caret_arrived()
     notify_words('goTo', 'cursorNotFound', vim.log.levels.WARN, row.label)
-  elseif state.landing_wait == nil then
-    -- Still waiting on the document's text, and no deadline stands for it: arm the one this
-    -- landing gets, so a hold the room answers with silence is not a wait without an end.
+  elseif not waiting_in(pending) then
+    -- Still waiting on the document's text, and no deadline stands for it — or the one that did
+    -- was armed for the document the peer has since left: arm the one this landing gets, so a hold
+    -- the room answers with silence is not a wait without an end.
     wait_for_caret(pending, 'goTo', pending.label)
   end
 end
