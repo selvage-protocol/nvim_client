@@ -42,7 +42,7 @@ their seat's colour. Nothing is put over the document when a peer moves. Every m
 recreated when presence changes, and every one goes when the session ends.
 
 This user's own caret is published from the events that move it (`CursorMoved`, `ModeChanged`,
-entering a buffer), coalesced into one [`selection`](ipc.md) per 100 ms, and once more when the
+entering a buffer), coalesced into one `selection` message per 100 ms, and once more when the
 room's own edit lands in the buffer: a buffer for a room document exists before the document's text
 does, so the caret published in between is one the companion had no document for, and a write the
 room makes fires no `TextChanged` to publish it again. `selectionCleared` goes out when there is no

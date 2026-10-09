@@ -3,8 +3,7 @@
 A Neovim client for the [Selvage session protocol](https://github.com/selvage-protocol/specification):
 share a link, come edit my code with me.
 
-Status: v1 in progress. Hosting, joining by invite and editing together work today; the gaps are in
-[What is not here yet](docs/limits.md).
+Status: v1 in progress. Hosting, joining by invite and editing together work today.
 
 ![Neovim hosting a session: the session bar reads Sharing “taskboard” with both faces, and Grace’s caret, her selection and her initials are drawn in Ada’s window](docs/images/host-editing.png)
 
@@ -117,15 +116,6 @@ key, so a link given wherever an address is asked for is refused and nothing is 
 
 - [With Nix](docs/install-nix.md): installing the plugin from the flake, under Home Manager and as
   an overlay.
-- [Shape](docs/architecture.md): the engine, the companion and the plugin, and what talks to what.
-- [The local IPC](docs/ipc.md): every JSON line the plugin and the companion exchange, in both
-  directions.
-- [Remote cursors](docs/remote-cursors.md): how a peer's caret, selection and sign are drawn, the
-  follow, and the session bar.
-- [The vendored engine](docs/vendored-engine.md): the `vendor/` copy and the script that refreshes
-  it.
-- [The companion's session](docs/companion-session.md): hosting, joining, the viewer role, and what
-  is not carried.
 - [Command behaviour](docs/commands.md): what `:SelvageHost` and `:SelvageJoin` ask and refuse, the
   chooser, and the join notice.
 - [Configuration](docs/configuration.md): display names and the `vim.g.selvage_*` settings.
@@ -133,8 +123,8 @@ key, so a link given wherever an address is asked for is refused and nothing is 
   publishes from it.
 - [The mirror](docs/mirror.md): the real directory a guest keeps the room's paths in, and what is
   fetched into it.
-- [Checks](docs/checks.md): the commands the gate runs, and where each test lives.
-- [What is not here yet](docs/limits.md): the known gaps.
+- [Remote cursors](docs/remote-cursors.md): how a peer's caret, selection and sign are drawn, the
+  follow, and the session bar.
 
 ## Licence
 

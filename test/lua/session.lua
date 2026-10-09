@@ -1947,7 +1947,7 @@ check('  without inventing one', notices[#notices].message:find('()', 1, true) =
 
 -- -- a walk that stopped short of the folder, told to the host alone -------------------
 --
--- `docs/ipc.md` has the companion say which bound stopped the host's own walk of the folder,
+-- The companion says which bound stopped the host's own walk of the folder (`companion/ipc.ts`),
 -- and the words for each bound are this front-end's. A report names the reason and not a
 -- sentence, so a reason the two sides disagree on would show nothing at all; these are checked
 -- where the message is driven, and `test/lua/vocabulary.lua` pins the words alone.
