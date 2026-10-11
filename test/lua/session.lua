@@ -535,18 +535,15 @@ check('  so it is still held', #selvage.documents(), 1)
 check('  and still offered', table.concat(selvage.offered(), ','), 'open/one.lua')
 check('  while the buffer it was shown in stays', vim.fn.bufnr('selvage://open/one.lua') ~= -1, true)
 
--- A hold the server refused is the other half of the same question, and the companion says which
--- one it is: the refusal arrives as its own sentence naming the path, where a set that has not
--- heard the hold yet arrives as a set. The room never took this `open`, so no documents report
--- will ever name it and no frame reconciles the buffer — left standing, the path would be offered
--- to the room for the rest of the session. It is let go the way the room's own word releases one,
--- and the buffer stays where it is: the refusal is about the room, not about the person's window.
+-- A failed open identifies the hold independently of its displayed sentence.
 local before_refusal = #sent
 handlers().on_message({
   type = 'report',
   report = {
     kind = 'sessionError',
     code = 'error',
+    operation = 'open',
+    path = 'open/one.lua',
     message = 'the server refused to open open/one.lua: the connection is gone',
   },
 })
@@ -563,6 +560,80 @@ check(
   said_since(before_refusal, 'the server refused to open open/one.lua') ~= nil,
   true
 )
+
+local opaque = { 'notes/a: b.txt', 'notes/a: b.txt: copy.txt' }
+local function hold_opaque_paths()
+  selvage.leave()
+  selvage.join('ws://127.0.0.1:1/session?room=r-opaque&token=t')
+  handlers().on_message({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-opaque' })
+  handlers().on_message({ type = 'report', report = { kind = 'documents', documents = opaque } })
+  selvage.open(opaque[2])
+  check('both punctuation/prefix paths are held', #selvage.documents(), 2)
+  local buffers = {
+    vim.fn.bufnr('selvage://' .. opaque[1]),
+    vim.fn.bufnr('selvage://' .. opaque[2]),
+  }
+  for index, buffer in ipairs(buffers) do
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, true, { 'kept ' .. index })
+  end
+  return buffers
+end
+local legacy_sentence = 'the server refused to open ' .. opaque[1] .. ': reason'
+local ignored_reports = {
+  { name = 'no metadata', fields = {} },
+  { name = 'no operation', fields = { path = opaque[1] } },
+  { name = 'close operation', fields = { operation = 'close', path = opaque[1] } },
+  { name = 'unknown operation', fields = { operation = 'rename', path = opaque[1] } },
+  { name = 'no path', fields = { operation = 'open' } },
+  { name = 'number path', fields = { operation = 'open', path = 12 } },
+  { name = 'table path', fields = { operation = 'open', path = { opaque[1] } } },
+  { name = 'unknown path', fields = { operation = 'open', path = opaque[1] .. '.unknown' } },
+  { name = 'case mismatch', fields = { operation = 'open', path = 'Notes/a: b.txt' } },
+}
+for _, case in ipairs(ignored_reports) do
+  hold_opaque_paths()
+  local before = #sent
+  local report = vim.tbl_extend('force', {
+    kind = 'sessionError', code = 'error', message = legacy_sentence,
+  }, case.fields)
+  handlers().on_message({ type = 'report', report = report })
+  check(case.name .. ' leaves both holds intact', #selvage.documents(), 2)
+  check(case.name .. ' sends no close', sent_of('close', opaque[1], before), 0)
+  check(case.name .. ' is still displayed', notices[#notices].message, 'selvage: ' .. legacy_sentence)
+end
+hold_opaque_paths()
+local before_capacity = #sent
+handlers().on_message({ type = 'report', report = {
+  kind = 'sessionError', code = 'x.room_full', message = legacy_sentence,
+} })
+check('capacity notice remains its displayed words', notices[#notices].message, 'selvage: the room is full — it seats no more people.')
+check('capacity error without metadata keeps holds', #selvage.documents(), 2)
+check('capacity error without metadata sends no close', sent_of('close', opaque[1], before_capacity), 0)
+local opaque_buffers = hold_opaque_paths()
+for index, room_path in ipairs(opaque) do
+  local before = #sent
+  local sentence = index == 1
+      and ('the server refused to open ' .. opaque[2] .. ': misleading human path')
+    or 'A completely different refusal sentence!'
+  handlers().on_message({ type = 'report', report = {
+    kind = 'sessionError', code = 'error', operation = 'open', path = room_path, message = sentence,
+  } })
+  check('structured refusal releases exactly ' .. room_path, sent_of('close', room_path, before), 1)
+  check('structured refusal does not close the other prefix path', sent_of('close', opaque[3 - index], before), 0)
+  check('remaining held path count', #selvage.documents(), 2 - index)
+  if index == 1 then
+    check('the longer prefix path survives', selvage.documents()[1], opaque[2])
+  end
+  check('human words stay display-only', notices[#notices].message, 'selvage: ' .. sentence)
+  local buffer = opaque_buffers[index]
+  check('refused buffer keeps its contents', table.concat(vim.api.nvim_buf_get_lines(buffer, 0, -1, true), '\n'), 'kept ' .. index)
+  vim.api.nvim_buf_set_lines(buffer, -1, -1, true, { 'after refusal' })
+  check('detached buffer sends no more changes', sent_of('change', room_path, before), 0)
+  handlers().on_message({ type = 'report', report = {
+    kind = 'sessionError', code = 'error', operation = 'open', path = room_path, message = sentence,
+  } })
+  check('a duplicate refusal releases nothing twice', sent_of('close', room_path, before), 1)
+end
 
 -- -- presence: the caret out, the peers' carets in ------------------------------
 --

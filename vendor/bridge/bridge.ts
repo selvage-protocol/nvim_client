@@ -138,7 +138,13 @@ export type Report =
   | { kind: 'hostDetached'; graceMs: number }
   | { kind: 'hostAttached'; peer: PeerInfo }
   | { kind: 'roomGone'; reason: string }
-  | { kind: 'sessionError'; code: string; message: string }
+  | {
+      kind: 'sessionError';
+      code: string;
+      message: string;
+      operation?: 'open' | 'close';
+      path?: string;
+    }
   /** `applyEdit` refused every attempt: the buffer and the room are apart, and stay apart. */
   | { kind: 'applyRefused'; path: string }
   /** The buffer and the replica were apart, and the room's copy is what the buffer is brought to. */
@@ -168,8 +174,8 @@ export const realTimers: Timers = {
 export const DEFAULT_SAVE_SETTLE_MS = 500;
 
 /**
- * How long the buffer is left alone before it is compared against the replica. The study's
- * §2.5 backstop: the minimal diff is always taken against the buffer as it reads, and an
+ * How long the buffer is left alone before it is compared against the replica. The debounced
+ * backstop: the minimal diff is always taken against the buffer as it reads, and an
  * editor applies it a macrotask later, so a change that slips into that window can leave
  * the two apart. The debounced check catches that class rather than the one window it knows.
  */
@@ -209,7 +215,7 @@ export interface BridgeOptions {
  * compares the buffer's text against the replica's before writing, which is not a bet on
  * when an editor delivers a coalesced change event; replica → buffer needs nothing,
  * because the engine reports a change only for a transaction that did not come from this
- * adapter's own edit (`SPIKES.md`, spike 2).
+ * adapter's own edit.
  *
  * A change the editor is asked to apply is asynchronous, so at most one apply per document
  * is ever in flight, and a change that arrives while one is in flight is not diffed — the
@@ -373,7 +379,7 @@ export class SessionBridge {
     }
     // The whole buffer is compared and diffed rather than the event's own ranges. A range an
     // editor reports is in the buffer's coordinates, and mapping it onto the replica's would
-    // need the EOL offset table — a class of its own in the extension the study read. Two
+    // need the EOL offset table — a class of its own in an adapter that publishes offsets. Two
     // string scans per change event buy the whole policy being four lines long.
     this.moveSave(path);
     // A refused publish leaves the buffer alone: the backstop converges the buffer to the
@@ -789,6 +795,8 @@ export class SessionBridge {
     this.host.report({
       kind: 'sessionError',
       code: isProtocolError(error) ? error.code : 'error',
+      operation: what,
+      path,
       message: `the server refused to ${what} ${path}: ${describe(error)}`,
     });
   }
@@ -948,7 +956,7 @@ export class SessionBridge {
   }
 
   /**
-   * The §2.5 backstop: once the buffer has been quiet for `reconcileSettleMs`, compare it
+   * The backstop: once the buffer has been quiet for `reconcileSettleMs`, compare it
    * with the replica and, if the minimal diff did not get them together, replace the whole
    * document. The minimal diff is the right edit only if the buffer it was computed from is
    * still there; a whole-document replacement is the one edit that does not care.

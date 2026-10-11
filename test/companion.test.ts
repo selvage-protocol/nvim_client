@@ -271,6 +271,112 @@ class FrontEnd {
   }
 }
 
+test('failed companion opens carry opaque operation/path metadata over IPC', async (t) => {
+  for (const path of ['notes/a: b.txt', 'notes/a: b.txt: copy.txt']) {
+    for (const deferred of [true, false]) {
+      await t.test(`${deferred ? 'deferred' : 'bridge'} ${path}`, async (t) => {
+        const it = harness('guest', [path]);
+        t.after(() => it.companion.leave());
+        await it.companion.handle({ type: 'join', invite: 'ws://127.0.0.1:0/session?room=r&token=t' });
+        if (!deferred) {
+          it.engine.texts.set(path, 'room text');
+        }
+        const reason = deferred ? new ProtocolError('bad_params', 'different: reason!') : new Error('not today?');
+        it.engine.open = (opened) => {
+          it.engine.opened.push(opened);
+          return Promise.reject(reason);
+        };
+        const before = it.sent.length;
+        await it.companion.handle({ type: 'open', path, text: 'local text' });
+        const reports = (): unknown[] => it.sent.slice(before).flatMap((message) =>
+          message.type === 'report' ? [JSON.parse(wire(message)).report] : [],
+        );
+        await until('the open refusal over IPC', () => reports().length > 0, reports);
+        assert.deepEqual(reports(), [{
+          kind: 'sessionError',
+          operation: 'open',
+          path,
+          code: deferred ? 'bad_params' : 'error',
+          message: `the server refused to open ${path}: ${reason.message}`,
+        }]);
+        assert.deepEqual(it.engine.opened, [path]);
+        assert.equal(it.engine.disconnected, false);
+        await it.companion.handle({ type: 'change', path, start: 0, end: 0, text: 'ignored' });
+        assert.equal(it.engine.text(path), deferred ? '' : 'room text', 'a refused hold publishes no edits');
+        await it.companion.handle({ type: 'close', path });
+        assert.deepEqual(it.engine.closed, [], 'failed holds are already forgotten');
+        const open = FakeEngine.prototype.open;
+        it.engine.open = function (opened) { return open.call(this, opened); };
+        it.engine.texts.set(path, 'local text');
+        await it.companion.handle({ type: 'open', path, text: 'local text' });
+        assert.deepEqual(it.engine.opened, [path, path], 'the path can be opened afresh');
+        it.engine.close = () => Promise.reject(new Error('close refused!'));
+        const beforeClose = reports().length;
+        await it.companion.handle({ type: 'close', path });
+        await until('the close refusal over IPC', () => reports().length > beforeClose, reports);
+        assert.deepEqual(reports().at(-1), {
+          kind: 'sessionError', operation: 'close', path, code: 'error',
+          message: `the server refused to close ${path}: close refused!`,
+        });
+      });
+    }
+  }
+});
+
+test('a hold refused after the session ended is not delivered into the next one', async (t) => {
+  const path = 'notes.txt';
+  const invite = 'ws://127.0.0.1:0/session?room=r&token=t';
+  const it = harness('guest', [path]);
+  t.after(() => it.companion.leave());
+
+  // A buffer holding text of its own is held back until the room's text is here, and the engine's
+  // answer to that hold is what the deferred open waits on. This session's answer never comes: the
+  // person leaves while it is in flight, and the rejection that would have been it settles only
+  // after the next session has begun.
+  await it.companion.handle({ type: 'join', invite });
+  const first = it.engine;
+  let refuseFirst: (error: unknown) => void = () => {};
+  first.open = (opened) => {
+    first.opened.push(opened);
+    return new Promise((_resolve, reject) => {
+      refuseFirst = reject;
+    });
+  };
+  await it.companion.handle({ type: 'open', path, text: 'a guest disk copy' });
+
+  await it.companion.handle({ type: 'leave' });
+  await it.companion.handle({ type: 'join', invite });
+  const second = it.engine;
+  assert.notEqual(second, first, 'the next session is another room');
+
+  // The successor takes the same hold on the same path, and it is that hold — not the one the
+  // session that ended took — the late rejection must leave alone.
+  await it.companion.handle({ type: 'open', path, text: 'a guest disk copy' });
+  const before = it.sent.length;
+  const reports = (): unknown[] =>
+    it.sent.slice(before).flatMap((message) =>
+      message.type === 'report' ? [JSON.parse(wire(message)).report] : [],
+    );
+
+  refuseFirst(new ProtocolError('bad_params', 'the room is gone'));
+  // The rejection is a promise with no I/O behind it, so its handler is a microtask: one macrotask
+  // turn drains it before anything below waits on the room's text.
+  await delay(0);
+
+  assert.deepEqual(reports(), [], 'a refusal from the session that ended reached the successor');
+
+  // The successor's hold is still the one that opens the buffer: the room's text arriving is the
+  // effect that shows it, and a hold the late rejection released would open nothing.
+  second.remote(path, 'from the room\n');
+  await until("the successor's deferred document to open", () => it.applies.length > 0, () => ({
+    applies: it.applies,
+    reports: reports(),
+  }));
+  assert.deepEqual(it.applies, [
+    { type: 'applyEdit', id: 1, path, start: 0, end: 17, text: 'from the room\n', version: 0 },
+  ]);
+});
+
 test('hosting reports the invite and the room', async () => {
   const it = harness('host');
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
@@ -1712,13 +1818,13 @@ test('a host with no folder publishes nothing at all', async () => {
   assert.deepEqual(refusals(it), [], 'and nothing to say about one');
 });
 
-test('a server that does not know doc.grant is a room with no grant, not a fault', async (t) => {
+test('local listing failures are reported even with an unknown_method code', async (t) => {
   const root = folder(t);
   tree(root, 'notes.txt', 'a note\n');
   const it = harness('host', [], [], {
-    grantError: new ProtocolError('unknown_method', 'doc.grant is not a method here'),
+    grantError: new ProtocolError('unknown_method', 'local publication failed'),
   });
-
+  t.after(() => it.companion.leave());
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   tree(root, 'created.txt', 'made while hosting\n');
   await until(
@@ -1726,10 +1832,13 @@ test('a server that does not know doc.grant is a room with no grant, not a fault
     () => it.engine.grants.length > 0,
     () => it.engine.grants,
   );
-
-  assert.equal(it.engine.grants.length, 1, 'the changed listing was sent');
-  assert.deepEqual(refusals(it), [], 'and the answer ended there');
-  assert.equal(it.engine.disconnected, false, 'the session goes on');
+  await until('the local failure report', () => refusals(it).length > 0, () => refusals(it));
+  assert.equal(it.engine.grants.length, 1);
+  assert.deepEqual(refusals(it), [
+    'the server refused the listing of the folder this session shares: local publication failed',
+  ]);
+  assert.deepEqual(it.engine.grantedPaths(), ['notes.txt'], 'the room retains its previous listing');
+  assert.equal(it.engine.disconnected, false);
 });
 
 test('a refused listing is reported and changes nothing', async (t) => {
@@ -2103,70 +2212,26 @@ test('a reading that finishes after a later one does not publish', async (t) => 
   );
 });
 
-// -- a host that reseats after a drop ---------------------------------------------------
-//
-// A host that dropped reclaims its room rather than minting a new one, and the room kept the
-// listing it had while this process was gone. A reconnect seats again under a new peer id in
-// the same room, so the first seat report under that id is the reclaim rather than later room
-// news — and the host publishes the folder as it stands then instead of leaving the dead
-// listing advertised.
-
-test('a host that reseats after a drop publishes its current listing', async (t) => {
+test('room membership news never starts a host listing read', async (t) => {
   const root = folder(t);
-  let listing = ['old.txt'];
+  let readings = 0;
   const it = harness('host', [], [], {
-    enumerate: async () => whole([...listing]),
+    enumerate: async () => {
+      readings++;
+      return whole(['old.txt']);
+    },
   });
+  t.after(() => it.companion.leave());
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
-  await until(
-    'the starting listing to reach the room',
-    () => it.engine.grantedPaths().length > 0,
-    () => it.engine.grantedPaths(),
-  );
-  assert.deepEqual(it.engine.grantedPaths(), ['old.txt']);
-
-  // The folder moves while the room still names the old listing — the shape a reclaim meets
-  // when the working copy changed under a dead socket.
-  listing = ['new.txt'];
-  it.engine.reseat('p-again');
+  assert.equal(readings, 1);
   it.engine.emit({ type: 'documentsChanged', documents: [] });
-
-  await until(
-    'the current listing to be published after the reseat',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
-  );
-  assert.deepEqual(it.engine.grants, [['new.txt']]);
-});
-
-test('later room news under the same peer id publishes nothing again', async (t) => {
-  const root = folder(t);
-  let listing = ['old.txt'];
-  const it = harness('host', [], [], {
-    enumerate: async () => whole([...listing]),
-  });
-  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
-  await until(
-    'the starting listing to reach the room',
-    () => it.engine.grantedPaths().length > 0,
-    () => it.engine.grantedPaths(),
-  );
-
-  listing = ['new.txt'];
-  it.engine.reseat('p-again');
-  it.engine.emit({ type: 'documentsChanged', documents: [] });
-  await until(
-    'the current listing to be published after the reseat',
-    () => it.engine.grants.length > 0,
-    () => it.engine.grants,
-  );
-
-  // An open elsewhere is room news under the same peer, not a second reclaim: the folder
-  // has nothing new to say, and the room is not told twice.
-  it.engine.emit({ type: 'documentsChanged', documents: ['new.txt'] });
   it.engine.emit({ type: 'peersChanged', peers: [] });
-  await delay(QUIET_MS);
-  assert.deepEqual(it.engine.grants, [['new.txt']]);
+  it.engine.reseat('p-again');
+  it.engine.emit({ type: 'documentsChanged', documents: [] });
+  it.engine.emit({ type: 'peersChanged', peers: [] });
+  assert.equal(readings, 1, 'membership changes are not folder changes');
+  assert.deepEqual(it.engine.grants, []);
+  assert.deepEqual(it.engine.grantedPaths(), ['old.txt']);
 });
 
 test('a guest that reseats after a drop publishes nothing and keeps its role', async () => {
