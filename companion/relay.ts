@@ -49,30 +49,6 @@ export interface ListingSource {
   replace(paths: readonly string[]): void;
 }
 
-/** The engine this companion drives, plus the things it needs of its own. */
-function adapter(engine: PeerEngine): CompanionEngine {
-  return {
-    session: () => engine.session(),
-    text: (path) => engine.text(path),
-    has: (path) => engine.has(path),
-    open: (path) => engine.open(path),
-    close: (path) => engine.close(path),
-    insert: (path, index, text) => engine.insert(path, index, text),
-    delete: (path, index, length) => engine.delete(path, index, length),
-    setSelection: (path, selection) => engine.setSelection(path, selection),
-    setAwareness: (state) => engine.setAwareness(state),
-    presence: () => engine.presence(),
-    resolveSelection: (path, selection) => engine.resolveSelection(path, selection),
-    on: (listener) => engine.on(listener),
-    inviteUrl: () => engine.inviteUrl(),
-    disconnect: () => engine.disconnect(),
-    closeRoom: () => engine.closeRoom(),
-    rename: (name) => engine.rename(name),
-    grant: (paths) => engine.grant(paths),
-    grantedPaths: () => engine.grantedPaths(),
-  };
-}
-
 /**
  * Mints a room on the server an address names, as its host.
  *
@@ -84,15 +60,13 @@ export async function hostRoom(
   displayName: string,
   listing: ListingSource,
 ): Promise<CompanionEngine> {
-  return adapter(
-    await PeerEngine.host({
-      baseUrl: serverUrl,
-      displayName,
-      listing,
-      webSocketFactory: factory,
-      client: 'selvage-nvim',
-    }),
-  );
+  return PeerEngine.host({
+    baseUrl: serverUrl,
+    displayName,
+    listing,
+    webSocketFactory: factory,
+    client: 'selvage-nvim',
+  });
 }
 
 /** Joins the room an invite names, from either form of the link. */
@@ -107,14 +81,12 @@ export async function joinRoom(invite: string, displayName: string): Promise<Com
     return factory(url);
   };
   try {
-    return adapter(
-      await PeerEngine.join({
-        invite,
-        displayName,
-        webSocketFactory: dialling,
-        client: 'selvage-nvim',
-      }),
-    );
+    return await PeerEngine.join({
+      invite,
+      displayName,
+      webSocketFactory: dialling,
+      client: 'selvage-nvim',
+    });
   } catch (error: unknown) {
     if (dialled) {
       throw error;

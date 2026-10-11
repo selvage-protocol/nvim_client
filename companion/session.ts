@@ -18,7 +18,7 @@ import {
   isGrantedPath,
 } from '../vendor/bridge/index.ts';
 import type { Cursor, Engine, TextChange } from '../vendor/bridge/index.ts';
-import { code as errCode, isProtocolError } from '../vendor/engine/index.ts';
+import { isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant, grantReport } from './grant.ts';
@@ -166,19 +166,11 @@ export class Companion {
    * started has nothing to say: it read the folder before a later one did.
    */
   private grantReadings = 0;
-  /** The folder this session shares while hosting it: the listing a reclaim republishes. */
-  private grantRoot?: string;
   /**
    * The role this front-end was last told, so a report is sent when it changes rather than at every
    * event the engine raises. It is the connection's own, from the applied state (`§13.4`).
    */
   private toldRole?: string;
-  /**
-   * The peer id the current connection seated with. A reconnect is a new peer under the
-   * same room, so a seat report under a different id is the reclaim rather than later
-   * room news.
-   */
-  private seatedPeer?: string;
 
   constructor(options: CompanionOptions) {
     this.send = options.send;
@@ -280,8 +272,6 @@ export class Companion {
     this.stopListening?.();
     this.stopListening = undefined;
     this.stopWatching();
-    this.grantRoot = undefined;
-    this.seatedPeer = undefined;
     this.toldRole = undefined;
     this.unarrived.clear();
     const engine = this.engine;
@@ -371,6 +361,12 @@ export class Companion {
           }
         })
         .catch((error: unknown) => {
+          // The hold was this session's, and the process runs the next one on the same companion:
+          // a rejection that settles after a session switch is not the successor's to hear, and
+          // the path it names is not the successor's to forget.
+          if (this.engine !== engine) {
+            return;
+          }
           // A refused hold leaves nothing that will ever open this document, so the entry —
           // and the changes kept against it — goes with the report rather than growing for the
           // rest of the session.
@@ -380,6 +376,8 @@ export class Companion {
             report: {
               kind: 'sessionError',
               code: isProtocolError(error) ? error.code : 'error',
+              operation: 'open',
+              path,
               message: `the server refused to open ${path}: ${error instanceof Error ? error.message : String(error)}`,
             },
           });
@@ -582,9 +580,6 @@ export class Companion {
       return;
     }
     this.engine = engine;
-    // The peer id this connection seated with: a reconnect seats again under a new one,
-    // which is what tells a reclaim apart from later room news below.
-    this.seatedPeer = engine.session().peer.peer_id;
     // Which role the front-end has been told is the session's own too.
     this.toldRole = engine.session().role;
     // Which listing reports this session has produced is the session's, not the process's.
@@ -633,16 +628,6 @@ export class Companion {
       }
       if (event.type === 'documentChanged') {
         this.arrive(event.path);
-        return;
-      }
-      if (event.type === 'documentsChanged' || event.type === 'peersChanged') {
-        // Every seat reports the document set and the peers, under a new peer id on a
-        // reconnect — so a report under an id this connection did not seat with is the
-        // reclaim, while later room news reuses the id and is left alone.
-        if (engine.session().peer.peer_id !== this.seatedPeer) {
-          this.seatedPeer = engine.session().peer.peer_id;
-          this.republishAfterReseat(engine);
-        }
         return;
       }
       if (event.type === 'roomGone' || event.type === 'disconnected') {
@@ -697,7 +682,6 @@ export class Companion {
     // grant, read off the working copy as the session starts and read again whenever the folder
     // changes under it — a later change to which buffers are open is not a statement about the
     // folder, and neither is anything outside it.
-    this.grantRoot = session.role === 'host' ? root : undefined;
     if (session.role === 'host' && root !== undefined && root !== '') {
       this.editor.sharedFolder(root);
       // The host published the listing before this point — the state it sealed at mint carries
@@ -717,8 +701,8 @@ export class Companion {
    * The walk is held in this attempt's own scope until the room that seals it exists. A mint can
    * throw — a dead address, a server that refuses the hello — and a listing written into the
    * session's own field before that would outlive the attempt: `publishGrant` compares against what
-   * it holds, so the next host of the same folder would find it unchanged and send no `doc.grant` at
-   * all. A room the mint sealed a state from holds the walk; one that never minted holds nothing. The
+   * it holds, so the next host of the same folder would find it unchanged and never publish it.
+   * A room the mint sealed a state from holds the walk; one that never minted holds nothing. The
    * walk's cut is the same fact about the same attempt, and is told once the room exists and not
    * before: a mint that threw opened no session to warn about.
    */
@@ -801,21 +785,6 @@ export class Companion {
     this.send({ type: 'report', report: { kind: 'role', role } });
   }
 
-  /**
-   * Publishes the shared folder again after the retry reseated: a host that dropped reclaims
-   * its room rather than minting a new one, and the room kept the listing it had while this
-   * process was gone. The folder as it stands now replaces the dead listing — the last listing
-   * is forgotten first, so even an unchanged folder re-asserts what the room holds, one frame
-   * the guests dedupe, rather than staying silent. A guest owes the room no listing.
-   */
-  private republishAfterReseat(engine: CompanionEngine): void {
-    const root = this.grantRoot;
-    if (engine.session().role !== 'host' || root === undefined || root === '') {
-      return;
-    }
-    this.grantedListing = undefined;
-    this.publishGrant(root);
-  }
 
   /**
    * Watches the folder this session shares and republishes its listing when it changes.
@@ -941,13 +910,7 @@ export class Companion {
     this.grantedListing = undefined;
   }
 
-  /**
-   * Publishes the listing of the folder this session shares.
-   *
-   * A server that does not know `doc.grant` answers `unknown_method`, which means it has no
-   * grant rather than that anything failed: the session goes on and the room falls back to its
-   * open-document set. Any other refusal is reported and also changes nothing.
-   */
+  /** Publishes the listing of the folder this session shares. */
   private publishGrant(root: string): void {
     const engine = this.engine;
     if (engine === undefined) {
@@ -1003,12 +966,6 @@ export class Companion {
         this.grantedListing = paths;
       } catch (error: unknown) {
         if (this.engine !== engine) {
-          return;
-        }
-        if (isProtocolError(error, errCode.unknownMethod)) {
-          // The server has no grant at all, so nothing was refused: the room keeps its
-          // open-document set, and this folder is what it would grant if it could.
-          this.grantedListing = paths;
           return;
         }
         // A refused listing leaves the room with the grant it had, so it is not remembered as
