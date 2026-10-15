@@ -4,7 +4,9 @@
 # buffer and a real `on_bytes` (`test/lua/document.lua`), the plugin's own wiring against a
 # stubbed companion (`test/lua/session.lua`), the folder a session shares and what moves it
 # (`test/lua/grant.lua`), the room's grant listing and `:SelvageOpen` over it
-# (`test/lua/granted.lua`), the guest's mirror of that listing (`test/lua/mirror.lua`), the two
+# (`test/lua/granted.lua`), the guest's mirror of that listing (`test/lua/mirror.lua`), the role
+# a room state gives a connection and the buffer policy that follows it (`test/lua/rolelock.lua`),
+# the two
 # constants that mirror copies from the vendored engine (`test/lua/bounds.lua`), the one
 # summary a guest's join says whatever order the room speaks in (`test/lua/join.lua` for the
 # listing-first order, `test/lua/joinorder.lua` for documents first), what the
@@ -34,6 +36,7 @@ nvim --headless -l test/lua/session.lua
 nvim --headless -l test/lua/grant.lua
 nvim --headless -l test/lua/granted.lua
 nvim --headless -l test/lua/mirror.lua
+nvim --headless -l test/lua/rolelock.lua
 nvim --headless -l test/lua/bounds.lua
 nvim --headless -l test/lua/join.lua
 nvim --headless -l test/lua/joinorder.lua

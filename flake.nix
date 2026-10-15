@@ -124,6 +124,7 @@
             "test/lua/grant.lua"
             "test/lua/granted.lua"
             "test/lua/mirror.lua"
+            "test/lua/rolelock.lua"
             "test/lua/join.lua"
             "test/lua/joinorder.lua"
             "test/lua/pickers.lua"
