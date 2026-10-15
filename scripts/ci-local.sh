@@ -81,7 +81,7 @@ case "${1:-all}" in
   lint) job_lint ;;
   links) job_links ;;
   e2e) job_e2e ;;
-  all) job_lint && job_checks && job_links && job_e2e ;;
+  all) job_lint; job_checks; job_links; job_e2e ;;
   *)
     printf 'usage: %s [checks|lint|links|e2e|all]\n' "$0" >&2
     exit 2
