@@ -67,6 +67,42 @@ function textOf(value: unknown, key: string): string | undefined {
   return typeof field === 'string' ? field : undefined;
 }
 
+/** `PROTOCOL.md` §5's bound, which the handshake and a `session.rename` share. */
+const DISPLAY_NAME_MAX_UTF16 = 32;
+
+/** Whether `text` carries a control character: C0, DEL or C1, the Unicode `Cc` range (`§5`). */
+function hasControlCharacters(text: string): boolean {
+  for (const symbol of text) {
+    const point = symbol.codePointAt(0) ?? 0;
+    if (point < 0x20 || (point >= 0x7f && point <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * What `session.rename`'s name is refused behind, as `§5` states the bound: a name that carries a
+ * control character, a blank one once trimmed, or one over the bound the handshake shares. The
+ * trimming is the server's own act — an accepted name is the name it carries — and so is the
+ * order of the refusals, control first, so the words match the server's.
+ */
+function renameRefusal(raw: string, name: string): { code: string; message: string } | undefined {
+  if (hasControlCharacters(raw)) {
+    return { code: 'bad_params', message: 'display_name contains control characters' };
+  }
+  if (name === '') {
+    return { code: 'bad_params', message: 'a display_name is required' };
+  }
+  if (name.length > DISPLAY_NAME_MAX_UTF16) {
+    return {
+      code: 'bad_params',
+      message: `display_name is longer than ${DISPLAY_NAME_MAX_UTF16} UTF-16 code units`,
+    };
+  }
+  return undefined;
+}
+
 /** The one socket implementation: what the client writes reaches the room, and nothing else. */
 class RoomSocket implements WebSocketLike {
   readyState = CONNECTING;
@@ -268,19 +304,42 @@ export class InProcessRoom {
       return;
     }
     if (method === 'session.rename') {
-      const name = textOf(params, 'display_name');
-      if (name !== undefined) {
-        seat.displayName = name;
-        // The mover included: the relay takes the room's own word for the name it now has, and a
-        // re-hello carries the name this event set (`PROTOCOL.md` §5).
-        this.announce({
+      const id =
+        isRecord(message) && typeof message['id'] === 'number' ? Math.trunc(message['id']) : undefined;
+      const raw = textOf(params, 'display_name');
+      if (id === undefined) {
+        return;
+      }
+      if (raw === undefined) {
+        seat.socket.deliver({
           text: JSON.stringify({
             v: WIRE_VERSION,
-            event: 'peer.renamed',
-            params: { peer_id: seat.id, display_name: name },
+            id,
+            error: { code: 'bad_params', message: 'the display_name is missing' },
           }),
-        }, seat.room);
+        });
+        return;
       }
+      const name = raw.trim();
+      const refusal = renameRefusal(raw, name);
+      if (refusal !== undefined) {
+        seat.socket.deliver({
+          text: JSON.stringify({ v: WIRE_VERSION, id, error: refusal }),
+        });
+        return;
+      }
+      seat.displayName = name;
+      // The reply is the request's own answer (`§4.2`): the relay resolves the method on it.
+      seat.socket.deliver({ text: JSON.stringify({ v: WIRE_VERSION, id, result: {} }) });
+      // The mover included: the relay takes the room's own word for the name it now has, and a
+      // re-hello carries the name this event set (`PROTOCOL.md` §5).
+      this.announce({
+        text: JSON.stringify({
+          v: WIRE_VERSION,
+          event: 'peer.renamed',
+          params: { peer_id: seat.id, display_name: name },
+        }),
+      }, seat.room);
       return;
     }
     // Every other method belongs to a version this room does not speak. The real server answers
