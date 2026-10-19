@@ -23,9 +23,11 @@
 -- - The expression that fills a hole: `%s` in a pinned sentence is that hole, so the pin is on
 --   the words around it.
 --
--- Ten messages are variables, and their number is pinned so an eleventh cannot arrive unnoticed.
--- Four are the front-end's own: the connect failure, the companion's failure to start, the
--- question said where there is nobody to answer it, and what a room's own refusal says. Six are
+-- Eleven messages are variables, and their number is pinned so a twelfth cannot arrive unnoticed.
+-- Five are the front-end's own: the connect failure, the companion's failure to start, the
+-- question said where there is nobody to answer it, what a room's own refusal says, and the one
+-- `notify_draw_failure` says, which is a variable because it names the peer, the document and
+-- the editor's own error. Six are
 -- the web page's words, which the companion sends and `test/room.test.ts` pins: why a follow
 -- ended, the host gone, the host back, the room gone, the question a host leaving is asked, and
 -- the sentence `notify_words` says, which is a refused go-to or the first download's notice. Each
@@ -451,7 +453,7 @@ for _, message in ipairs(MESSAGES) do
 end
 check_lines('every sentence this front-end shows is the shared one', found_lines, pinned_lines)
 
-check('the messages that are not literals are the ten this file names', variables, 10)
+check('the messages that are not literals are the eleven this file names', variables, 11)
 
 -- The sentences said through `notify_words` are the companion's: each call names a group and a key
 -- of `test/lua/words.json`, which `test/room.test.ts` holds equal to what the companion sends, at

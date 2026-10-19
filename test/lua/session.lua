@@ -1177,6 +1177,120 @@ check(
   0
 )
 
+-- A failed extmark write is said, not dropped: the pcall around the editor's own call stands so
+-- a broken buffer cannot wedge the draw, and the warning it answers goes out once per sentence —
+-- a draw that keeps failing runs again at every cursor move, so the same warning repeated per
+-- redraw would be noise. The stubbed editor is the one way to make the writes fail on demand;
+-- the plugin sees whatever `vim.api` names at call time, so the real one goes back afterwards.
+local notifications = {}
+local notify_real = vim.notify
+vim.notify = function(message, level)
+  notifications[#notifications + 1] = { message = message, level = level }
+end
+local last_notification = function()
+  return notifications[#notifications]
+end
+
+local set_extmark_real = vim.api.nvim_buf_set_extmark
+vim.api.nvim_buf_set_extmark = function()
+  error('boom: no marks', 0)
+end
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 7,
+    head = 7,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('a failed caret write is still drawn as nothing', #marks, 0)
+check(
+  '  and said as a warning',
+  last_notification() ~= nil and last_notification().level,
+  vim.log.levels.WARN
+)
+check(
+  '  naming the peer, the document and the editor\'s own error',
+  last_notification() ~= nil and last_notification().message,
+  'selvage: could not draw Bob\'s caret in ' .. presence_room .. ': boom: no marks'
+)
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 7,
+    head = 7,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('the same failing draw again says nothing more', #notifications, 1)
+
+vim.api.nvim_buf_set_extmark = set_extmark_real
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 7,
+    head = 7,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+check('the draw with the editor back works and says nothing', marks[1] ~= nil and #marks, 1)
+
+local del_real = vim.api.nvim_buf_del_extmark
+vim.api.nvim_buf_del_extmark = function()
+  error('boom: no withdrawal', 0)
+end
+marks = draw({})
+check(
+  'a failed withdrawal is said, naming the document it was owed in',
+  last_notification() and last_notification().message,
+  'selvage: could not clear a presence mark in ' .. presence_room .. ': boom: no withdrawal'
+)
+marks = draw({
+  {
+    peerId = 'p-bob',
+    label = 'Bob',
+    role = 'guest',
+    path = presence_room,
+    anchor = 7,
+    head = 7,
+    colour = '#61afef',
+    fill = '#61afef40',
+  },
+})
+marks = draw({})
+check('the same failing withdrawal again says nothing more', #notifications, 2)
+vim.api.nvim_buf_del_extmark = del_real
+-- The stubbed editor could not withdraw anything, so the marks a failing draw left standing are
+-- gone by hand: the plugin's own list already believes they are out.
+vim.api.nvim_buf_clear_namespace(presence_buf, ns, 0, -1)
+
+-- The reader behind this file left this peer's report standing: put the draw back to it, with
+-- nothing drawn for a document nobody holds, and the editor's own notify with them.
+vim.notify = notify_real
+marks = draw({
+  {
+    peerId = 'p-ann',
+    label = 'Ann',
+    role = 'guest',
+    path = 'a-document-nobody-holds.txt',
+    anchor = 0,
+    head = 0,
+    colour = '#e06c75',
+  },
+})
+
 -- -- the name behind the gutter sign -------------------------------------------
 --
 -- `sign_text` is one or two cells, so a peer called `thisismylongusername` is `th` and the
