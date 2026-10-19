@@ -63,6 +63,19 @@ local function said_since(from, needle)
   return nil
 end
 
+--- A restart: the plugin is loaded again with no memory of its own. That is every module the
+--- plugin is made of, not only the one a caller requires — a file-local of a module is a
+--- file-local of a restart — and this file's own companion stub is left in place, since a real
+--- restart would load the real companion and this file has replaced it deliberately.
+local function restart()
+  for name in pairs(package.loaded) do
+    if name == 'selvage' or (name:sub(1, 8) == 'selvage.' and name ~= 'selvage.companion') then
+      package.loaded[name] = nil
+    end
+  end
+  return require('selvage')
+end
+
 local function count_type(kind)
   local count = 0
   for _, message in ipairs(sent) do
@@ -199,8 +212,7 @@ check('a host writes the address down', last_of('host') and last_of('host').serv
 -- input is put back before the reload: otherwise the fresh plugin mistakes the stand-in for
 -- the built-in and believes there is someone to ask where there is no one.
 vim.ui.input = builtin_input
-package.loaded['selvage'] = nil
-selvage = require('selvage')
+selvage = restart()
 prompted = nil
 vim.cmd('SelvageHost')
 check('  a restart proceeds on the address last used', prompted, nil)
@@ -456,8 +468,7 @@ check('  and it is still what the next host uses', table.concat(vim.fn.readfile(
 -- demo default, exactly as the first :SelvageHost question does.
 vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 vim.ui.input = builtin_input
-package.loaded['selvage'] = nil
-selvage = require('selvage')
+selvage = restart()
 before = #notices
 answer_with(function(opts)
   return opts.default

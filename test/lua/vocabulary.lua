@@ -410,11 +410,14 @@ check_lines('every command is described by the phrase both clients use', describ
 
 -- -- the sentences this front-end can show a user ---------------------------------------
 --
--- The literals `lua/selvage/init.lua` notifies, which is where the words of a moment are
--- written. Reading them out of the file rather than out of a session is what makes the pin
--- cover the moments no headless run can reach as well as the ones it can.
+-- The literals the front-end notifies, which is where the words of a moment are written. They
+-- are written across the modules under `lua/selvage/`, so the directory as a whole is what is
+-- read: taking them out of the files rather than out of a session is what makes the pin cover
+-- the moments no headless run can reach as well as the ones it can.
 
-local source = table.concat(vim.fn.readfile('lua/selvage/init.lua'), '\n')
+local source = table.concat(vim.tbl_map(function(path)
+  return table.concat(vim.fn.readfile(path), '\n')
+end, vim.fn.glob('lua/selvage/*.lua', false, true)), '\n')
 check('the front-end is where this test reads it', #source > 0, true)
 
 local scanned = calls(tokens(source), CALLS)
