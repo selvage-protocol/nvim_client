@@ -582,14 +582,15 @@ check(
   said_since(before_stale, path1 .. ' is opened in the room, so every peer receives it.') ~= nil,
   true
 )
--- The mark a caret the buffer lost was drawn with cannot be withdrawn by buffer number any
--- more, and the draw says that: once, named by the document it was in.
+-- The mark a caret the buffer lost was drawn with is not worth a word: the editor destroyed the
+-- marks with the buffer, so there is nothing left to withdraw and asking a buffer that is gone is
+-- not a failure the draw reports. The hold sentence stands alone.
 check(
-  '  and saying the mark the lost buffer cannot be cleared from',
-  said_since(before_stale, 'could not clear a presence mark in ' .. path1) ~= nil,
+  '  and saying nothing about the mark the lost buffer took with it',
+  said_since(before_stale, 'could not clear a presence mark') == nil,
   true
 )
-check('  and only that', #notices, before_stale + 2)
+check('  and only that', #notices, before_stale + 1)
 buf1 = vim.api.nvim_get_current_buf()
 
 -- A host never creates on a peer's behalf: a caret drawn where the file has since gone is
@@ -1695,21 +1696,21 @@ check(
   said_since(before_heal, 'g/one.txt is opened in the room, so every peer receives it.') ~= nil,
   true
 )
--- The wiped buffer's mark cannot be withdrawn by buffer number, and the draw says that: named
--- by the document the caret was in, once.
+-- The wiped buffer took its mark with it, the same way: there is nothing left to withdraw and
+-- nothing is said about it, so the hold sentence is the whole of what the landing says.
 check(
-  '  and saying the mark the wiped buffer cannot be cleared from',
-  said_since(before_heal, 'could not clear a presence mark in g/one.txt') ~= nil,
+  '  and saying nothing about the mark the wiped buffer took with it',
+  said_since(before_heal, 'could not clear a presence mark') == nil,
   true
 )
-check('  and only that', #notices, before_heal + 2)
+check('  and only that', #notices, before_heal + 1)
 arrive('g/one.txt', 'alpha\nbeta\ngamma\n')
 check(
   'landing when the text arrives with no new frame',
   vim.fn.bufname('%'),
   'selvage://g/one.txt'
 )
-check('  saying nothing new on arrival', #notices, before_heal + 2)
+check('  saying nothing new on arrival', #notices, before_heal + 1)
 
 -- The marks go with the membership: a peer the room no longer names leaves no caret
 -- behind even before the next presence frame redraws.

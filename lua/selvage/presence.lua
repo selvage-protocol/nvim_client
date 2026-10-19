@@ -42,12 +42,18 @@ local function clear_presence()
     return
   end
   for _, mark in ipairs(state.presence_marks) do
-    local ok, err = pcall(api.nvim_buf_del_extmark, mark.bufnr, ns, mark.id)
-    if not ok then
-      notify_draw_failure(
-        ('could not clear a presence mark in %s: %s')
-          :format(mark.path or ('buffer %d'):format(mark.bufnr), tostring(err))
-      )
+    -- A buffer that is gone is the ordinary case, not a failure: a peer's document left, or this
+    -- window was closed over it, and the marks went with the buffer. The withdrawal asks a buffer
+    -- the editor no longer has, so it is only asked while the buffer is there; a warning here
+    -- would be said on the way out of every session that ends with one gone.
+    if api.nvim_buf_is_valid(mark.bufnr) then
+      local ok, err = pcall(api.nvim_buf_del_extmark, mark.bufnr, ns, mark.id)
+      if not ok then
+        notify_draw_failure(
+          ('could not clear a presence mark in %s: %s')
+            :format(mark.path or ('buffer %d'):format(mark.bufnr), tostring(err))
+        )
+      end
     end
   end
   state.presence_marks = {}
