@@ -1276,6 +1276,29 @@ vim.api.nvim_buf_del_extmark = del_real
 -- gone by hand: the plugin's own list already believes they are out.
 vim.api.nvim_buf_clear_namespace(presence_buf, ns, 0, -1)
 
+-- A buffer that is gone takes its marks with it and that is ordinary, not a failure: a peer's
+-- document left, or this window was closed over it. The withdrawal then asks a buffer the editor
+-- no longer has, and saying so would warn on the way out of every session that ends with one gone
+-- — which is how a warning worth reading stops being read. `land` already treats "the buffer may
+-- have gone while the report stood" as nothing to say, so the walk that clears them says nothing
+-- either. The marks live in the plugin's own list, so the buffer goes by hand here.
+-- A `do` block because the chunk is already at Lua's two-hundred-local ceiling: a local declared
+-- inside it does not spend one.
+do
+  local state = require('selvage.state').state
+  local gone_buf = vim.api.nvim_create_buf(false, false)
+  state.presence_marks[#state.presence_marks + 1] = {
+    bufnr = gone_buf,
+    id = 1,
+    path = 'a-document-that-left.txt',
+  }
+  vim.api.nvim_buf_delete(gone_buf, { force = true })
+  local notifications_before_gone = #notifications
+  marks = draw({})
+  check('a mark whose buffer is gone is withdrawn without a word', #notifications, notifications_before_gone)
+  check('  and the list is emptied with it', #state.presence_marks, 0)
+end
+
 -- The reader behind this file left this peer's report standing: put the draw back to it, with
 -- nothing drawn for a document nobody holds, and the editor's own notify with them.
 vim.notify = notify_real
