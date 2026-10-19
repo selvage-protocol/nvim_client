@@ -43,6 +43,9 @@ local state = {
   --- Whether this session has said that the connection is a viewer, so it is said once rather than
   --- at every report of the role (§13.9, `note_role`).
   viewer_said = false,
+  --- The presence-draw failure sentences this session already named, so a failed extmark write is
+  --- said once per sentence rather than at every redraw that still cannot make it (`notify_draw_failure`).
+  draw_failures = {},
   room = nil,
   invite = nil,
   --- @type table<string, table> room path to document
@@ -290,6 +293,17 @@ local function notify_words(group, key, level, ...)
   end
 end
 
+--- Says a presence draw that went wrong, once per sentence: a draw that keeps failing runs again
+--- at every cursor move and presence report, and the same warning repeated per redraw is noise
+--- rather than news — a different sentence names a different failure and is said again.
+local function notify_draw_failure(message)
+  if state.draw_failures[message] then
+    return
+  end
+  state.draw_failures[message] = true
+  notify(message, vim.log.levels.WARN)
+end
+
 --- A duration as a person reads it: whole seconds, rounded, which is the unit the room's
 --- deadlines are named in and the one the other client shows.
 local function seconds(ms)
@@ -487,7 +501,13 @@ local function clear_presence()
     return
   end
   for _, mark in ipairs(state.presence_marks) do
-    pcall(api.nvim_buf_del_extmark, mark.bufnr, ns, mark.id)
+    local ok, err = pcall(api.nvim_buf_del_extmark, mark.bufnr, ns, mark.id)
+    if not ok then
+      notify_draw_failure(
+        ('could not clear a presence mark in %s: %s')
+          :format(mark.path or ('buffer %d'):format(mark.bufnr), tostring(err))
+      )
+    end
   end
   state.presence_marks = {}
 end
@@ -637,7 +657,12 @@ local function draw_presence(cursors)
             priority = 100,
           })
           if ok then
-            state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
+            state.presence_marks[#state.presence_marks + 1] =
+              { bufnr = document.bufnr, id = id, path = document.path }
+          else
+            notify_draw_failure(
+              ("could not draw %s's selection in %s: %s"):format(label, document.path, tostring(id))
+            )
           end
         end
         local row, col = document:position(cursor.head)
@@ -666,7 +691,12 @@ local function draw_presence(cursors)
         end
         local ok, id = pcall(api.nvim_buf_set_extmark, document.bufnr, ns, row, from, caret)
         if ok then
-          state.presence_marks[#state.presence_marks + 1] = { bufnr = document.bufnr, id = id }
+          state.presence_marks[#state.presence_marks + 1] =
+            { bufnr = document.bufnr, id = id, path = document.path }
+        else
+          notify_draw_failure(
+            ("could not draw %s's caret in %s: %s"):format(label, document.path, tostring(id))
+          )
         end
       end
     end
