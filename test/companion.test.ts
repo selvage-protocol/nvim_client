@@ -563,35 +563,67 @@ test("a joining client is told the room's peers the handshake carried", async ()
   );
 });
 
-test('a remote change is written when the front-end asks for it', async () => {
-  const it = harness('host', [], [], { defaultAutoSave: true });
-  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0' });
-  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
+for (const autoSave of [true, false]) {
+  test(autoSave
+    ? 'a remote change is written when the front-end asks for it'
+    : 'a remote change is not written when the front-end says not to', async (t) => {
+    const it = harness('host', [], [], { defaultAutoSave: true });
+    t.after(() => it.companion.leave());
+    const replies: Request[] = [];
+    const front = new FrontEnd(replies, 'hello\n');
+    const observed = (): unknown => ({
+      sent: it.sent, replies, front: front.text, version: front.version,
+      mirror: it.editor.text('notes.txt'), replica: it.engine.text('notes.txt'),
+    });
+    const waitFor = async (label: string, check: () => boolean): Promise<void> => {
+      const deadline = Date.now() + 2000;
+      while (!check()) {
+        assert.ok(Date.now() < deadline,
+          `timed out waiting for ${label}; observed ${JSON.stringify(observed())}`);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    };
+    await it.companion.handle({
+      type: 'host', serverUrl: 'ws://127.0.0.1:0', ...(autoSave ? {} : { autoSave: false }),
+    });
+    await it.companion.handle({ type: 'open', path: 'notes.txt', text: front.text });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
 
-  it.engine.remote('notes.txt', 'hello, world\n');
+    it.engine.remote('notes.txt', 'hello, world\n');
+    await waitFor('the remote applyEdit', () => it.applies.length === 1);
+    const offered = it.applies[0];
+    assert.ok(offered !== undefined);
+    assert.deepEqual(offered, {
+      type: 'applyEdit', id: 1, path: 'notes.txt', start: 5, end: 5, text: ', world', version: 0,
+    });
+    front.receive(JSON.parse(wire(offered)) as Notification);
+    assert.equal(front.text, 'hello, world\n');
+    assert.equal(front.version, 1);
+    assert.deepEqual(replies, [{ type: 'applied', id: offered.id, ok: true }]);
+    const reply = replies[0];
+    assert.ok(reply !== undefined && isRequest(reply));
+    const drawn = it.sent.filter((notification) => notification.type === 'presence').length;
+    await it.companion.handle(reply);
+    await waitFor('the settled apply to redraw presence', () =>
+      it.sent.filter((notification) => notification.type === 'presence').length > drawn);
+    assert.equal(it.editor.text('notes.txt'), front.text);
+    assert.equal(it.engine.text('notes.txt'), front.text);
 
-  await until("the room's change to be written", () => {
-    return it.sent.some((notification) => notification.type === 'save');
+    t.mock.timers.tick(499);
+    assert.equal(it.sent.filter((notification) => notification.type === 'save').length, 0,
+      'the settled apply must not be saved before the 500ms deadline');
+    t.mock.timers.tick(1);
+    if (autoSave) {
+      const save = it.sent.find((notification) => notification.type === 'save');
+      assert.ok(save !== undefined);
+      assert.equal(save.path, 'notes.txt');
+      assert.notEqual(save.id, offered.id);
+      await it.companion.handle({ type: 'saved', id: save.id, ok: true });
+    }
+    assert.equal(it.sent.filter((notification) => notification.type === 'save').length, autoSave ? 1 : 0,
+      'the front-end opt-out must override the enabled companion default at the save deadline');
   });
-});
-
-test('a remote change is not written when the front-end says not to', async () => {
-  const it = harness('host', [], [], { defaultAutoSave: true });
-  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', autoSave: false });
-  await it.companion.handle({ type: 'open', path: 'notes.txt', text: 'hello\n' });
-
-  it.engine.remote('notes.txt', 'hello, world\n');
-  // The bridge writes a settled document, and its settle window is 500ms: a write this session
-  // was going to schedule has been scheduled by the end of this wait, and the sibling test
-  // above shows the same stimulus reaching the write when the front-end asks for it.
-  await delay(1200);
-  assert.deepEqual(
-    it.sent.filter((notification) => notification.type === 'save'),
-    [],
-    "the front-end said not to write it, and that is the front-end's setting, not this default",
-  );
-  assert.equal(it.engine.text('notes.txt'), 'hello, world\n', 'the room still reached the replica');
-});
+}
 
 test('a room that is gone ends the session', async () => {
   const it = harness('host');

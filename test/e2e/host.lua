@@ -31,6 +31,7 @@ harness.control_file = vim.env.SELVAGE_E2E_CONTROL_FILE
 harness.outcome = { role = 'host' }
 
 local selvage = harness.load_plugin()
+vim.g.selvage_display_name = 'Ada'
 
 vim.cmd('edit ' .. vim.fn.fnameescape(harness.seed_path))
 local bufnr = vim.api.nvim_get_current_buf()
@@ -64,6 +65,18 @@ end, function()
 end)
 
 harness.wait_for_file('the guest to report it has joined', harness.deadline_ms, vim.env.SELVAGE_E2E_JOINED_FILE)
+
+harness.wait('the room roster to name the guest Grace', harness.deadline_ms, function()
+  for _, person in ipairs(selvage.room().people) do
+    if not person.you and not person.host and person.label == 'Grace' then
+      return true
+    end
+  end
+  return false
+end, function()
+  return vim.inspect(selvage.room().people)
+end)
+harness.log('room roster', vim.inspect(selvage.room().people))
 
 vim.api.nvim_buf_set_lines(bufnr, 0, 0, true, { harness.markers.host })
 harness.log('made the host edit; buffer now', vim.inspect(harness.text()))

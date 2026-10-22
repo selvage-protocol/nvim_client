@@ -26,6 +26,7 @@ harness.control_file = vim.env.SELVAGE_E2E_CONTROL_FILE
 harness.outcome = { role = 'guest' }
 
 local selvage = harness.load_plugin()
+vim.g.selvage_display_name = 'Grace'
 
 local invite = harness.wait_for_file('the host to hand on its invite', harness.deadline_ms, harness.invite_file)
 harness.log('the host is inviting with', invite)
@@ -54,6 +55,18 @@ end, harness.observe)
 -- it with both keys.
 local role = selvage.session().role
 harness.log('joined as', role, 'holding', vim.inspect(harness.text()))
+
+harness.wait('the room roster to name the host Ada', harness.deadline_ms, function()
+  for _, person in ipairs(selvage.room().people) do
+    if not person.you and person.host and person.label == 'Ada' then
+      return true
+    end
+  end
+  return false
+end, function()
+  return vim.inspect(selvage.room().people)
+end)
+harness.log('room roster', vim.inspect(selvage.room().people))
 
 harness.write_file(vim.env.SELVAGE_E2E_JOINED_FILE, 'joined')
 
