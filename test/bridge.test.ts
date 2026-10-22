@@ -13,6 +13,7 @@ import test from 'node:test';
 import { NvimEditorHost } from '../companion/editor.ts';
 import type { Notification } from '../companion/ipc.ts';
 import { SessionBridge } from '../vendor/bridge/index.ts';
+import type { Timers } from '../vendor/bridge/index.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
 
@@ -109,6 +110,102 @@ function harness(role: 'host' | 'guest'): Harness {
       );
     },
   };
+}
+
+class ManualTimers implements Timers {
+  private readonly pending = new Map<number, { delayMs: number; run: () => void }>();
+  readonly scheduled: number[] = [];
+  private next = 1;
+
+  after(delayMs: number, run: () => void): () => void {
+    const id = this.next++;
+    this.scheduled.push(delayMs);
+    this.pending.set(id, { delayMs, run });
+    return () => { this.pending.delete(id); };
+  }
+
+  delays(): number[] {
+    return [...this.pending.values()].map((entry) => entry.delayMs);
+  }
+
+  fire(): void {
+    for (const [id, entry] of [...this.pending]) {
+      this.pending.delete(id);
+      entry.run();
+    }
+  }
+}
+
+async function until(label: string, check: () => boolean, seen: () => unknown): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!check()) {
+    assert.ok(Date.now() < deadline, `timed out waiting for ${label}; observed ${JSON.stringify(seen())}`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+for (const autoSave of [true, false]) {
+  test(autoSave
+    ? 'Neovim remote save waits for the applied reply after its deadline'
+    : 'Neovim remote save opt-out holds after a settled apply', async (t) => {
+    const engine = new FakeEngine('host');
+    const sent: Notification[] = [];
+    const host = new NvimEditorHost({ send: (notification) => sent.push(notification) });
+    const timers = new ManualTimers();
+    const bridge = new SessionBridge({ engine, host, timers, autoSave, reconcileSettleMs: 0 });
+    t.after(() => { bridge.dispose(); host.reset(); });
+    const saves = (): Notification[] => sent.filter((notification) => notification.type === 'save');
+    const seen = (): unknown => ({
+      sent, mirror: host.text('notes.txt'), replica: engine.text('notes.txt'),
+      deadlines: timers.delays(), scheduled: timers.scheduled,
+    });
+    host.opened('notes.txt', 'hello\n');
+    bridge.documentOpened('notes.txt');
+    assert.deepEqual(engine.opened, ['notes.txt']);
+    engine.remote('notes.txt', 'hello, world\n');
+    const offered = sent.find((notification) => notification.type === 'applyEdit');
+    assert.ok(offered !== undefined);
+    assert.deepEqual(offered, {
+      type: 'applyEdit', id: 1, path: 'notes.txt', start: 5, end: 5, text: ', world', version: 0,
+    });
+    assert.deepEqual(timers.delays(), autoSave ? [500] : []);
+
+    timers.fire();
+    assert.deepEqual(saves(), [], 'a held apply must not save the old mirror at the deadline');
+    assert.equal(host.text('notes.txt'), 'hello\n');
+    assert.equal(engine.text('notes.txt'), 'hello, world\n');
+    assert.deepEqual(timers.delays(), []);
+
+    const drawn = sent.filter((notification) => notification.type === 'presence').length;
+    host.settleApply(offered.id, true);
+    await until('settlement to redraw presence', () =>
+      sent.filter((notification) => notification.type === 'presence').length > drawn, seen);
+    assert.equal(host.text('notes.txt'), 'hello, world\n');
+    assert.equal(host.text('notes.txt'), engine.text('notes.txt'));
+    if (autoSave) {
+      await until('the owed save deadline to resume', () => timers.delays().length === 1, seen);
+    }
+    assert.deepEqual(timers.delays(), autoSave ? [500] : []);
+    assert.deepEqual(saves(), [], 'settlement rearms the deadline, it does not save immediately');
+
+    timers.fire();
+    const save = sent.find((notification) => notification.type === 'save');
+    if (autoSave) {
+      assert.ok(save !== undefined);
+      assert.equal(save.path, 'notes.txt');
+      assert.notEqual(save.id, offered.id);
+      host.settleSave(save.id, true);
+    } else {
+      assert.equal(save, undefined, 'opt-out must not schedule a save after the apply settles');
+    }
+    timers.fire();
+    bridge.documentChanged('notes.txt');
+    timers.fire();
+    assert.equal(saves().length, autoSave ? 1 : 0, 'the same remote edit must not be saved twice');
+    assert.deepEqual(timers.delays(), []);
+    assert.deepEqual(timers.scheduled, autoSave ? [500, 500] : []);
+    assert.equal(sent.filter((notification) => notification.type === 'applyEdit').length, 1);
+  });
 }
 
 test("a guest's own buffer is held back until the room's text arrives", async () => {
