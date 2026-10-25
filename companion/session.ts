@@ -21,8 +21,8 @@ import type { Cursor, Engine, TextChange } from '../vendor/bridge/index.ts';
 import { isProtocolError } from '../vendor/engine/index.ts';
 
 import { NvimEditorHost } from './editor.ts';
-import { enumerateGrant, grantReport } from './grant.ts';
-import type { GrantCut, GrantEnumeration } from './grant.ts';
+import { enumerateGrant, grantReport, readGrantedPresence } from './grant.ts';
+import type { GrantCut, GrantEnumeration, Presence } from './grant.ts';
 import { isRequest } from './ipc.ts';
 import { UnreadableInvite, hostRoom, joinRoom } from './relay.ts';
 import type { ListingSource } from './relay.ts';
@@ -98,6 +98,8 @@ export const realEngines: EngineFactory = { host: hostRoom, join: joinRoom };
 interface Unarrived {
   text: string;
   changes: TextChange[];
+  /** Whether the host's file was there when the buffer was shared — see `open`. */
+  present: boolean;
 }
 
 export interface CompanionOptions {
@@ -118,6 +120,14 @@ export interface CompanionOptions {
    * only way to see two of them in flight at once.
    */
   enumerate?: (root: string) => Promise<GrantEnumeration>;
+  /**
+   * How one open document's file is judged for the save boundary: whether it is still there, read
+   * one segment at a time so a name that travels through a symbolic link out of the folder is
+   * never followed (`readGrantedPresence`). A test supplies one whose answer and timing it
+   * decides, because a fault and a read held while the session ends are each a case this boundary
+   * has to get right and neither can be produced off a real disk on demand.
+   */
+  presence?: (root: string, path: string) => Promise<Presence>;
   displayName?: string;
   /**
    * Whether a document the room changed is written, for a `host`/`join` that does not say.
@@ -131,6 +141,7 @@ export class Companion {
   private readonly send: (notification: Notification) => void;
   private readonly engines: EngineFactory;
   private readonly enumerate: (root: string) => Promise<GrantEnumeration>;
+  private readonly presence: (root: string, path: string) => Promise<Presence>;
   private readonly editor: NvimEditorHost;
   private readonly defaultName: string;
   private readonly autoSave: boolean;
@@ -177,6 +188,7 @@ export class Companion {
     this.editor = options.editor ?? new NvimEditorHost({ send: this.send });
     this.engines = options.engines ?? realEngines;
     this.enumerate = options.enumerate ?? enumerateGrant;
+    this.presence = options.presence ?? readGrantedPresence;
     this.defaultName = options.displayName ?? 'neovim';
     this.autoSave = options.autoSave ?? true;
   }
@@ -224,11 +236,17 @@ export class Companion {
         break;
       }
       case 'open': {
-        this.open(request.path, request.text);
+        this.open(request.path, request.text, request.present ?? false);
         break;
       }
       case 'close': {
         this.close(request.path);
+        break;
+      }
+      case 'wrote': {
+        // The person's own `:w` put a file behind the path. It is this process's to know because
+        // the room's autosave must not recreate a path that was there and is now gone.
+        this.editor.materialized(request.path);
         break;
       }
       case 'change': {
@@ -339,7 +357,7 @@ export class Companion {
    * it, and the buffer ends holding both. Deferring it instead would put the keystroke in
    * neither: `arrive` would replay it into a mirror that the room's own text then replaced.
    */
-  private open(path: string, text: string): void {
+  private open(path: string, text: string, present: boolean): void {
     const engine = this.engine;
     // The bridge holds a guest document back by the same rule; this deferral is here too because
     // the count an edit is offered against is the mirror's, and the mirror is `arrive`'s to make.
@@ -347,7 +365,7 @@ export class Companion {
     // handed the room's documents exactly as a guest is — it differs in what it may publish
     // (`§13.9`), not in what it holds, which is the same rule the front-end's `is_peer` reads.
     if (engine !== undefined && engine.session().role !== 'host' && !engine.has(path) && text !== '') {
-      this.unarrived.set(path, { text, changes: [] });
+      this.unarrived.set(path, { text, changes: [], present });
       void engine
         .open(path)
         .then(() => {
@@ -384,7 +402,7 @@ export class Companion {
         });
       return;
     }
-    this.editor.opened(path, text);
+    this.editor.opened(path, text, present);
     this.bridge?.documentOpened(path);
     this.renderCursors();
   }
@@ -420,7 +438,7 @@ export class Companion {
       return;
     }
     this.unarrived.delete(path);
-    this.editor.opened(path, held.text);
+    this.editor.opened(path, held.text, held.present);
     for (const change of held.changes) {
       this.editor.changed(path, change);
     }
@@ -596,7 +614,11 @@ export class Companion {
         text: (path) => this.editor.text(path),
         lineEnding: (path) => this.editor.lineEnding(path),
         applyChange: (path, change) => this.editor.applyChange(path, change),
-        save: (path) => this.editor.save(path),
+        // A document the room changed is written to the host's own file, unless the folder no
+        // longer holds it: a file deleted under the host is gone, and the room's autosave must
+        // not put it back. The presence is read at the moment of the write, per path, rather than
+        // remembered from a watcher event — see `saveHostFile`.
+        save: (path) => this.saveHostFile(root, path, engine),
         readGrantedFile: (path) => this.editor.readGrantedFile(path),
         renderCursors: (cursors) => this.paintCursors(cursors),
         report: (report) => this.editor.report(report),
@@ -856,6 +878,81 @@ export class Companion {
       !isBinaryNamedPath(path);
     if (shareable !== this.listedPaths(listed).has(path)) {
       this.scheduleGrant(root);
+    }
+  }
+
+  /**
+   * Writes a document the room changed to the host's own file, unless the shared folder no longer
+   * holds the path.
+   *
+   * The room's autosave otherwise recreates a file the host deleted: the buffer keeps the room's
+   * text, but the file's absence is the folder's own fact and this process does not put it back.
+   * The presence is read off the disk as the write is asked for, so a path that came back is
+   * written again, and each leaf is judged on its own answer — a directory recreated with one of
+   * its children does not unblock an absent sibling, because that sibling's write reads its own
+   * name and not the directory's.
+   *
+   * Only a path the folder has held before is judged this way. A path with nothing behind it is a
+   * buffer the person has not written yet, and the room's change is what creates the file: the
+   * first autosave of a new buffer is not a deletion to refuse. What makes the path one the folder
+   * has held is a file that was there when it was shared, a write the person's `:w` put on disk
+   * (`wrote`), or an autosave that already reached disk (`settleSave`), each of them the write's
+   * own document instance (`saveTarget`).
+   *
+   * And only a read that confirms the path is *not there* holds the write back. Every other
+   * answer — a plain file, a link, an unreadable parent, an I/O fault — is not absence, so the
+   * write goes ahead rather than persistence being disabled on a guess; a real fault then surfaces
+   * where it always did, as the editor's own `saveFailed`.
+   *
+   * The path is one this session registered as an open document and the folder is the root the
+   * session was started with, so the read is scoped before any metadata is touched. A session with
+   * no folder to have observed a deletion in — a guest, a host without a root — writes as before.
+   *
+   * `engine` is the session the write belongs to, and the write is held to the document instance
+   * it was computed for. A read that settles after either has gone belongs to a document that is
+   * not the one the next session or the next open holds, and the file it would write is not that
+   * document's to write.
+   */
+  private async saveHostFile(
+    root: string | undefined,
+    path: string,
+    engine: CompanionEngine,
+  ): Promise<boolean> {
+    if (this.engine !== engine) {
+      // The session that asked is gone; there is no document of its left to write.
+      return true;
+    }
+    const target = this.editor.saveTarget(path);
+    if (root === undefined || root === '' || !isGrantedPath(path) || target === undefined) {
+      // Not a path this session guards for the folder; the write is the editor's as before.
+      return this.editor.save(path);
+    }
+    if (!target.materialized) {
+      // Nothing has ever been at this path, so the room's change is what creates it.
+      return this.editor.save(path, target.instance);
+    }
+    const absent = await this.pathAbsent(root, path);
+    // The session that asked may have ended while the disk was read: the next session's documents
+    // are not this write's to make. The instance is checked by `save` itself, so a path closed and
+    // reopened under this session is the new document's and not this write's either.
+    if (this.engine !== engine) {
+      return true;
+    }
+    return absent ? true : this.editor.save(path, target.instance);
+  }
+
+  /**
+   * Whether the host's own file at a room path is confirmed not to be there.
+   *
+   * `true` is one answer only: the read said the name is not there. Every other answer, including
+   * a read that itself failed, is "not absent", so a fault cannot be silently read as a deleted
+   * file.
+   */
+  private async pathAbsent(root: string, path: string): Promise<boolean> {
+    try {
+      return (await this.presence(root, path)) === 'missing';
+    } catch {
+      return false;
     }
   }
 

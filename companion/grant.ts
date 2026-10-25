@@ -401,6 +401,75 @@ export async function readGrantedFile(root: string, path: string): Promise<Grant
   }
 }
 
+/**
+ * What a metadata-only read of a grant path found: the plain answers are `present` and `missing`,
+ * and everything the file system would not give a plain answer for is one of the two failures. A
+ * caller that must tell a confirmed absence from a fault reads `missing` alone as absence.
+ */
+export type Presence = 'present' | 'missing' | 'refused' | 'unknown';
+
+/**
+ * Whether the host's own file at a room path is there, read the same way a peer's read is: one
+ * segment at a time, a step at a time, each inside the directory the step before it found, so a
+ * name that travels *through* a symbolic link out of the folder is refused rather than followed.
+ * That is the whole of the difference from `readGrantedFile`: this reads no bytes and applies no
+ * ignore rule, it answers only whether the name is there.
+ *
+ * The folder's own ignore files are not read, because a name they leave out is still a name the
+ * folder holds and this question is about the folder alone. `readGrantedFile` is where a path the
+ * grant does not name is refused; a caller here is asking about a path it already registered.
+ */
+export async function readGrantedPresence(root: string, path: string): Promise<Presence> {
+  if (!isGrantedPath(path)) {
+    return 'refused';
+  }
+  const segments = path.split('/');
+  const leaf = segments.pop();
+  if (leaf === undefined) {
+    return 'refused';
+  }
+  if (!PINNED_STEPS) {
+    const directory = await walkGoverning(root, segments, false);
+    if ('kind' in directory) {
+      return directory.cause === 'missing' ? 'missing' : 'refused';
+    }
+    if (!holdsName(directory.entries, leaf)) {
+      return 'missing';
+    }
+    return await leafPresence(join(directory.path, leaf));
+  }
+  const directory = await openGoverning(root, segments, false);
+  if ('kind' in directory) {
+    return directory.cause === 'missing' ? 'missing' : 'refused';
+  }
+  try {
+    if (!holdsName(directory.entries, leaf)) {
+      return 'missing';
+    }
+    return await leafPresence(inside(directory.handle, leaf));
+  } finally {
+    await directory.handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * One name's own metadata, without following it: an ordinary file is there, `ENOENT` says it is
+ * not, and a link or another kind of name is a refusal. Any other failure is not an answer.
+ */
+async function leafPresence(name: string): Promise<Presence> {
+  try {
+    const info = await lstat(name);
+    return info.isFile() ? 'present' : 'refused';
+  } catch (error: unknown) {
+    return isAbsentCode(error) ? 'missing' : 'unknown';
+  }
+}
+
+/** Whether a file system error is the name not being there, and nothing else. */
+function isAbsentCode(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
 /** A refusal, shaped the way the bridge reads one. */
 type Refused = { readonly kind: 'refused'; readonly cause: GrantRefusal };
 
@@ -465,10 +534,15 @@ function inside(directory: FileHandle, name = ''): string {
  * an entry of the directory it is opened in, spelled exactly as that directory lists it
  * (`holdsName`); the listing that decides that is the same one the directory's own ignore file is
  * read from, so a peer's path does not list a directory twice.
+ *
+ * `governing` is whether the folder's ignore files are read at all. `readGrantedPresence` passes
+ * `false`: it asks only whether a name is there, and a name the ignore rules leave out is still a
+ * name the folder holds.
  */
 async function openGoverning(
   root: string,
   segments: readonly string[],
+  governing = true,
 ): Promise<GoverningOpened> {
   const folder = await open(root, FOLDER).catch((error: unknown) =>
     refused(stepRefusal(error)),
@@ -479,15 +553,19 @@ async function openGoverning(
   let directory = folder;
   let relative = '';
   const sources: IgnoreSource[] = [];
-  const exclude = await repositoryExcludeIn(directory);
-  if (exclude !== undefined) {
-    sources.push({ dir: '', text: exclude });
+  if (governing) {
+    const exclude = await repositoryExcludeIn(directory);
+    if (exclude !== undefined) {
+      sources.push({ dir: '', text: exclude });
+    }
   }
   for (let depth = 0; ; depth += 1) {
     const entries = await listInside(directory);
-    const own = await ignoreFileIn(directory, IGNORE_FILE, entries);
-    if (own !== undefined) {
-      sources.push({ dir: relative, text: own });
+    if (governing) {
+      const own = await ignoreFileIn(directory, IGNORE_FILE, entries);
+      if (own !== undefined) {
+        sources.push({ dir: relative, text: own });
+      }
     }
     if (depth === segments.length) {
       return { handle: directory, sources, entries };
@@ -568,18 +646,21 @@ async function repositoryExcludeIn(directory: FileHandle): Promise<string | unde
 async function walkGoverning(
   root: string,
   segments: readonly string[],
+  governing = true,
 ): Promise<GoverningFound> {
   // The root is listed once: `rootIgnores` reads the repository exclude off the entries already
   // held here rather than listing the folder again for itself.
   const listed = await listDirectory(root);
-  const sources: IgnoreSource[] = [...(await rootIgnores(root, listed ?? []))];
+  const sources: IgnoreSource[] = governing ? [...(await rootIgnores(root, listed ?? []))] : [];
   let head = root;
   let relative = '';
   for (let depth = 0; ; depth += 1) {
     const entries = depth === 0 ? listed : await listDirectory(head);
-    const own = await ignoreFileAt(head, IGNORE_FILE, entries);
-    if (own !== undefined) {
-      sources.push({ dir: relative, text: own });
+    if (governing) {
+      const own = await ignoreFileAt(head, IGNORE_FILE, entries);
+      if (own !== undefined) {
+        sources.push({ dir: relative, text: own });
+      }
     }
     if (depth === segments.length) {
       return { path: head, sources, entries };

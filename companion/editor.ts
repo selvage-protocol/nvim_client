@@ -50,10 +50,28 @@ interface Document {
    * change and an applied remote edit as one each.
    */
   version: number;
+  /**
+   * Which open of this path this is. Closing it and opening the path again is a different
+   * document however the editor named it, and a write computed against the one before it is not
+   * the new one's to make.
+   */
+  instance: number;
+  /**
+   * Whether the host has had a real file at this path: it was there when the buffer was shared,
+   * or a write reached disk since. A path that was never there is one the room may create; only a
+   * path that has been there and is now gone is a deletion not to put back.
+   */
+  materialized: boolean;
 }
 
 interface Pending {
   resolve: (ok: boolean) => void;
+}
+
+/** A `save` this host asked the front-end for, and the document instance it belongs to. */
+interface SavePending extends Pending {
+  path: string;
+  instance: number;
 }
 
 /**
@@ -140,8 +158,10 @@ export interface NvimEditorHostOptions {
 export class NvimEditorHost implements EditorHost {
   private readonly documents = new Map<string, Document>();
   private readonly applies = new Map<number, Offered>();
-  private readonly saves = new Map<number, Pending>();
+  private readonly saves = new Map<number, SavePending>();
   private nextId = 0;
+  /** Counted up for every `opened`: the identity of one open of a path. */
+  private instances = 0;
   private readonly emit: (notification: Notification) => void;
   /**
    * The folder this session shares, or `undefined` when there is none: the root the grant's
@@ -193,8 +213,9 @@ export class NvimEditorHost implements EditorHost {
   // -- from the front-end ----------------------------------------------------
 
   /** A buffer is now shared under `path`, holding `text`. */
-  opened(path: string, text: string): void {
-    this.documents.set(path, { text, version: 0 });
+  opened(path: string, text: string, materialized = false): void {
+    this.instances += 1;
+    this.documents.set(path, { text, version: 0, instance: this.instances, materialized });
   }
 
   closed(path: string): void {
@@ -266,6 +287,29 @@ export class NvimEditorHost implements EditorHost {
     pending.resolve(false);
   }
 
+  /**
+   * The instance a write of `path` belongs to, with whether the folder has ever held a file
+   * there. `undefined` when no document holds the path: nothing to write and nothing to judge.
+   */
+  saveTarget(path: string): { instance: number; materialized: boolean } | undefined {
+    const document = this.documents.get(path);
+    return document === undefined
+      ? undefined
+      : { instance: document.instance, materialized: document.materialized };
+  }
+
+  /**
+   * Marks the path's file as one the folder has held. It is the write that makes that true, so a
+   * write that failed does not call this; `instance` is the document the write belonged to, and
+   * a reopen's document is not marked by the write of the one before it.
+   */
+  materialized(path: string, instance?: number): void {
+    const document = this.documents.get(path);
+    if (document !== undefined && (instance === undefined || document.instance === instance)) {
+      document.materialized = true;
+    }
+  }
+
   /** The front-end's answer to a `save`. */
   settleSave(id: number, ok: boolean): void {
     const pending = this.saves.get(id);
@@ -273,6 +317,9 @@ export class NvimEditorHost implements EditorHost {
       return;
     }
     this.saves.delete(id);
+    if (ok) {
+      this.materialized(pending.path, pending.instance);
+    }
     pending.resolve(ok);
   }
 
@@ -343,13 +390,14 @@ export class NvimEditorHost implements EditorHost {
     });
   }
 
-  save(path: string): Promise<boolean> {
-    if (!this.documents.has(path)) {
+  save(path: string, instance?: number): Promise<boolean> {
+    const document = this.documents.get(path);
+    if (document === undefined || (instance !== undefined && document.instance !== instance)) {
       return Promise.resolve(true);
     }
     const id = (this.nextId += 1);
     return new Promise<boolean>((resolve) => {
-      this.saves.set(id, { resolve });
+      this.saves.set(id, { resolve, path, instance: document.instance });
       this.emit({ type: 'save', id, path });
     });
   }

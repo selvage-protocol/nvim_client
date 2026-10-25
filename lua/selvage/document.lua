@@ -229,6 +229,17 @@ end
 
 --- Starts reporting this buffer's changes.
 function Document:attach()
+  -- The person's own `:w` on this buffer puts a file behind the path, which the room's autosave
+  -- must not later recreate after a delete. The room's own writes go through `Document:save` with
+  -- `noautocmd`, so they never reach this: what fires here is the person's write alone.
+  self.write_group = api.nvim_create_augroup('SelvageWrite' .. self.bufnr, { clear = true })
+  api.nvim_create_autocmd('BufWritePost', {
+    group = self.write_group,
+    buffer = self.bufnr,
+    callback = function()
+      self.send({ type = 'wrote', path = self.path })
+    end,
+  })
   local ok = api.nvim_buf_attach(self.bufnr, false, {
     on_bytes = function(...)
       return self:on_bytes(...)
@@ -262,6 +273,10 @@ function Document:detach()
     return
   end
   self.detached = true
+  if self.write_group ~= nil then
+    pcall(api.nvim_del_augroup_by_id, self.write_group)
+    self.write_group = nil
+  end
 end
 
 --- Re-reads the buffer into the shadow and publishes the whole document as one change.
