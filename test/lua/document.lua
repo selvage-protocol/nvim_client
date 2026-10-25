@@ -522,5 +522,35 @@ check('  and the last one is', utf16.valid('\xf4\x8f\xbf\xbf'), true)
 check('a continuation byte on its own is not', utf16.valid('\x80'), false)
 check('an empty string is', utf16.valid(''), true)
 check('  and so is the empty line a buffer always has', utf16.valid('\n'), true)
+-- -- the person's own write --------------------------------------------------
+--
+-- A shared buffer's `:w` is the person's write and not the room's, and it is the one that puts a
+-- file behind a path the folder never held: the companion is told so a later delete of that path
+-- is not recreated by the room's autosave. The room's own writes go through `Document:save` with
+-- `noautocmd`, so they never fire the callback this checks.
+do
+  local dir = '.tmp/lua-document-write'
+  vim.fn.mkdir(dir, 'p')
+  local file = dir .. '/written.txt'
+  vim.fn.writefile({ 'x' }, file)
+  vim.cmd('edit ' .. vim.fn.fnameescape(file))
+  local write_buf = vim.api.nvim_get_current_buf()
+  local written = {}
+  local written_doc = Document.new(write_buf, 'written.txt', function(message)
+    written[#written + 1] = message
+  end)
+  written_doc:attach()
+  vim.cmd('silent write')
+  local told = nil
+  for _, message in ipairs(written) do
+    if message.type == 'wrote' then
+      told = message.path
+    end
+  end
+  check('a manual write tells the companion the file is there', told, 'written.txt')
+  written_doc:detach()
+  vim.cmd('bwipeout!')
+end
+
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
