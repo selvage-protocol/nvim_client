@@ -53,8 +53,8 @@ job_checks() {
   say "checks: the companion suite"
   npm test
   # The guard around a workflow's `dry_run` input reads `.github/workflows`, so none of the suites
-  # above covers it. The flake check runs the same two files `ci.yml` runs, with the flake's Python
-  # supplying the PyYAML that job installs.
+  # above covers it. The flake check also runs the retry-precondition suite, with Node and the
+  # flake's Python supplying the PyYAML that `ci.yml` installs.
   say "checks: the release workflow's dry_run gating"
   nix build ".#checks.${system}.dry-run-gating" --no-link --print-build-logs
 }
