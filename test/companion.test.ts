@@ -37,6 +37,7 @@ import type { GrantedRead } from '../vendor/bridge/index.ts';
 import { INVITE_REFUSED } from '../companion/relay.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
+import { withReaddirFault } from './helpers/readdir-fault.ts';
 
 /** A walk that read the whole folder, for a stubbed `enumerate` that is not about a cut. */
 function whole(paths: string[]): GrantEnumeration {
@@ -2407,6 +2408,37 @@ test('a presence fault is not a deletion: the file is still written, and a refus
       ),
     () => it.sent,
   );
+});
+
+test('a directory that cannot be listed does not quietly switch the room autosave off', async (t) => {
+  // The path is one the folder has held — the buffer was opened over a real file — so the save
+  // boundary reads it before writing, and only a confirmed absence holds the write back. A listing
+  // fault at the actual reader is not one, and it is the shape a whole-operation presence stub
+  // cannot reach: read as `missing`, the room's edit is silently never written.
+  for (const code of ['EIO', 'EACCES']) {
+    const { root, it } = await hosting(t, { 'sub/notes.txt': 'a note\n' }, { defaultAutoSave: true });
+    await openHostFile(it, 'sub/notes.txt', 'a note\n');
+
+    await withReaddirFault(code, [join(root, 'sub')], async () => {
+      it.engine.remote('sub/notes.txt', 'a note\nand changed\n');
+      await until(
+        'the peer edit to reach the buffer',
+        () => it.applies.some((apply) => apply.path === 'sub/notes.txt'),
+        () => it.applies,
+      );
+      await answerApplies(it);
+      await until(
+        'the save boundary to read the path under the unlistable directory',
+        () => it.probed.includes('sub/notes.txt'),
+        () => it.probed,
+      );
+      await decided();
+      assert.ok(
+        saveAsks(it, 'sub/notes.txt') > 0,
+        `${code}: a directory that could not be listed switched the autosave off instead of writing`,
+      );
+    });
+  }
 });
 
 test('a save that settles after its session ended does not write the next session', async (t) => {

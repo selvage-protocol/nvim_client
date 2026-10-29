@@ -18,6 +18,9 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 vim.cmd('runtime! plugin/selvage.lua')
 
+local capture = dofile(vim.fn.getcwd() .. '/test/helpers/capture.lua')
+capture.begin('mirror')
+
 local uv = vim.uv or vim.loop
 
 local failures = 0
@@ -73,6 +76,14 @@ vim.notify = function(message, level)
 end
 
 local selvage = require('selvage')
+
+-- Only the synthetic session this test owns, never the cache parent or another session.
+local function capture_mirror(site)
+  local owned_root = selvage.session().mirror
+  if owned_root ~= nil then
+    capture.capture(site, owned_root)
+  end
+end
 --- The module the plugin materialises the room with, asked directly what it holds: a listed path
 --- that would leave the mirror is refused before anything is written, and that refusal is what
 --- the traversal checks are about.
@@ -154,7 +165,9 @@ end
 --- the listing was materialised at. `unsafe` is the paths of a listing a real companion flags as
 --- ones a host would never publish, which the mirror keeps out of the room.
 local function join(documents, paths, room, unsafe)
+  capture_mirror('mirror-before-leave-160')
   selvage.leave()
+  capture_mirror('mirror-before-join-161')
   selvage.join('ws://127.0.0.1:1/session?room=r-mirror&token=t')
   handle({
     type = 'status',
@@ -289,13 +302,16 @@ check('  and it is a directory', vim.fn.isdirectory(root), 1)
 check('  outside the working directory the person is in', root:sub(1, #vim.fn.getcwd() + 1) == vim.fn.getcwd() .. '/', false)
 check('  and `session()` reports it, because nothing else tells a person where the room is', selvage.session().mirror, root)
 
+capture_mirror('mirror-before-leave-295')
 selvage.leave()
 check('a session that ends removes its mirror', vim.fn.isdirectory(root), 0)
 check('  and reports none', selvage.session().mirror, nil)
 
 -- A host has nothing to mirror: the room's files are its own working copy.
+capture_mirror('mirror-before-host-300')
 selvage.host('ws://127.0.0.1:1')
 handle({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-mirror' })
+capture_mirror('mirror-before-grant-302')
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 check('a host materialises nothing: the files are already on its disk', selvage.session().mirror, nil)
 
@@ -320,6 +336,9 @@ local stale_variable = room_dir .. '/' .. dead .. '-x-$HOME'
 vim.fn.mkdir(stale_variable, 'p')
 vim.fn.writefile({ 'left behind' }, stale_variable .. '/x.txt')
 
+capture.capture('mirror-stale', stale)
+capture.capture('mirror-stale-variable', stale_variable)
+capture.capture('mirror-live', live)
 join({}, GRANT, 'r-pruned')
 check('a mirror a crashed session left behind is gone', vim.fn.isdirectory(stale), 0)
 check(
@@ -328,7 +347,9 @@ check(
   0
 )
 check('  and one a live process owns is left alone', vim.fn.isdirectory(live), 1)
+capture_mirror('mirror-before-leave-334')
 selvage.leave()
+capture.capture('mirror-pruned-room-final', room_dir)
 vim.fs.rm(room_dir, { recursive = true, force = true })
 
 -- -- a listing that names a variable -------------------------------------------------------
@@ -350,6 +371,7 @@ check(
   vim.fn.filereadable(variable_root .. '/notes/deep.txt'),
   1
 )
+capture_mirror('mirror-before-leave-356')
 selvage.leave()
 check('  and the session that mirrored it removes it', vim.fn.isdirectory(variable_root), 0)
 check('  and the room directory with it', vim.fn.isdirectory(CACHE .. '/r-variable'), 0)
@@ -370,8 +392,10 @@ check('  and the directory above a nested path exists', vim.fn.isdirectory(root 
 
 -- A path that is already on disk is not clobbered: the room's content is fetched into it, and a
 -- listing the room publishes again is not a fetch.
+capture.capture('mirror-readme-before-replace', root .. '/README.md')
 vim.fn.writefile({ 'a tool was here' }, root .. '/README.md')
 before = #notices
+capture_mirror('mirror-before-grant-378')
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 check('a path that already exists is left as it is', read(root .. '/README.md'), 'a tool was here\n')
 check('  and republishing the listing says nothing about it', #notices, before)
@@ -415,6 +439,7 @@ check(
   said_since(before, 'could not be written to disk'),
   nil
 )
+capture_mirror('mirror-before-leave-421')
 selvage.leave()
 
 -- The count bound is the protocol's, far above what a folder this session shares holds; it is the
@@ -437,6 +462,7 @@ check(
   nil
 )
 mirror.max_listed = 100000
+capture_mirror('mirror-before-leave-443')
 selvage.leave()
 
 -- A path the grant's own rules would never let a host publish is flagged by the companion as
@@ -445,6 +471,7 @@ selvage.leave()
 -- repository every git-aware plugin runs `git` in, with whatever `core.fsmonitor` the room wrote.
 -- The room still lists the path (§6.3); its document is simply never a file.
 before = #notices
+capture_mirror('mirror-before-join-451')
 selvage.join('ws://127.0.0.1:1/session?room=r-unsafe&token=t')
 handle({ type = 'status', state = 'joined', role = 'guest', roomId = 'r-unsafe' })
 handle({
@@ -484,6 +511,7 @@ check(
   true
 )
 check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
+capture_mirror('mirror-before-leave-490')
 selvage.leave()
 
 -- A name that would leave the root is refused rather than written: the listing comes from a
@@ -497,6 +525,7 @@ selvage.leave()
 
 local HOSTILE = { '../escaped.txt', 'notes/../../escaped.txt', '/escaped.txt', 'notes\\escaped.txt' }
 local escape_room = CACHE .. '/r-escape'
+capture.capture('mirror-before-delete-503', escape_room)
 vim.fn.delete(escape_room, 'rf')
 before = #notices
 local listed = { 'notes/deep.txt' }
@@ -537,6 +566,7 @@ check('  opened by the room path as a suffix', selvage.documents()[1], 'notes/de
 selvage.open('src/main.rs')
 check('  and it carries the filetype its name gives it', vim.bo.filetype, 'rust')
 
+capture_mirror('mirror-before-leave-543')
 selvage.leave()
 
 join({ 'held-but-not-listed.txt' }, GRANT)
@@ -564,6 +594,7 @@ check('  and there is no mirror to put it in yet', unlisted, nil)
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'typed before the listing' })
 
 root = selvage.session().mirror
+capture_mirror('mirror-before-grant-570')
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 root = selvage.session().mirror
 local late = vim.api.nvim_get_current_buf()
@@ -587,6 +618,7 @@ local shrinking_root = selvage.session().mirror
 vim.fn.writefile({ 'not the room\'s' }, shrinking_root .. '/notes/tool.txt')
 selvage.open('src/main.rs')
 
+capture_mirror('mirror-before-grant-593')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
 
 check('a path that leaves the listing loses its file', vim.fn.filereadable(shrinking_root .. '/only/deep.txt'), 0)
@@ -627,6 +659,7 @@ responder = nil
 
 local kicked = #sent
 local kick_said = #notices
+capture_mirror('mirror-before-grant-633')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
 
 check('a path that leaves the listing loses its file', vim.fn.filereadable(yanked .. '/notes/deep.txt'), 0)
@@ -661,6 +694,7 @@ check('  and its file is not written back', vim.fn.filereadable(yanked .. '/note
 
 -- A listing that names it again is the host having it again: it is offered, and the room's open
 -- set is followed for it as for any other path.
+capture_mirror('mirror-before-grant-667')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'notes/deep.txt', 'src/main.rs' } } })
 check('a listing that names it again offers it again', vim.tbl_contains(selvage.offered(), 'notes/deep.txt'), true)
 local relisted = #sent
@@ -678,6 +712,7 @@ selvage.open('lib/b.txt')
 local dir_b = vim.api.nvim_get_current_buf()
 local dir_sent = #sent
 local dir_said = #notices
+capture_mirror('mirror-before-grant-684')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'keep.txt' } } })
 check('a deleted directory wipes every buffer under it', vim.api.nvim_buf_is_valid(dir_a), false)
 check('  (the second too)', vim.api.nvim_buf_is_valid(dir_b), false)
@@ -710,6 +745,7 @@ check(
 )
 local draft_sent = #sent
 local draft_said = #notices
+capture_mirror('mirror-before-grant-716')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'stays.txt' } } })
 check('a modified buffer the listing leaves is kept', vim.api.nvim_buf_is_valid(draft), true)
 check('  and keeps its text', buffer_text(draft), 'what the person was writing')
@@ -756,10 +792,12 @@ pcall(vim.api.nvim_buf_delete, draft, { force = true })
 -- room, which now lists no files at all.
 
 local emptied = join({}, { 'a.txt' }, 'r-shrunk-to-nothing')
+capture_mirror('mirror-before-grant-762')
 handle({ type = 'report', report = { kind = 'grant', paths = {} } })
 check('a listing that shrinks to nothing loses its last file', vim.fn.filereadable(emptied .. '/a.txt'), 0)
 check('  and the mirror is still this session\'s', selvage.session().mirror, emptied)
 check('  and it is still a directory', vim.fn.isdirectory(emptied), 1)
+capture_mirror('mirror-before-leave-766')
 selvage.leave()
 -- A directory in the mirror that is a link out of it is not resolved: the listing names a path
 -- under it, and a removal that followed the link would delete a file outside the mirror, where
@@ -767,6 +805,7 @@ selvage.leave()
 -- own file tree can put in the way of a guess.
 
 local outside = vim.fn.getcwd() .. '/.tmp/lua-mirror-outside'
+capture.capture('mirror-outside-preclean', outside)
 vim.fn.delete(outside, 'rf')
 vim.fn.mkdir(outside, 'p')
 vim.fn.writefile({ 'the person keeps this' }, outside .. '/deep.txt')
@@ -774,14 +813,19 @@ vim.fn.writefile({ 'the person keeps this' }, outside .. '/deep.txt')
 local linked = join({}, { 'notes/deep.txt' }, 'r-symlinked')
 local escape = linked .. '/escape'
 uv.fs_symlink(outside, escape)
+capture_mirror('mirror-before-grant-781')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'notes/deep.txt', 'escape/deep.txt' } } })
 check('a listing may name a path under a directory that is a link', mirror.granted('escape/deep.txt'), true)
 
+capture_mirror('mirror-before-grant-784')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'notes/deep.txt' } } })
 check('  and removing it does not follow the link out of the mirror', read(outside .. '/deep.txt'), 'the person keeps this\n')
 check('  and the link is where it was', uv.fs_lstat(escape).type, 'link')
 check('  and the path is no longer held', mirror.granted('escape/deep.txt'), false)
+capture_mirror('mirror-before-leave-788')
 selvage.leave()
+capture.capture('mirror-outside-final', outside)
+capture.capture('mirror-before-delete-790', outside)
 vim.fn.delete(outside, 'rf')
 
 -- -- a link planted where the mirror writes ----------------------------------------------
@@ -793,23 +837,30 @@ vim.fn.delete(outside, 'rf')
 -- cannot be written is.
 
 local planted_outside = vim.fn.getcwd() .. '/.tmp/lua-mirror-planted'
+capture.capture('mirror-planted-preclean', planted_outside)
 vim.fn.delete(planted_outside, 'rf')
 vim.fn.mkdir(planted_outside, 'p')
 vim.fn.writefile({ 'the person keeps this' }, planted_outside .. '/secret.txt')
 
 local planted = join({}, { 'linked.txt', 'sub/inner.txt' }, 'r-planted')
+capture.capture('mirror-before-delete-807', planted .. '/linked.txt')
 vim.fn.delete(planted .. '/linked.txt')
 uv.fs_symlink(planted_outside .. '/secret.txt', planted .. '/linked.txt')
 vim.fn.mkdir(planted .. '/sub', 'p')
+capture.capture('mirror-before-delete-810', planted .. '/sub')
 vim.fn.delete(planted .. '/sub', 'rf')
 uv.fs_symlink(planted_outside, planted .. '/sub')
 local before_planted = #notices
+capture_mirror('mirror-before-grant-813')
 handle({ type = 'report', report = { kind = 'grant', paths = { 'linked.txt', 'sub/inner.txt' } } })
 check('a link where a file goes is refused, not left alone', said_since(before_planted, 'could not be written to disk') ~= nil, true)
 check('  and the link is still a link', uv.fs_lstat(planted .. '/linked.txt').type, 'link')
 check('  and a link where a directory goes diverts nothing outside', read(planted_outside .. '/inner.txt'), nil)
 check('  and what was outside is untouched', read(planted_outside .. '/secret.txt'), 'the person keeps this\n')
+capture_mirror('mirror-before-leave-818')
 selvage.leave()
+capture.capture('mirror-planted-final', planted_outside)
+capture.capture('mirror-before-delete-820', planted_outside)
 vim.fn.delete(planted_outside, 'rf')
 
 -- -- content reaches the file ------------------------------------------------------------
@@ -853,8 +904,10 @@ check('  and the buffer is not left modified', vim.bo[buf].modified, false)
 -- The placeholder is not a source of truth: a file a tool wrote into the mirror is read back into
 -- the buffer like any file, and the room's copy is what replaces it — which is what the mirror
 -- trades for native tooling (`DESIGN.md` §4.2).
+capture_mirror('mirror-before-leave-863')
 selvage.leave()
 root = join({}, GRANT)
+capture.capture('mirror-deep-before-replace', root .. '/notes/deep.txt')
 vim.fn.writefile({ 'a tool wrote this' }, root .. '/notes/deep.txt')
 selvage.open('notes/deep.txt')
 buf = vim.api.nvim_get_current_buf()
@@ -868,6 +921,7 @@ handle({
   text = 'the room wrote this',
   version = 0,
 })
+capture.capture('mirror-deep-before-save', root .. '/notes/deep.txt')
 handle({ type = 'save', id = message_id(), path = 'notes/deep.txt' })
 check("  and the room's copy is what the file holds", read(root .. '/notes/deep.txt'), 'the room wrote this\n')
 
@@ -889,6 +943,7 @@ vim.api.nvim_create_autocmd('BufWritePre', {
 
 local before = #notices
 vim.api.nvim_buf_set_lines(buf, -1, -1, true, { 'and the person typed this' })
+capture.capture('mirror-deep-before-editor-write', root .. '/notes/deep.txt')
 vim.cmd('write')
 check("a save in the mirror is not the editor's write path", editor_wrote, false)
 check('  and the file holds what the client holds for the room', read(root .. '/notes/deep.txt'), 'the room wrote this\nand the person typed this\n')
@@ -951,6 +1006,7 @@ vim.cmd('bwipeout!')
 selvage.open('notes/deep.txt')
 local listed_buf = vim.api.nvim_get_current_buf()
 local listed_file = root .. '/notes/deep.txt'
+capture.capture('mirror-before-delete-961', listed_file)
 vim.fn.delete(listed_file)
 before = #notices
 vim.api.nvim_exec_autocmds('BufEnter', { buffer = listed_buf })
@@ -962,6 +1018,7 @@ check(
 check('  and the buffer is not taken away', vim.api.nvim_buf_is_valid(listed_buf), true)
 -- The file is only this session's cache of the room's text, so a save over a directory removed
 -- under it puts the directory back rather than answering `E212` over a modified buffer.
+capture.capture('mirror-before-delete-972', root .. '/notes')
 vim.fn.delete(root .. '/notes', 'rf')
 vim.api.nvim_buf_set_lines(listed_buf, 0, -1, false, { 'written after the directory went' })
 vim.cmd('write')
@@ -1008,6 +1065,7 @@ check(
 
 -- The person's own file is the editor's to write, by the whole-buffer form and by the append.
 local own_file = vim.fn.getcwd() .. '/.tmp/lua-mirror-write.txt'
+capture.capture('mirror-before-delete-1018', own_file)
 vim.fn.delete(own_file)
 before = #notices
 vim.cmd('write ' .. vim.fn.fnameescape(own_file))
@@ -1017,6 +1075,7 @@ check(
   'a line nobody else has\nand the one after it\n'
 )
 check('  and the mirror is not mentioned', said_since(before, 'is inside the mirror') ~= nil, false)
+capture.capture('mirror-write-before-replace', own_file)
 vim.fn.writefile({ 'there' }, own_file)
 before = #notices
 vim.cmd('write >> ' .. vim.fn.fnameescape(own_file))
@@ -1026,6 +1085,7 @@ check(
   'there\na line nobody else has\nand the one after it\n'
 )
 check('  and the mirror is not mentioned', said_since(before, 'is inside the mirror') ~= nil, false)
+capture.capture('mirror-before-delete-1036', own_file)
 vim.fn.delete(own_file)
 
 -- -- a file nobody fetched opens empty, and says so -------------------------------------------
@@ -1080,12 +1140,14 @@ vim.g.selvage_indicator = nil
 -- Removing the path from the listing takes the mark with it: `unfetched_buffer` reads the
 -- grant, so a window already showing the buffer is redrawn when the listing changes rather
 -- than keeping a mark for a file the room no longer lists.
+capture_mirror('mirror-before-grant-1090')
 handle({ type = 'report', report = { kind = 'grant', paths = {} } })
 check(
   'a path the room stops listing loses the mark at once',
   winbar():find('[not fetched]', 1, true) == nil,
   true
 )
+capture_mirror('mirror-before-grant-1096')
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 
 -- Entering it again is not news: the sentence is for the open, and the buffer is still empty.
@@ -1095,6 +1157,7 @@ check('  and says so once per path', #notices, hint_repeated)
 
 -- A file holding text is not this: a tool may have written the mirror's file behind the
 -- client's back, and the buffer reads what is there — so the row has nothing to mark.
+capture.capture('mirror-main-before-replace', root .. '/src/main.rs')
 vim.fn.writefile({ 'from a tool' }, root .. '/src/main.rs')
 before = #notices
 vim.cmd('edit! ' .. vim.fn.fnameescape(root .. '/src/main.rs'))
@@ -1263,16 +1326,19 @@ selvage.fetch('nothing-here')
 check('a fetch of a path nothing matches is refused', said_since(before, 'no file the room lists matches "nothing-here"') ~= nil, true)
 
 responder = nil
+capture_mirror('mirror-before-leave-1273')
 selvage.leave()
 before = #notices
 selvage.fetch()
 check('a fetch with no session says so', said_since(before, 'join a session first') ~= nil, true)
 
+capture_mirror('mirror-before-host-1278')
 selvage.host('ws://127.0.0.1:1')
 handle({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-mirror' })
 before = #notices
 selvage.fetch()
 check('a fetch while hosting says why there is nothing to fetch', said_since(before, 'already on your disk') ~= nil, true)
+capture_mirror('mirror-before-leave-1283')
 selvage.leave()
 
 join({}, {})
@@ -1288,6 +1354,7 @@ check(
 -- sentence from the other side: there is a directory, and the room now names nothing to put in
 -- it. What the fetch is told is the listing, not the directory.
 root = join({}, { 'a.txt' }, 'r-shrunk')
+capture_mirror('mirror-before-grant-1298')
 handle({ type = 'report', report = { kind = 'grant', paths = {} } })
 before = #notices
 selvage.fetch()
@@ -1323,6 +1390,7 @@ check(
   true
 )
 check('  and opens nothing', #selvage.documents(), held_before)
+capture_mirror('mirror-before-leave-1333')
 selvage.leave()
 
 -- The cap counts what the room names and not what this mirror kept: a listing past it refuses even
@@ -1382,6 +1450,7 @@ check(
 check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
 check('  and claims no success over the one it refused', said_since(before, 'fetched the files.'), nil)
 responder = nil
+capture_mirror('mirror-before-leave-1392')
 selvage.leave()
 
 -- A directory the room names whose files this mirror kept none of: the directory is the room's and
@@ -1412,6 +1481,7 @@ check(
 check('  and never says the room lists no such file', said_since(before, 'no file the room lists matches'), nil)
 check('  and opens nothing', #selvage.documents(), held_before)
 check('  and announces no hold', said_since(before, 'fetching opens'), nil)
+capture_mirror('mirror-before-leave-1422')
 selvage.leave()
 
 -- A room whose listing this mirror kept nothing of at all: the mirror has no directory to be read
@@ -1426,6 +1496,7 @@ check(
   true
 )
 check('  and says nothing about an empty listing', said_since(before, 'the room lists no files to fetch'), nil)
+capture_mirror('mirror-before-leave-1436')
 selvage.leave()
 
 -- The same directory with a mix: what has a file is held and what has none is refused where it is,
@@ -1445,6 +1516,7 @@ check('  and never says the room lists no such file', said_since(before, 'no fil
 check('  and holds only what it can write', #selvage.documents(), held_before + 1)
 check('  and claims no success over the one it refused', said_since(before, 'fetched the files.'), nil)
 responder = nil
+capture_mirror('mirror-before-leave-1455')
 selvage.leave()
 
 -- -- a file closed while it is being fetched ----------------------------------------------
@@ -1485,6 +1557,7 @@ join({}, { 'a.txt', 'b.txt' })
 before = #notices
 vim.g.selvage_fetch_timeout_ms = 5000
 vim.schedule(function()
+  capture_mirror('mirror-before-idle-1495')
   handle({ type = 'status', state = 'idle' })
 end)
 selvage.fetch()
@@ -1513,6 +1586,7 @@ do
   selvage.follow('Ada')
   check('a follow stands in a file the host is about to delete', selvage.following(), 'Ada')
   local before_gone = #notices
+  capture_mirror('mirror-before-grant-1523')
   handle({ type = 'report', report = { kind = 'grant', paths = { 'src/main.rs' } } })
   check('  and the file going ends it', selvage.following(), nil)
   check(
@@ -1527,12 +1601,16 @@ end
 -- A host's files are its own working copy; it has no mirror and no fetch, and the commands say
 -- which of the two it is talking about.
 
+capture_mirror('mirror-before-leave-1537')
 selvage.leave()
+capture_mirror('mirror-before-host-1538')
 selvage.host('ws://127.0.0.1:1')
 handle({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-mirror' })
+capture_mirror('mirror-before-grant-1540')
 handle({ type = 'report', report = { kind = 'grant', paths = GRANT } })
 check('a host still has the listing it published', #selvage.fetchable(), 4)
 check('  and no mirror to put it in', selvage.session().mirror, nil)
+capture_mirror('mirror-before-leave-1543')
 selvage.leave()
 
 check('every mirror this file started was removed', vim.fn.isdirectory(CACHE .. '/r-mirror'), 0)
@@ -1549,5 +1627,10 @@ check('  and the one with a listing past the bound', vim.fn.isdirectory(CACHE ..
 check('  and the one whose listing named a repository', vim.fn.isdirectory(CACHE .. '/r-unsafe'), 0)
 
 vim.notify = notify
+capture.capture('mirror-write-final', own_file)
+local capture_ok, capture_error = pcall(capture.finish)
+if failures == 0 and not capture_ok then
+  error(capture_error, 0)
+end
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

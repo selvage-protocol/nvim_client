@@ -233,10 +233,20 @@ function Document:attach()
   -- must not later recreate after a delete. The room's own writes go through `Document:save` with
   -- `noautocmd`, so they never reach this: what fires here is the person's write alone.
   self.write_group = api.nvim_create_augroup('SelvageWrite' .. self.bufnr, { clear = true })
+  -- The file this buffer was registered under, as a full path, read once: a name read back at
+  -- each write would be one a rename had since moved, and this is the registration.
+  self.file = vim.fn.fnamemodify(api.nvim_buf_get_name(self.bufnr), ':p')
   api.nvim_create_autocmd('BufWritePost', {
     group = self.write_group,
     buffer = self.bufnr,
-    callback = function()
+    callback = function(event)
+      -- `:write other-name` writes this buffer to a file that is not the one the path was
+      -- registered at and leaves the buffer's own name as it was: the destination the write
+      -- names, not the buffer, is what says whether the folder now holds the shared file. The
+      -- comparison is lexical; it reads no file and follows no link.
+      if vim.fn.fnamemodify(event.file, ':p') ~= self.file then
+        return
+      end
       self.send({ type = 'wrote', path = self.path })
     end,
   })

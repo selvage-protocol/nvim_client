@@ -19,6 +19,15 @@ name: release
 # touched — nothing here moves a tag — and an existing release is left alone.
 # A pull request runs ci.yml instead and can never publish or release.
 #
+# Two jobs, so the run that holds a write token runs no read it does not have to:
+# `plan` resolves the run — the main-refusal, the released-manifest guard and the
+# version the bump would cut, or the tag's own version — with `contents: read`, a
+# checkout that keeps no credential and nothing written on the runner or the
+# remote; `release` runs only when `dry_run` is not true and takes the version from
+# it. `scripts/bump-version.sh --dry-run` is what computes the next version there:
+# it prints the version and writes nothing, so a rehearsal and a real run name one
+# version computed on one commit.
+#
 # `package.json:3` (`selvage-nvim-companion`, private) carries the version the
 # run asserts against. `lua/` and `plugin/` carry no version string.
 #
@@ -49,36 +58,39 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# `contents: write` creates and pushes the tag and the GitHub Release. Nothing
-# else is granted.
+# Nothing by default beyond reading the tree; `release` names the one write it
+# needs. The bumped-manifest guard's tag reads are anonymous.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  # The read-only half of a release. It holds `contents: read`, keeps no credential in the
+  # checkout, resolves the version the run cuts and prints the plan a dispatch rehearses with. It
+  # is the plan `scripts/check_dry_run_gating.py` gates the rest of the file against, and `release`
+  # below takes the version from it rather than deriving a second one from a later tree.
+  plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      # The same pinned checker `ci.yml` installs, so the gate below reads links with the binary the
-      # pull request does. The checksum is the one published beside the archive.
-      LYCHEE_VERSION: "0.24.2"
-      LYCHEE_SHA256: "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a"
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.target.outputs.version || steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # Only the dispatch's released-manifest guard reads `package.json` through `node`; the tag
+      # pass below is shell alone. Nothing is installed with it and no cache is written.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name == 'workflow_dispatch'
         with:
           node-version: "22.18.0"
-          cache: npm
-
-      # No dependency's install script runs here: this job holds a `contents: write` token and the
-      # checkout keeps it in `.git/config` for the commit and the tag push below, and none of the
-      # companion's dependencies has an install script to need.
-      - run: npm ci --ignore-scripts
 
       # On a tag push the tag names the version, and nothing here computes anything.
       - name: resolve the release version
         if: github.event_name != 'workflow_dispatch'
+        id: tag
         run: |
           version="${GITHUB_REF_NAME#v}"
           case "$version" in
@@ -89,7 +101,7 @@ jobs:
               exit 1
               ;;
           esac
-          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # A bump is a commit on `main` and nothing else. The push below is not forced, so a dispatch
       # from a ref that is behind `main` is refused by the remote; this refuses the other direction,
@@ -112,7 +124,9 @@ jobs:
       # the version after a number nobody has released. `scripts/bump-version.sh --dry-run` then
       # names the files it would write and prints the version it would write as the last line of
       # stdout, which is the line this run takes its tag and its Release from. The word is the
-      # dispatch input, applied to whatever the manifest carries now.
+      # dispatch input, applied to whatever the manifest carries now. It writes nothing, so this
+      # job stays read-only; the version leaves as a job output rather than through the
+      # environment, so no second line can ride into `$GITHUB_ENV`.
       - name: compute the version this bump cuts
         if: github.event_name == 'workflow_dispatch'
         id: target
@@ -144,12 +158,12 @@ jobs:
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
 
       - name: stop before changing anything on a dry run
         if: inputs.dry_run == true
         env:
           BUMP: ${{ inputs.bump }}
+          RELEASE_VERSION: ${{ steps.target.outputs.version }}
         run: |
           cat <<EOF
           dry_run: nothing was bumped, gated, committed, pushed, tagged or released. This dispatch
@@ -162,6 +176,40 @@ jobs:
             - created the tag v${RELEASE_VERSION} and its GitHub Release
           EOF
 
+  # The one write half. A dry run ends at `plan`, so this job never runs for it, and the whole job
+  # carries the gate rather than each step: nothing holding `contents: write` is reached by a
+  # rehearsal. It runs only after `plan` passed, so the refusals and the version were settled by a
+  # job that could not write.
+  release:
+    needs: plan
+    if: inputs.dry_run != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # `contents: write` creates and pushes the tag and the GitHub Release. Nothing
+    # else is granted.
+    permissions:
+      contents: write
+    env:
+      # The version `plan` derived on this run's commit. A dispatch carries the bump's next
+      # version, a tag push the tag's own, and both are the same number on this same commit.
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      # The same pinned checker `ci.yml` installs, so the gate below reads links with the binary the
+      # pull request does. The checksum is the one published beside the archive.
+      LYCHEE_VERSION: "0.24.2"
+      LYCHEE_SHA256: "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.18.0"
+          cache: npm
+
+      # No dependency's install script runs here: this job holds a `contents: write` token and the
+      # checkout keeps it in `.git/config` for the commit and the tag push below, and none of the
+      # companion's dependencies has an install script to need.
+      - run: npm ci --ignore-scripts
+
       - name: bump the version
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true
         env:
@@ -169,9 +217,9 @@ jobs:
         run: scripts/bump-version.sh "$BUMP"
 
       # The companion version is the release version: refuse to tag anything else. On a dispatch
-      # the manifest read here is the one the bump just wrote. Everything from here to the tag is
-      # guarded on `dry_run`: a dispatch that only prints the plan has already said what it would
-      # have done, and the version it computed is not the one the manifest carries yet.
+      # the manifest read here is the one the bump just wrote. Every step below carries its own
+      # `dry_run` guard as well as the job's: the job's is what keeps a rehearsal out of a job
+      # holding a write token, and the step's is the guard `scripts/check_dry_run_gating.py` reads.
       - name: assert the companion version matches
         if: inputs.dry_run != true
         run: |

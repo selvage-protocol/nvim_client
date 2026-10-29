@@ -1,4 +1,4 @@
--- Typing ends a follow, between two real editors in one real room.
+-- Typing ends a follow, and autosave respects a deleted host file, in one real room.
 --
 --   SELVAGE_SELVAGED=/path/to/selvaged nvim --headless -l test/e2e/followtyping.lua
 --   (or scripts/e2e/run-two-instance.sh, which runs it after the main proof)
@@ -44,20 +44,46 @@ end
 
 local children = {}
 local server
+local server_stderr = ''
 
 local function finish()
   for _, chan in ipairs(children) do
     pcall(vim.rpcnotify, chan, 'nvim_command', 'qall!')
   end
   if #children > 0 then
-    vim.fn.jobwait(children, 5000)
-  end
-  for _, chan in ipairs(children) do
-    pcall(vim.fn.jobstop, chan)
+    local statuses = vim.fn.jobwait(children, 5000)
+    local stopped = {}
+    for index, chan in ipairs(children) do
+      if statuses[index] == -1 or statuses[index] == -2 then
+        pcall(vim.fn.jobstop, chan)
+        stopped[#stopped + 1] = chan
+      end
+    end
+    if #stopped > 0 then
+      for index, status in ipairs(vim.fn.jobwait(stopped, 5000)) do
+        check('editor ' .. stopped[index] .. ' terminates after jobstop', status >= 0 or status == -3, true)
+      end
+    end
   end
   if server ~= nil then
-    server:kill('sigterm')
-    pcall(server.wait, server, 5000)
+    local premature = server:is_closing()
+    if not premature then
+      pcall(server.kill, server, 'sigterm')
+    end
+    local ok, result = pcall(server.wait, server, 5000)
+    check('the server survives until cleanup', premature, false)
+    check('the server terminates within its deadline', ok and result.code ~= 124, true)
+    if ok then
+      check(
+        'the server exits normally or on SIGTERM',
+        (result.code == 0 and result.signal == 0) or result.signal == 15,
+        true
+      )
+    end
+    check('the server reports no Rust panic', server_stderr:find('panicked', 1, true) == nil, true)
+    if failures > 0 and server_stderr ~= '' then
+      print('server stderr:\n' .. server_stderr)
+    end
   end
   print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
   os.exit(failures == 0 and 0 or 1)
@@ -74,6 +100,9 @@ local address
 server = vim.system({ binary, '--listen', '127.0.0.1:0' }, {
   stdout = function(_, data)
     address = address or (data and data:match('ws://([0-9.]+:[0-9]+)/session'))
+  end,
+  stderr = function(_, data)
+    server_stderr = server_stderr .. (data or '')
   end,
 })
 check('the server says where it listens', vim.wait(10000, function()
@@ -141,6 +170,8 @@ local function main()
   local ada, ada_chan, ada_home = editor('Ada')
   local grace = editor('Grace')
 
+  vim.fn.writefile({ 'deleted-open.txt' }, ada_home .. '/work/.gitignore')
+  vim.fn.writefile({ 'a host-opened file outside the listing' }, ada_home .. '/work/deleted-open.txt')
   vim.fn.writefile({ '-- a file the host shares', 'local x = 1', 'print(x)', 'print(x + 1)' }, ada_home .. '/work/hello.lua')
   ada([[vim.cmd('edit hello.lua'); require('selvage').host(...)]], 'ws://' .. address)
   local invite
@@ -224,6 +255,100 @@ local function main()
     return ours == theirs or ('Ada ' .. vim.inspect(ours) .. ' / Grace ' .. vim.inspect(theirs))
   end)
 
+  -- Ignored but host-opened documents are supported. Unlike a listed file, this one has no
+  -- listing withdrawal to drop Grace's buffer while the autosave's 500ms window settles.
+  local deleted = ada_home .. '/work/deleted-open.txt'
+  local host_buf = ada([[vim.cmd('edit deleted-open.txt'); return vim.api.nvim_get_current_buf()]])
+  if not reach('the ignored host-opened file is offered, not fetchable; hello.lua is listed', function()
+    return grace([[
+      local room = require('selvage')
+      local offered, fetchable = room.offered(), room.fetchable()
+      return (vim.tbl_contains(offered, 'deleted-open.txt')
+        and not vim.tbl_contains(fetchable, 'deleted-open.txt')
+        and vim.tbl_contains(fetchable, 'hello.lua'))
+        or vim.inspect({ offered = offered, fetchable = fetchable })
+    ]])
+  end) then
+    return
+  end
+  grace([[require('selvage').open('deleted-open.txt')]])
+  if not reach('Grace holds the ignored document and its real text', function()
+    return grace([[
+      local room = require('selvage')
+      local text = room.text('deleted-open.txt')
+      return (vim.tbl_contains(room.documents(), 'deleted-open.txt')
+        and text == 'a host-opened file outside the listing'
+        and table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n') == text)
+        or vim.inspect({ documents = room.documents(), text = text })
+    ]])
+  end) then
+    return
+  end
+
+  check('delete only the owned host file', vim.fn.delete(deleted), 0)
+  grace([[vim.api.nvim_buf_set_lines(0, -1, -1, false, { 'guest edit while deleted' })]])
+  if not reach('the guest edit reaches the same real host buffer and public text', function()
+    return ada([[
+      local buf, file = ...
+      local room = require('selvage')
+      local text = room.text('deleted-open.txt')
+      local expected = 'a host-opened file outside the listing\nguest edit while deleted'
+      return (vim.api.nvim_buf_is_valid(buf)
+        and vim.api.nvim_buf_get_name(buf) == file and vim.bo[buf].buftype == ''
+        and vim.tbl_contains(room.documents(), 'deleted-open.txt')
+        and text == expected
+        and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), '\n') == expected)
+        or vim.inspect({ text = text, buffer = buf })
+    ]], host_buf, deleted)
+  end) then
+    return
+  end
+
+  grace([[
+    require('selvage').open('hello.lua')
+    vim.api.nvim_buf_set_lines(0, -1, -1, false, { '-- guest autosave positive control' })
+  ]])
+  local recreated = false
+  if not reach('hello.lua autosaves to host disk without recreating the deleted file', function()
+    recreated = recreated or vim.fn.getftype(deleted) ~= ''
+    if recreated then
+      return 'autosave recreated deleted-open.txt'
+    end
+    local file = ada_home .. '/work/hello.lua'
+    local lines = vim.fn.filereadable(file) == 1 and vim.fn.readfile(file) or {}
+    return lines[#lines] == '-- guest autosave positive control' or vim.inspect(lines)
+  end) then
+    return
+  end
+  check('the deleted host file is still absent after the positive autosave', vim.fn.getftype(deleted), '')
+  local function save_failure()
+    return ada([[
+      for _, notice in ipairs(_G.notices) do
+        if notice.message:find('could not save', 1, true) then
+          return notice.message
+        end
+      end
+      return ''
+    ]])
+  end
+  check('skipping the deleted file produces no save-failure notice', save_failure(), '')
+
+  -- The only manual save: the host recreates the same target from its still-shared buffer.
+  ada([[local buf = ...; vim.api.nvim_set_current_buf(buf); vim.cmd('write')]], host_buf)
+  check(
+    'the ordinary host write recreates the current shared text',
+    table.concat(vim.fn.readfile(deleted), '\n'),
+    'a host-opened file outside the listing\nguest edit while deleted'
+  )
+  grace([[
+    require('selvage').open('deleted-open.txt')
+    vim.api.nvim_buf_set_lines(0, -1, -1, false, { 'guest edit after recreation' })
+  ]])
+  reach('autosave resumes to host disk after the ordinary host write', function()
+    local lines = vim.fn.filereadable(deleted) == 1 and vim.fn.readfile(deleted) or {}
+    return lines[#lines] == 'guest edit after recreation' or vim.inspect(lines)
+  end)
+  check('resumed autosave produces no save-failure notice', save_failure(), '')
 end
 
 local ok, err = xpcall(main, debug.traceback)

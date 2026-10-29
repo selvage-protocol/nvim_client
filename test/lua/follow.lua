@@ -10,6 +10,9 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 vim.cmd('runtime! plugin/selvage.lua')
 
+local capture = dofile(vim.fn.getcwd() .. '/test/helpers/capture.lua')
+capture.begin('follow')
+
 -- A name for the sessions this file starts.
 vim.g.selvage_display_name = 'Test User'
 -- This file is about following, not about when the row appears: it pins the always-on row, whose
@@ -131,6 +134,8 @@ vim.fn.mkdir('.tmp', 'p')
 
 local file1 = '.tmp/lua-follow-one.txt'
 local file2 = '.tmp/lua-follow-two.txt'
+capture.capture('follow-one-before-replace', file1)
+capture.capture('follow-two-before-replace', file2)
 vim.fn.writefile({ 'alpha', 'beta', 'gamma' }, file1)
 vim.fn.writefile({ 'one', 'two' }, file2)
 vim.cmd('edit ' .. vim.fn.fnameescape(file1))
@@ -599,6 +604,7 @@ buf1 = vim.api.nvim_get_current_buf()
 -- it against the grant, so a peer naming the link reads the refusal rather than the file
 -- it points at.
 local gone_file = '.tmp/lua-follow-gone.txt'
+capture.capture('follow-gone-before-create', gone_file)
 vim.fn.writefile({ 'here', 'gone' }, gone_file)
 vim.cmd('edit ' .. vim.fn.fnameescape(gone_file))
 local gone_path = last_of('open') and last_of('open').path
@@ -612,6 +618,7 @@ presence({
   cursor_for('p-mallory', gone_path, 1),
 })
 vim.api.nvim_buf_delete(vim.fn.bufnr(vim.fn.getcwd() .. '/' .. gone_file), { force = true })
+capture.capture('follow-gone', gone_file)
 vim.fn.delete(gone_file)
 local mallory_buf = vim.api.nvim_get_current_buf()
 local before_missing = #notices
@@ -630,8 +637,10 @@ check('  leaving the window where it was', vim.api.nvim_get_current_buf(), mallo
 
 local link_file = '.tmp/lua-follow-link.txt'
 local link_target = vim.fn.stdpath('cache') .. '/selvage-link-target.txt'
+capture.capture('follow-link-preclean', link_file)
 vim.fn.delete(link_file)
 vim.fn.writefile({ 'inside' }, link_file)
+capture.capture('follow-link-target-before-replace', link_target)
 vim.fn.writefile({ 'outside' }, link_target)
 vim.cmd('edit ' .. vim.fn.fnameescape(link_file))
 local link_path = last_of('open') and last_of('open').path
@@ -644,6 +653,7 @@ presence({
   cursor_for('p-nancy', link_path, 1),
 })
 vim.api.nvim_buf_delete(vim.fn.bufnr(vim.fn.getcwd() .. '/' .. link_file), { force = true })
+capture.capture('follow-link-inside', link_file)
 vim.fn.delete(link_file)
 vim.uv.fs_symlink(link_target, vim.fn.getcwd() .. '/' .. link_file)
 local nancy_buf = vim.api.nvim_get_current_buf()
@@ -660,6 +670,7 @@ check(
   -1
 )
 check('  leaving the window where it was', vim.api.nvim_get_current_buf(), nancy_buf)
+capture.capture('follow-link-outside', vim.fn.getcwd() .. '/' .. link_file)
 vim.fn.delete(vim.fn.getcwd() .. '/' .. link_file)
 
 -- A link that stays inside the folder is outside nothing, so the jump reaches the share itself:
@@ -668,7 +679,9 @@ vim.fn.delete(vim.fn.getcwd() .. '/' .. link_file)
 -- not be opened rather than announcing a hold the room never received.
 local inlink_target = '.tmp/lua-follow-inlink-target.txt'
 local inlink_file = '.tmp/lua-follow-inlink.txt'
+capture.capture('follow-inlink-target-before-create', inlink_target)
 vim.fn.writefile({ 'behind' }, inlink_target)
+capture.capture('follow-inlink-before-create', inlink_file)
 vim.fn.writefile({ 'inside' }, inlink_file)
 vim.cmd('edit ' .. vim.fn.fnameescape(inlink_file))
 local inlink_path = last_of('open') and last_of('open').path
@@ -682,6 +695,7 @@ presence({
   cursor_for('p-iris', inlink_path, 1),
 })
 vim.api.nvim_buf_delete(vim.fn.bufnr(vim.fn.getcwd() .. '/' .. inlink_file), { force = true })
+capture.capture('follow-inlink-inside', inlink_file)
 vim.fn.delete(inlink_file)
 vim.uv.fs_symlink(vim.fn.getcwd() .. '/' .. inlink_target, vim.fn.getcwd() .. '/' .. inlink_file)
 local iris_buf = vim.api.nvim_get_current_buf()
@@ -698,12 +712,15 @@ check(
   true
 )
 check('  leaving the window where it was', vim.api.nvim_get_current_buf(), iris_buf)
+capture.capture('follow-inlink-link', inlink_file)
 vim.fn.delete(inlink_file)
+capture.capture('follow-inlink-target', inlink_target)
 vim.fn.delete(inlink_target)
 
 -- A standing follow whose document will not open says so once: every frame retries the
 -- same refusal, and the second saying carries nothing the first did not.
 local tmp_file = '.tmp/lua-follow-unopen.txt'
+capture.capture('follow-unopen-before-create', tmp_file)
 vim.fn.writefile({ 'tmp' }, tmp_file)
 vim.cmd('edit ' .. vim.fn.fnameescape(tmp_file))
 local tmp_path = last_of('open') and last_of('open').path
@@ -719,6 +736,7 @@ presence({
 selvage.follow('Tmp')
 check('following into the tmp file lands on the caret', cursor(), '1,1')
 vim.api.nvim_buf_delete(vim.fn.bufnr(vim.fn.getcwd() .. '/' .. tmp_file), { force = true })
+capture.capture('follow-unopen', tmp_file)
 vim.fn.delete(tmp_file)
 local before_unopen = #notices
 presence({
@@ -1770,6 +1788,7 @@ check(
 handlers().on_message({ type = 'report', report = { kind = 'grant', paths = { 'g/link.txt' } } })
 local mirror_root = require('selvage.mirror').root()
 vim.fn.writefile({ 'behind' }, mirror_root .. '/g/behind.txt')
+capture.capture('follow-mirror-before-replace', mirror_root)
 vim.fn.delete(mirror_root .. '/g/link.txt')
 vim.uv.fs_symlink(mirror_root .. '/g/behind.txt', mirror_root .. '/g/link.txt')
 peers_report({
@@ -1867,6 +1886,7 @@ check('following again before leaving', selvage.following(), 'Ada Lovelace')
 -- back on leaving it, so ending the session with one hidden drops nothing with the map.
 vim.api.nvim_win_set_buf(0, vim.fn.bufnr('selvage://g/two.txt'))
 local before_leave = #notices
+capture.capture('follow-mirror-before-leave', mirror_root)
 selvage.leave()
 check('leaving ends the follow', selvage.following(), nil)
 check('  clears the global', vim.g.selvage_following, nil)
@@ -1886,5 +1906,13 @@ check('  saying nothing about the follow', said_since(before_leave, 'following')
 selvage.leave()
 vim.notify = notify
 
+capture.capture('follow-link-target-final', link_target)
+capture.capture('follow-one-final', '.tmp/lua-follow-one.txt')
+capture.capture('follow-two-final', '.tmp/lua-follow-two.txt')
+local capture_ok, capture_error = pcall(capture.finish)
+
+if failures == 0 and not capture_ok then
+  error(capture_error, 0)
+end
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

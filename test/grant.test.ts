@@ -36,6 +36,7 @@ import test, { after, before } from 'node:test';
 import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, hostPlatform, isGrantedPath } from '../vendor/bridge/index.ts';
 import type { GrantRefusal, GrantedRead, IgnoreSource, ListingWalkSource, WalkEntry } from '../vendor/bridge/index.ts';
 import { FILE_SYSTEM_SOURCE, enumerateGrant, fileSystemSource, readGrantedFile, readGrantedPresence } from '../companion/grant.ts';
+import { withReaddirFault } from './helpers/readdir-fault.ts';
 
 /** The listing a walk found, for the assertions that are about its paths alone. */
 async function pathsOf(root: string): Promise<string[]> {
@@ -772,6 +773,48 @@ test('a presence read is confined by the segments, and reads no content', async 
   // about the folder alone, and the ignore read is `readGrantedFile`'s.
   writeFileSync(join(root, '.gitignore'), 'here.txt\n');
   assert.equal(await readGrantedPresence(root, 'here.txt'), 'present');
+});
+
+// A directory the walk cannot list is not the name being absent. Presence has to answer `unknown`
+// for it — a fault read as `missing` switches the room's autosave off on a guess — while the
+// content read keeps its own long-standing rule that a directory this host cannot list carries
+// nothing. The fault is injected at the adapter's own `readdir`, the boundary an I/O or permission
+// fault reaches; the presence-fault test at the session level throws around the whole operation
+// and never exercises this conversion.
+test('a directory that cannot be listed is not a confirmed absence', async () => {
+  const root = join(ROOT, 'presence-unlistable');
+  mkdirSync(join(root, 'sub'), { recursive: true });
+  writeFileSync(join(root, 'here.txt'), 'here\n');
+  writeFileSync(join(root, 'sub', 'deep.txt'), 'deep\n');
+
+  for (const code of ['EIO', 'EACCES']) {
+    // The leaf's own parent, the last step the presence read takes.
+    await withReaddirFault(code, [join(root, 'sub')], async () => {
+      assert.equal(
+        await readGrantedPresence(root, 'sub/deep.txt'),
+        'unknown',
+        `${code}: a listing fault was read as the path being absent`,
+      );
+      // The fault is that directory's own: a sibling at the root still reads plainly.
+      assert.equal(await readGrantedPresence(root, 'here.txt'), 'present', `${code}: sibling`);
+    });
+    // The root itself, the step before the leaf's parent.
+    await withReaddirFault(code, [root], async () => {
+      assert.equal(await readGrantedPresence(root, 'sub/deep.txt'), 'unknown', `${code}: ancestor`);
+      assert.equal(await readGrantedPresence(root, 'here.txt'), 'unknown', `${code}: root leaf`);
+      // The content read's rule is unchanged: a directory it cannot list carries nothing.
+      assert.equal(
+        cause(await readGrantedFile(root, 'here.txt')),
+        'missing',
+        `${code}: the content read's refusal changed`,
+      );
+    });
+  }
+
+  // Restored, and a name the folder truly does not hold is still a confirmed absence.
+  assert.equal(await readGrantedPresence(root, 'sub/deep.txt'), 'present');
+  assert.equal(await readGrantedPresence(root, 'here.txt'), 'present');
+  assert.equal(await readGrantedPresence(root, 'absent.txt'), 'missing');
 });
 
 test('a linked .gitignore is not read, so its rule re-includes nothing', async () => {
