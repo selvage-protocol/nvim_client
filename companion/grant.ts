@@ -185,19 +185,38 @@ function kindOf(entry: Dirent): WalkEntry['kind'] {
   return entry.isDirectory() ? 'directory' : 'other';
 }
 
+/**
+ * A directory's own entries, or the failure the file system gave instead of one.
+ *
+ * The two are kept apart here so a presence walk can tell a directory that is not there
+ * (`ENOENT`) from a listing it was refused; every other caller wants only the entries, and
+ * `listDirectory`/`listInside` fold the failure to nothing for it.
+ */
+type DirectoryRead =
+  | { readonly entries: readonly WalkEntry[] }
+  | { readonly error: unknown };
+
+/** One directory read, with the failure kept beside the entries rather than folded to nothing. */
+async function readDirectory(name: string): Promise<DirectoryRead> {
+  return readdir(name, { withFileTypes: true }).then(
+    (entries) => ({ entries: entries.map((entry) => ({ name: entry.name, kind: kindOf(entry) })) }),
+    (error: unknown) => ({ error }),
+  );
+}
+
 /** A directory's own entries, or `undefined` when this host cannot list it. */
-async function listDirectory(dir: string): Promise<WalkEntry[] | undefined> {
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
-  return entries?.map((entry) => ({ name: entry.name, kind: kindOf(entry) }));
+async function listDirectory(dir: string): Promise<readonly WalkEntry[] | undefined> {
+  const read = await readDirectory(dir);
+  return 'entries' in read ? read.entries : undefined;
 }
 
 /**
  * The same for a directory that is already open, named through its descriptor so a segment
  * cannot be swapped under it. Only the pinned-step read path takes this route.
  */
-async function listInside(dir: FileHandle): Promise<WalkEntry[] | undefined> {
-  const entries = await readdir(inside(dir), { withFileTypes: true }).catch(() => undefined);
-  return entries?.map((entry) => ({ name: entry.name, kind: kindOf(entry) }));
+async function listInside(dir: FileHandle): Promise<readonly WalkEntry[] | undefined> {
+  const read = await readDirectory(inside(dir));
+  return 'entries' in read ? read.entries : undefined;
 }
 
 /** Whether a listing holds `name` as exactly `kind`, and not as a link or another type. */
@@ -380,7 +399,7 @@ export async function readGrantedFile(root: string, path: string): Promise<Grant
   if (!PINNED_STEPS) {
     const directory = await walkGoverning(root, segments);
     if ('kind' in directory) {
-      return directory;
+      return directory.kind === 'unlisted' ? refused('missing') : directory;
     }
     if (!holdsName(directory.entries, leaf)) {
       return refused('missing');
@@ -389,7 +408,7 @@ export async function readGrantedFile(root: string, path: string): Promise<Grant
   }
   const directory = await openGoverning(root, segments);
   if ('kind' in directory) {
-    return directory;
+    return directory.kind === 'unlisted' ? refused('missing') : directory;
   }
   try {
     if (!holdsName(directory.entries, leaf)) {
@@ -401,12 +420,114 @@ export async function readGrantedFile(root: string, path: string): Promise<Grant
   }
 }
 
+/**
+ * What a metadata-only read of a grant path found: the plain answers are `present` and `missing`,
+ * and everything the file system would not give a plain answer for is one of the two failures. A
+ * caller that must tell a confirmed absence from a fault reads `missing` alone as absence.
+ */
+export type Presence = 'present' | 'missing' | 'refused' | 'unknown';
+
+/**
+ * The presence answer one refused-or-unlisted step gives: a directory the walk could not list is
+ * no plain answer, and a name that is not there is the only absence.
+ */
+function presenceOf(step: Refused | Unlisted): Presence {
+  if (step.kind === 'unlisted') {
+    return 'unknown';
+  }
+  return step.cause === 'missing' ? 'missing' : 'refused';
+}
+
+/**
+ * Whether the host's own file at a room path is there, read the same way a peer's read is: one
+ * segment at a time, a step at a time, each inside the directory the step before it found, so a
+ * name that travels *through* a symbolic link out of the folder is refused rather than followed.
+ * That is the whole of the difference from `readGrantedFile`: this reads no bytes and applies no
+ * ignore rule, it answers only whether the name is there.
+ *
+ * A directory on the way that cannot be listed is `unknown`, not `missing`: the name may be there
+ * and the file system only would not say, and a caller that holds a write back on absence alone
+ * must not read a fault as a deletion.
+ *
+ * The folder's own ignore files are not read, because a name they leave out is still a name the
+ * folder holds and this question is about the folder alone. `readGrantedFile` is where a path the
+ * grant does not name is refused; a caller here is asking about a path it already registered.
+ */
+export async function readGrantedPresence(root: string, path: string): Promise<Presence> {
+  if (!isGrantedPath(path)) {
+    return 'refused';
+  }
+  const segments = path.split('/');
+  const leaf = segments.pop();
+  if (leaf === undefined) {
+    return 'refused';
+  }
+  if (!PINNED_STEPS) {
+    const directory = await walkGoverning(root, segments, false);
+    if ('kind' in directory) {
+      return presenceOf(directory);
+    }
+    if (!holdsName(directory.entries, leaf)) {
+      return 'missing';
+    }
+    return await leafPresence(join(directory.path, leaf));
+  }
+  const directory = await openGoverning(root, segments, false);
+  if ('kind' in directory) {
+    return presenceOf(directory);
+  }
+  try {
+    if (!holdsName(directory.entries, leaf)) {
+      return 'missing';
+    }
+    return await leafPresence(inside(directory.handle, leaf));
+  } finally {
+    await directory.handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * One name's own metadata, without following it: an ordinary file is there, `ENOENT` says it is
+ * not, and a link or another kind of name is a refusal. Any other failure is not an answer.
+ */
+async function leafPresence(name: string): Promise<Presence> {
+  try {
+    const info = await lstat(name);
+    return info.isFile() ? 'present' : 'refused';
+  } catch (error: unknown) {
+    return isAbsentCode(error) ? 'missing' : 'unknown';
+  }
+}
+
+/** Whether a file system error is the name not being there, and nothing else. */
+function isAbsentCode(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
+/**
+ * A directory or step this host could not read, as the walk's own answer: only `ENOENT` is a
+ * confirmed absence, and a listing the host was refused or an I/O fault is not. The error is the
+ * one the read itself gave, so a fault is not mistaken for a later `stat` of the same name.
+ */
+function readRefusal(error: unknown): Refused | Unlisted {
+  return isAbsentCode(error) ? refused('missing') : UNLISTED;
+}
+
 /** A refusal, shaped the way the bridge reads one. */
 type Refused = { readonly kind: 'refused'; readonly cause: GrantRefusal };
 
 function refused(cause: GrantRefusal): Refused {
   return { kind: 'refused', cause };
 }
+
+/**
+ * A directory on the way to the path that could not be listed at all. A presence read answers
+ * `unknown` for it: a listing the file system would not give is not the name being absent. A
+ * content read keeps its own rule that a directory this host cannot list carries nothing and
+ * reads this as `missing`, so the refusal a peer sees is the one it saw before.
+ */
+type Unlisted = { readonly kind: 'unlisted' };
+const UNLISTED: Unlisted = { kind: 'unlisted' };
 
 /**
  * An open directory of the shared folder, with the ignore sources that govern a path under it.
@@ -420,7 +541,8 @@ type GoverningOpened =
       readonly sources: readonly IgnoreSource[];
       readonly entries: readonly WalkEntry[] | undefined;
     }
-  | Refused;
+  | Refused
+  | Unlisted;
 
 /** The same, for a platform that cannot address a directory that is already open. */
 type GoverningFound =
@@ -429,7 +551,8 @@ type GoverningFound =
       readonly sources: readonly IgnoreSource[];
       readonly entries: readonly WalkEntry[] | undefined;
     }
-  | Refused;
+  | Refused
+  | Unlisted;
 
 /**
  * Why a step could not be taken. A name that is not there is `missing`; anything else the file
@@ -465,10 +588,15 @@ function inside(directory: FileHandle, name = ''): string {
  * an entry of the directory it is opened in, spelled exactly as that directory lists it
  * (`holdsName`); the listing that decides that is the same one the directory's own ignore file is
  * read from, so a peer's path does not list a directory twice.
+ *
+ * `governing` is whether the folder's ignore files are read at all. `readGrantedPresence` passes
+ * `false`: it asks only whether a name is there, and a name the ignore rules leave out is still a
+ * name the folder holds.
  */
 async function openGoverning(
   root: string,
   segments: readonly string[],
+  governing = true,
 ): Promise<GoverningOpened> {
   const folder = await open(root, FOLDER).catch((error: unknown) =>
     refused(stepRefusal(error)),
@@ -479,15 +607,24 @@ async function openGoverning(
   let directory = folder;
   let relative = '';
   const sources: IgnoreSource[] = [];
-  const exclude = await repositoryExcludeIn(directory);
-  if (exclude !== undefined) {
-    sources.push({ dir: '', text: exclude });
+  if (governing) {
+    const exclude = await repositoryExcludeIn(directory);
+    if (exclude !== undefined) {
+      sources.push({ dir: '', text: exclude });
+    }
   }
   for (let depth = 0; ; depth += 1) {
-    const entries = await listInside(directory);
-    const own = await ignoreFileIn(directory, IGNORE_FILE, entries);
-    if (own !== undefined) {
-      sources.push({ dir: relative, text: own });
+    const read = await readDirectory(inside(directory));
+    if ('error' in read) {
+      await directory.close().catch(() => undefined);
+      return readRefusal(read.error);
+    }
+    const entries = read.entries;
+    if (governing) {
+      const own = await ignoreFileIn(directory, IGNORE_FILE, entries);
+      if (own !== undefined) {
+        sources.push({ dir: relative, text: own });
+      }
     }
     if (depth === segments.length) {
       return { handle: directory, sources, entries };
@@ -568,18 +705,26 @@ async function repositoryExcludeIn(directory: FileHandle): Promise<string | unde
 async function walkGoverning(
   root: string,
   segments: readonly string[],
+  governing = true,
 ): Promise<GoverningFound> {
   // The root is listed once: `rootIgnores` reads the repository exclude off the entries already
   // held here rather than listing the folder again for itself.
-  const listed = await listDirectory(root);
-  const sources: IgnoreSource[] = [...(await rootIgnores(root, listed ?? []))];
+  const listed = await readDirectory(root);
+  const rootEntries = 'entries' in listed ? listed.entries : [];
+  const sources: IgnoreSource[] = governing ? [...(await rootIgnores(root, rootEntries))] : [];
   let head = root;
   let relative = '';
   for (let depth = 0; ; depth += 1) {
-    const entries = depth === 0 ? listed : await listDirectory(head);
-    const own = await ignoreFileAt(head, IGNORE_FILE, entries);
-    if (own !== undefined) {
-      sources.push({ dir: relative, text: own });
+    const read = depth === 0 ? listed : await readDirectory(head);
+    if ('error' in read) {
+      return readRefusal(read.error);
+    }
+    const entries = read.entries;
+    if (governing) {
+      const own = await ignoreFileAt(head, IGNORE_FILE, entries);
+      if (own !== undefined) {
+        sources.push({ dir: relative, text: own });
+      }
     }
     if (depth === segments.length) {
       return { path: head, sources, entries };
@@ -589,11 +734,14 @@ async function walkGoverning(
       return refused('missing');
     }
     head = join(head, segment);
-    const info = await lstat(head).catch(() => undefined);
-    if (info === undefined) {
-      return refused('missing');
+    const found = await lstat(head).then(
+      (info) => ({ info }),
+      (error: unknown) => ({ error }),
+    );
+    if ('error' in found) {
+      return readRefusal(found.error);
     }
-    if (!info.isDirectory()) {
+    if (!found.info.isDirectory()) {
       return refused('not-a-file');
     }
     relative = relative === '' ? segment : `${relative}/${segment}`;

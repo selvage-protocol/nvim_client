@@ -35,7 +35,8 @@ import test, { after, before } from 'node:test';
 
 import { MAX_GRANT_FILE_BYTES, MAX_GRANT_LISTING_BYTES, MAX_GRANT_NODES, MAX_GRANT_PATHS, hostPlatform, isGrantedPath } from '../vendor/bridge/index.ts';
 import type { GrantRefusal, GrantedRead, IgnoreSource, ListingWalkSource, WalkEntry } from '../vendor/bridge/index.ts';
-import { FILE_SYSTEM_SOURCE, enumerateGrant, fileSystemSource, readGrantedFile } from '../companion/grant.ts';
+import { FILE_SYSTEM_SOURCE, enumerateGrant, fileSystemSource, readGrantedFile, readGrantedPresence } from '../companion/grant.ts';
+import { withReaddirFault } from './helpers/readdir-fault.ts';
 
 /** The listing a walk found, for the assertions that are about its paths alone. */
 async function pathsOf(root: string): Promise<string[]> {
@@ -736,6 +737,84 @@ test('a path through a directory link is not served', async () => {
   }
   // And nothing behind the link is listed, so it is not a path the grant ever named.
   assert.deepEqual(await pathsOf(root), []);
+});
+
+// A save boundary asks whether a host's own file is still there, and the same link shapes decide
+// it: a bare `lstat` of the joined path follows an ancestor link and answers about a file outside
+// the folder, where the confined read refuses the link. The presence read is not a smaller content
+// read: it reads no bytes and applies no ignore rule, and it is confined the same way.
+test('a presence read is confined by the segments, and reads no content', async () => {
+  const outside = join(ROOT, 'presence-outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'x'.repeat(PADDING_BYTES));
+  const root = join(ROOT, 'presence-root');
+  mkdirSync(join(root, 'sub'), { recursive: true });
+  writeFileSync(join(root, 'here.txt'), 'here\n');
+  writeFileSync(join(root, 'sub', 'deep.txt'), 'deep\n');
+  symlinkSync(outside, join(root, 'escape'));
+
+  // The plain answers.
+  assert.equal(await readGrantedPresence(root, 'here.txt'), 'present');
+  assert.equal(await readGrantedPresence(root, 'sub/deep.txt'), 'present');
+  assert.equal(await readGrantedPresence(root, 'missing.txt'), 'missing');
+  assert.equal(await readGrantedPresence(root, 'sub/gone.txt'), 'missing');
+  assert.equal(await readGrantedPresence(root, 'sub'), 'refused');
+  assert.equal(await readGrantedPresence(root, '../outside/secret.txt'), 'refused');
+  // A link to a file, and a path through a link to a directory with the target there: neither is
+  // `present`, because neither was a name the folder's own walk would carry.
+  assert.equal(await readGrantedPresence(root, 'escape/secret.txt'), 'refused');
+  assert.equal(await readGrantedPresence(root, 'escape/inner/deep.txt'), 'refused');
+  // The padded outside file is never read: a presence read opens no content at all.
+  await assertReadNothingPadded(async () => {
+    await readGrantedPresence(root, 'escape/secret.txt');
+  });
+
+  // A name the folder's ignore rules leave out is still a name the folder holds: this question is
+  // about the folder alone, and the ignore read is `readGrantedFile`'s.
+  writeFileSync(join(root, '.gitignore'), 'here.txt\n');
+  assert.equal(await readGrantedPresence(root, 'here.txt'), 'present');
+});
+
+// A directory the walk cannot list is not the name being absent. Presence has to answer `unknown`
+// for it — a fault read as `missing` switches the room's autosave off on a guess — while the
+// content read keeps its own long-standing rule that a directory this host cannot list carries
+// nothing. The fault is injected at the adapter's own `readdir`, the boundary an I/O or permission
+// fault reaches; the presence-fault test at the session level throws around the whole operation
+// and never exercises this conversion.
+test('a directory that cannot be listed is not a confirmed absence', async () => {
+  const root = join(ROOT, 'presence-unlistable');
+  mkdirSync(join(root, 'sub'), { recursive: true });
+  writeFileSync(join(root, 'here.txt'), 'here\n');
+  writeFileSync(join(root, 'sub', 'deep.txt'), 'deep\n');
+
+  for (const code of ['EIO', 'EACCES']) {
+    // The leaf's own parent, the last step the presence read takes.
+    await withReaddirFault(code, [join(root, 'sub')], async () => {
+      assert.equal(
+        await readGrantedPresence(root, 'sub/deep.txt'),
+        'unknown',
+        `${code}: a listing fault was read as the path being absent`,
+      );
+      // The fault is that directory's own: a sibling at the root still reads plainly.
+      assert.equal(await readGrantedPresence(root, 'here.txt'), 'present', `${code}: sibling`);
+    });
+    // The root itself, the step before the leaf's parent.
+    await withReaddirFault(code, [root], async () => {
+      assert.equal(await readGrantedPresence(root, 'sub/deep.txt'), 'unknown', `${code}: ancestor`);
+      assert.equal(await readGrantedPresence(root, 'here.txt'), 'unknown', `${code}: root leaf`);
+      // The content read's rule is unchanged: a directory it cannot list carries nothing.
+      assert.equal(
+        cause(await readGrantedFile(root, 'here.txt')),
+        'missing',
+        `${code}: the content read's refusal changed`,
+      );
+    });
+  }
+
+  // Restored, and a name the folder truly does not hold is still a confirmed absence.
+  assert.equal(await readGrantedPresence(root, 'sub/deep.txt'), 'present');
+  assert.equal(await readGrantedPresence(root, 'here.txt'), 'present');
+  assert.equal(await readGrantedPresence(root, 'absent.txt'), 'missing');
 });
 
 test('a linked .gitignore is not read, so its rule re-includes nothing', async () => {

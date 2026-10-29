@@ -26,8 +26,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { LineReader, MAX_IPC_LINE_BYTES, isRequest } from '../companion/ipc.ts';
 import type { Notification, Request } from '../companion/ipc.ts';
 import { NvimEditorHost } from '../companion/editor.ts';
-import { enumerateGrant } from '../companion/grant.ts';
-import type { GrantEnumeration } from '../companion/grant.ts';
+import { enumerateGrant, readGrantedPresence } from '../companion/grant.ts';
+import type { GrantEnumeration, Presence } from '../companion/grant.ts';
 import { CLOSING_WAIT_MS, Companion, realEngines } from '../companion/session.ts';
 import { ProtocolError } from '../vendor/engine/index.ts';
 import type { PeerInfo } from '../vendor/engine/index.ts';
@@ -37,6 +37,7 @@ import type { GrantedRead } from '../vendor/bridge/index.ts';
 import { INVITE_REFUSED } from '../companion/relay.ts';
 
 import { FakeEngine } from './helpers/fake-engine.ts';
+import { withReaddirFault } from './helpers/readdir-fault.ts';
 
 /** A walk that read the whole folder, for a stubbed `enumerate` that is not about a cut. */
 function whole(paths: string[]): GrantEnumeration {
@@ -79,6 +80,17 @@ interface Harness {
   joins: string[];
   /** The `applyEdit`s asked for so far. */
   applies: Array<Extract<Notification, { type: 'applyEdit' }>>;
+  /**
+   * Every room path the save boundary began reading metadata for, in the order it read them.
+   */
+  readonly probing: string[];
+  /**
+   * Every room path whose metadata read finished, in the order it finished. The read is the last
+   * asynchronous step of the save boundary, so the decision that follows it — and any `save` ask
+   * it makes — is synchronous: this is the witness a negative needs, where an ask that never came
+   * proves nothing until the read that would have led to it has completed.
+   */
+  readonly probed: string[];
 }
 
 function harness(
@@ -90,6 +102,13 @@ function harness(
     granted?: string[];
     grantError?: Error;
     enumerate?: (root: string) => Promise<GrantEnumeration>;
+    /**
+     * How the save boundary judges one file: whether it is there, one segment at a time. The
+     * default is the real grant walk; a test supplies one whose answer and timing it decides,
+     * because a fault and a read held while the session ends cannot be produced off a real disk
+     * on demand.
+     */
+    presence?: (root: string, path: string) => Promise<Presence>;
     /**
      * When set, the next mint this harness is asked for throws it, the way a dead address or a
      * server that refuses the hello reaches the session, and the ones after it do not. No engine is
@@ -107,6 +126,8 @@ function harness(
   const send = (notification: Notification): void => {
     sent.push(notification);
   };
+  const probing: string[] = [];
+  const probed: string[] = [];
   const hosts: string[] = [];
   const joins: string[] = [];
   const engines: FakeEngine[] = [];
@@ -124,6 +145,15 @@ function harness(
     editor,
     autoSave: options.defaultAutoSave ?? false,
     enumerate: options.enumerate,
+    presence: async (root, path) => {
+      probing.push(path);
+      try {
+        const read = options.presence;
+        return await (read === undefined ? readGrantedPresence(root, path) : read(root, path));
+      } finally {
+        probed.push(path);
+      }
+    },
     engines: {
       host: (serverUrl, _displayName, listing) => {
         hosts.push(serverUrl);
@@ -151,6 +181,8 @@ function harness(
     sent,
     hosts,
     joins,
+    probing,
+    probed,
     get engine(): FakeEngine {
       const engine = engines.at(-1);
       assert.ok(engine !== undefined, 'no session was opened');
@@ -1573,6 +1605,17 @@ function refusals(it: Harness): string[] {
     .map((notification) => (notification.report as { message: string }).message);
 }
 
+/**
+ * The `save` asks the room's autosave made for one path. This counts the asks the front-end was
+ * sent, not disk writes: the write itself is Neovim's, on the other side of the IPC.
+ */
+function saveAsks(it: Harness, path: string): number {
+  return it.sent.filter(
+    (notification): notification is Extract<Notification, { type: 'save' }> =>
+      notification.type === 'save' && notification.path === path,
+  ).length;
+}
+
 /** The `grant` listings the front-end was handed, in the order the companion reported them. */
 function grantReports(it: Harness): string[][] {
   return it.sent
@@ -1916,13 +1959,20 @@ const QUIET_MS = 3 * SETTLE_MS;
 async function hosting(
   t: { after: (fn: () => void) => void },
   files: Record<string, string> = { 'notes.txt': 'a note\n' },
-  options: { grantError?: Error } = {},
+  options: {
+    grantError?: Error;
+    defaultAutoSave?: boolean;
+    presence?: (root: string, path: string) => Promise<Presence>;
+  } = {},
 ): Promise<{ root: string; it: Harness }> {
   const root = folder(t);
   for (const [path, body] of Object.entries(files)) {
     tree(root, path, body);
   }
   const it = harness('host', [], [], options);
+  // The session is given up with the test, whether or not it reached its own end: a failed
+  // assertion must not leave a watcher, a session or an unanswered save behind.
+  t.after(() => it.companion.leave());
   await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
   await until(
     'the folder the mint sealed to reach the room',
@@ -1995,6 +2045,576 @@ test('a file deleted under the host root is republished', async (t) => {
     () => it.engine.grants,
   );
   assert.deepEqual(it.engine.grants, [['notes.txt']]);
+});
+
+// -- a file the host deleted under an open buffer ------------------------------------------
+//
+// The room's autosave asks the front-end to write a document the room changed, and a file the host
+// deleted is not one to put back: the buffer keeps the room's text, the file's absence is the
+// folder's own fact. The ask is the boundary under test, and a silence proves nothing until the
+// read that would have led to it has finished: `it.probed` is that witness, and the read is the
+// last asynchronous step of the boundary, so one real macrotask after it drains the synchronous
+// decision and any ask it made (`decided`).
+
+/** Opens `path` in the harness as the host's own buffer, and waits for the room to hold it. */
+async function openHostFile(
+  it: Harness,
+  path: string,
+  text: string,
+  present = true,
+): Promise<void> {
+  await it.companion.handle({ type: 'open', path, text, present });
+  await until(
+    'the room to hold the opened path',
+    () => it.engine.opened.includes(path),
+    () => it.engine.opened,
+  );
+}
+
+/** Answers every `applyEdit` the front-end has been asked for, so the room's autosave can settle. */
+async function answerApplies(it: Harness): Promise<void> {
+  for (const apply of it.applies) {
+    await it.companion.handle({ type: 'applied', id: apply.id, ok: true });
+  }
+}
+
+/**
+ * Lets the decision after the boundary's final read run. The read is the whole of the boundary's
+ * asynchronous work, so a real macrotask crossed after `it.probed` names the path drains the
+ * synchronous decision and whatever ask it made. That is what makes a `save` that never came
+ * evidence: the read happened, the decision was made, and it was not to write.
+ */
+async function decided(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+test('a file deleted under a host is not written back by the room autosave', async (t) => {
+  const { root, it } = await hosting(
+    t,
+    { 'gone.txt': 'to be deleted\n', 'notes.txt': 'a note\n' },
+    { defaultAutoSave: true },
+  );
+  await openHostFile(it, 'gone.txt', 'to be deleted\n');
+  await openHostFile(it, 'notes.txt', 'a note\n');
+
+  // The host deletes the file its buffer still holds open. The listing drops it, and that is the
+  // deletion the session observed.
+  rmSync(join(root, 'gone.txt'));
+  await until(
+    'the deleted path to leave the listing',
+    () => it.engine.grants.at(-1)?.includes('gone.txt') === false,
+    () => it.engine.grants,
+  );
+
+  it.engine.remote('gone.txt', 'to be deleted\nand changed\n');
+  it.engine.remote('notes.txt', 'a note\nand changed\n');
+  await until(
+    'both peer edits to reach the buffer',
+    () =>
+      it.applies.some((apply) => apply.path === 'gone.txt') &&
+      it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+
+  // The file the folder still holds is asked for once the room settles — the positive control that
+  // the autosave is live, so the deleted file's silence below is not the whole mechanism being
+  // quiet.
+  await until(
+    'the room to autosave the file the folder still holds',
+    () => saveAsks(it, 'notes.txt') > 0,
+    () => it.sent,
+  );
+  // The boundary's own read of the deleted path finished, and the decision after it is synchronous:
+  // one macrotask and the write it would have made is either there or is not.
+  await until(
+    'the save boundary to judge the deleted path',
+    () => it.probed.includes('gone.txt'),
+    () => it.probed,
+  );
+  await decided();
+  assert.equal(saveAsks(it, 'gone.txt'), 0, 'the deleted file was asked to be written back');
+});
+
+test('a named buffer with no file behind it is created by the room autosave', async (t) => {
+  // A new buffer the person has not written is a path the folder has never held. The room's
+  // change is what creates the file, so the first autosave of such a buffer is a write and not a
+  // deletion, whatever the folder says about a name that was never there.
+  const { it } = await hosting(t, { 'notes.txt': 'a note\n' }, { defaultAutoSave: true });
+  await openHostFile(it, 'fresh.txt', '', false);
+
+  it.engine.remote('fresh.txt', 'the first text\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'fresh.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the room autosave to create the file',
+    () => saveAsks(it, 'fresh.txt') > 0,
+    () => ({ sent: it.sent, probed: it.probed }),
+  );
+  // Nothing was there to judge, so the boundary asks no question of the folder about it.
+  assert.equal(it.probed.includes('fresh.txt'), false, 'a never-existing path was probed');
+});
+
+test('a manual write makes the path one the room must not recreate after a delete', async (t) => {
+  // The person's own `:w` is what puts a file behind a path the folder never held. From then on a
+  // delete is a delete, and the room's autosave must not recreate it; the `wrote` the front-end
+  // sends is how this process learns that, since the room's own autosave never fires one.
+  const { root, it } = await hosting(
+    t,
+    { 'notes.txt': 'a note\n' },
+    { defaultAutoSave: true },
+  );
+  // A buffer the person has not written: nothing is at this path when it is shared.
+  await openHostFile(it, 'gone.txt', 'x\n', false);
+  await openHostFile(it, 'notes.txt', 'a note\n');
+
+  // The person's `:w` makes the file, and the front-end says so. The file goes again straight
+  // after, so the room's next autosave is the write the folder must not take.
+  tree(root, 'gone.txt', 'x\n');
+  await it.companion.handle({ type: 'wrote', path: 'gone.txt' });
+  rmSync(join(root, 'gone.txt'));
+
+  it.engine.remote('gone.txt', 'x\nand changed\n');
+  it.engine.remote('notes.txt', 'a note\nand changed\n');
+  await until(
+    'both peer edits to reach the buffer',
+    () =>
+      it.applies.some((apply) => apply.path === 'gone.txt') &&
+      it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the room to autosave the file the folder still holds',
+    () => saveAsks(it, 'notes.txt') > 0,
+    () => it.sent,
+  );
+  await until(
+    'the save boundary to judge the manually written path',
+    () => it.probed.includes('gone.txt'),
+    () => it.probed,
+  );
+  await decided();
+  assert.equal(saveAsks(it, 'gone.txt'), 0, 'a manually written then deleted file was recreated');
+});
+
+test('a file recreated under a host resumes the room autosave', async (t) => {
+  const { root, it } = await hosting(t, { 'gone.txt': 'to be deleted\n' }, { defaultAutoSave: true });
+  await openHostFile(it, 'gone.txt', 'to be deleted\n');
+
+  rmSync(join(root, 'gone.txt'));
+  await until(
+    'the deleted path to leave the listing',
+    () => it.engine.grants.at(-1)?.includes('gone.txt') === false,
+    () => it.engine.grants,
+  );
+
+  // The person writes the buffer back: the editor's own `:w` makes the file again, and the folder
+  // holds the path, so the room's autosave is the folder's to write once more.
+  tree(root, 'gone.txt', 'to be deleted\n');
+  await until(
+    'the recreated path to return to the listing',
+    () => it.engine.grants.at(-1)?.includes('gone.txt') === true,
+    () => it.engine.grants,
+  );
+
+  it.engine.remote('gone.txt', 'to be deleted\nand changed\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'gone.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the room to autosave the recreated file',
+    () => saveAsks(it, 'gone.txt') > 0,
+    () => it.sent,
+  );
+});
+
+test('an open file the listing leaves out is still written when the folder holds it', async (t) => {
+  // A host opens files its ignore rules leave out of the listing, and the room carries the
+  // document: the listing is not the save boundary, so a file the folder still holds is written.
+  const { it } = await hosting(
+    t,
+    { '.gitignore': 'ignored.txt\n', 'ignored.txt': 'kept out of the listing\n' },
+    { defaultAutoSave: true },
+  );
+  assert.equal(
+    it.engine.grantedPaths().includes('ignored.txt'),
+    false,
+    'the listing named the ignored file',
+  );
+  await openHostFile(it, 'ignored.txt', 'kept out of the listing\n');
+
+  it.engine.remote('ignored.txt', 'kept out of the listing\nand changed\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'ignored.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the folder to write the file the listing leaves out',
+    () => saveAsks(it, 'ignored.txt') > 0,
+    () => ({ sent: it.sent, probed: it.probed }),
+  );
+});
+
+test('recreating one child of a deleted directory does not unblock an absent sibling', async (t) => {
+  const { root, it } = await hosting(
+    t,
+    { 'dir/a.txt': 'a\n', 'dir/b.txt': 'b\n' },
+    { defaultAutoSave: true },
+  );
+  await openHostFile(it, 'dir/a.txt', 'a\n');
+  await openHostFile(it, 'dir/b.txt', 'b\n');
+
+  rmSync(join(root, 'dir'), { recursive: true });
+  await until(
+    'the deleted directory to leave the listing',
+    () =>
+      it.engine.grants.at(-1)?.includes('dir/a.txt') === false &&
+      it.engine.grants.at(-1)?.includes('dir/b.txt') === false,
+    () => it.engine.grants,
+  );
+
+  // The directory comes back with one of its children. That child is the one leaf the folder holds
+  // again; the absent sibling stays held, and the room must not write it back.
+  tree(root, 'dir/a.txt', 'a\n');
+  await until(
+    'the recreated child to return to the listing',
+    () =>
+      it.engine.grants.at(-1)?.includes('dir/a.txt') === true &&
+      it.engine.grants.at(-1)?.includes('dir/b.txt') === false,
+    () => it.engine.grants,
+  );
+
+  it.engine.remote('dir/a.txt', 'a\nand changed\n');
+  it.engine.remote('dir/b.txt', 'b\nand changed\n');
+  await until(
+    'both peer edits to reach the buffer',
+    () =>
+      it.applies.some((apply) => apply.path === 'dir/a.txt') &&
+      it.applies.some((apply) => apply.path === 'dir/b.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+
+  // Each leaf's own write was reached and read, so the absent sibling's silence is the guard's and
+  // not a write that never ran.
+  await until(
+    'the save boundary to judge both leaves',
+    () => it.probed.includes('dir/a.txt') && it.probed.includes('dir/b.txt'),
+    () => it.probed,
+  );
+  await until(
+    'the room to autosave the child the folder holds again',
+    () => saveAsks(it, 'dir/a.txt') > 0,
+    () => it.sent,
+  );
+  await decided();
+  assert.equal(saveAsks(it, 'dir/b.txt'), 0, 'the absent sibling was asked to be written back');
+});
+
+test('deleting a directory does not block a sibling whose name starts the same', async (t) => {
+  const { root, it } = await hosting(
+    t,
+    { 'dir/a.txt': 'a\n', 'dirx/b.txt': 'b\n' },
+    { defaultAutoSave: true },
+  );
+  await openHostFile(it, 'dir/a.txt', 'a\n');
+  await openHostFile(it, 'dirx/b.txt', 'b\n');
+
+  // `dir`'s name is a prefix of `dirx`'s: the deleted directory going is not its neighbour going.
+  rmSync(join(root, 'dir'), { recursive: true });
+  await until(
+    'the deleted directory to leave the listing',
+    () => it.engine.grants.at(-1)?.includes('dir/a.txt') === false,
+    () => it.engine.grants,
+  );
+
+  it.engine.remote('dir/a.txt', 'a\nand changed\n');
+  it.engine.remote('dirx/b.txt', 'b\nand changed\n');
+  await until(
+    'both peer edits to reach the buffer',
+    () =>
+      it.applies.some((apply) => apply.path === 'dir/a.txt') &&
+      it.applies.some((apply) => apply.path === 'dirx/b.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+
+  await until(
+    'the save boundary to judge both paths',
+    () => it.probed.includes('dir/a.txt') && it.probed.includes('dirx/b.txt'),
+    () => it.probed,
+  );
+  await until(
+    'the prefix-sharing sibling to still be autosaved',
+    () => saveAsks(it, 'dirx/b.txt') > 0,
+    () => it.sent,
+  );
+  await decided();
+  assert.equal(saveAsks(it, 'dir/a.txt'), 0, 'the deleted path was asked to be written back');
+});
+
+test('a presence fault is not a deletion: the file is still written, and a refused write is reported', async (t) => {
+  const { it } = await hosting(t, { 'notes.txt': 'a note\n' }, {
+    defaultAutoSave: true,
+    // A permission or I/O fault is not the name being absent, so the write must go ahead rather
+    // than the room's persistence being switched off on a guess.
+    presence: async (root, path) => {
+      if (path === 'notes.txt') {
+        throw Object.assign(new Error('I/O error'), { code: 'EIO' });
+      }
+      return await readGrantedPresence(root, path);
+    },
+  });
+  await openHostFile(it, 'notes.txt', 'a note\n');
+
+  it.engine.remote('notes.txt', 'a note\nand changed\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the room to autosave despite the presence fault',
+    () => saveAsks(it, 'notes.txt') > 0,
+    () => ({ sent: it.sent, probed: it.probed }),
+  );
+
+  // The ordinary path a refused write already had: the front-end answers the ask `false` and the
+  // room hears a `saveFailed`, so a fault does not silently become either a deletion or success.
+  const ask = it.sent.findLast(
+    (notification): notification is Extract<Notification, { type: 'save' }> =>
+      notification.type === 'save' && notification.path === 'notes.txt',
+  );
+  assert.ok(ask !== undefined, 'no save ask was made');
+  await it.companion.handle({ type: 'saved', id: ask.id, ok: false });
+  await until(
+    'the refused write to be reported',
+    () =>
+      it.sent.some(
+        (notification) =>
+          notification.type === 'report' &&
+          (notification.report as { kind: string }).kind === 'saveFailed',
+      ),
+    () => it.sent,
+  );
+});
+
+test('a directory that cannot be listed does not quietly switch the room autosave off', async (t) => {
+  // The path is one the folder has held — the buffer was opened over a real file — so the save
+  // boundary reads it before writing, and only a confirmed absence holds the write back. A listing
+  // fault at the actual reader is not one, and it is the shape a whole-operation presence stub
+  // cannot reach: read as `missing`, the room's edit is silently never written.
+  for (const code of ['EIO', 'EACCES']) {
+    const { root, it } = await hosting(t, { 'sub/notes.txt': 'a note\n' }, { defaultAutoSave: true });
+    await openHostFile(it, 'sub/notes.txt', 'a note\n');
+
+    await withReaddirFault(code, [join(root, 'sub')], async () => {
+      it.engine.remote('sub/notes.txt', 'a note\nand changed\n');
+      await until(
+        'the peer edit to reach the buffer',
+        () => it.applies.some((apply) => apply.path === 'sub/notes.txt'),
+        () => it.applies,
+      );
+      await answerApplies(it);
+      await until(
+        'the save boundary to read the path under the unlistable directory',
+        () => it.probed.includes('sub/notes.txt'),
+        () => it.probed,
+      );
+      await decided();
+      assert.ok(
+        saveAsks(it, 'sub/notes.txt') > 0,
+        `${code}: a directory that could not be listed switched the autosave off instead of writing`,
+      );
+    });
+  }
+});
+
+test('a save that settles after its session ended does not write the next session', async (t) => {
+  let release: () => void = () => undefined;
+  let held = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { root, it } = await hosting(t, { 'notes.txt': 'a note\n' }, {
+    defaultAutoSave: true,
+    presence: async (shared, path) => {
+      if (!held && path === 'notes.txt') {
+        held = true;
+        await gate;
+      }
+      return await readGrantedPresence(shared, path);
+    },
+  });
+  await openHostFile(it, 'notes.txt', 'a note\n');
+
+  it.engine.remote('notes.txt', 'a note\nand changed\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the save boundary to hold on the path',
+    () => it.probing.includes('notes.txt'),
+    () => it.probing,
+  );
+
+  // The session ends while the read is held, and another takes its place. The held read belongs to
+  // the session that asked for it; the file it would write is not the next session's to write.
+  await it.companion.leave();
+  await it.companion.handle({ type: 'host', serverUrl: 'ws://127.0.0.1:0', root });
+  await until(
+    'the next session to hold the folder',
+    () => it.engine.grantedPaths().length > 0,
+    () => it.engine.grantedPaths(),
+  );
+  await openHostFile(it, 'notes.txt', 'a note\n');
+  const before = saveAsks(it, 'notes.txt');
+  release();
+  // The held read is real file-system work and finishes a macrotask or more after the release;
+  // the decision follows it synchronously, so the read's completion is the witness.
+  await until(
+    'the held read to finish',
+    () => it.probed.includes('notes.txt'),
+    () => it.probed,
+  );
+  await decided();
+  assert.equal(
+    saveAsks(it, 'notes.txt'),
+    before,
+    'a save from the ended session wrote into the session that took its place',
+  );
+
+  // The positive control: a room change in the next session is written as usual, so the silence
+  // above is the ended session's and not the whole autosave being quiet for the new one.
+  it.engine.remote('notes.txt', 'a note\nand changed again\n');
+  await until(
+    'the second peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the next session to autosave as usual',
+    () => saveAsks(it, 'notes.txt') > before,
+    () => it.sent,
+  );
+});
+
+test('a save that settles after the same path was reopened does not write the new document', async (t) => {
+  let release: () => void = () => undefined;
+  let held = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { it } = await hosting(t, { 'notes.txt': 'a note\n' }, {
+    defaultAutoSave: true,
+    presence: async (shared, path) => {
+      if (!held && path === 'notes.txt') {
+        held = true;
+        await gate;
+      }
+      return await readGrantedPresence(shared, path);
+    },
+  });
+  await openHostFile(it, 'notes.txt', 'a note\n');
+
+  it.engine.remote('notes.txt', 'a note\nand changed\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the save boundary to hold on the path',
+    () => it.probing.includes('notes.txt'),
+    () => it.probing,
+  );
+
+  // The same session closes the path and opens it again: the document is a different instance. The
+  // reopen reconciles the buffer against the room's text and autosaves it as its own, answered
+  // here so that its write is the baseline and not the held write's.
+  await it.companion.handle({ type: 'close', path: 'notes.txt' });
+  await openHostFile(it, 'notes.txt', 'a note\n');
+  await answerApplies(it);
+  await until(
+    'the reopened document to autosave as its own',
+    () => saveAsks(it, 'notes.txt') > 0,
+    () => it.sent,
+  );
+  const before = saveAsks(it, 'notes.txt');
+  // The held write belonged to the document the close dropped; the instance is checked where the
+  // write is made, so it cannot write the buffer that replaced it.
+  const reads = it.probed.filter((path) => path === 'notes.txt').length;
+  release();
+  await until(
+    'the held read to finish',
+    () => it.probed.filter((path) => path === 'notes.txt').length > reads,
+    () => it.probed,
+  );
+  await decided();
+  assert.equal(
+    saveAsks(it, 'notes.txt'),
+    before,
+    'a save from the closed document wrote the document that replaced it',
+  );
+
+  // The positive control: the reopened document's own room change is written as usual.
+  it.engine.remote('notes.txt', 'a note\nand changed again\n');
+  await until(
+    'the second peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'notes.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the reopened document to autosave as usual',
+    () => saveAsks(it, 'notes.txt') > before,
+    () => it.sent,
+  );
+});
+
+test('a registered path through a directory link is written, not judged a deletion', async (t) => {
+  // The deleted target outside the folder is what the two answers differ on: a bare `lstat`
+  // follows the link and calls the name gone, where the confined read refuses the link and this
+  // process writes as it did before. The symlink stands in for an ancestor replaced by one.
+  const { root, it } = await hosting(t, { 'notes.txt': 'a note\n' }, { defaultAutoSave: true });
+  const outside = join(root, 'outside');
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, join(root, 'escape'));
+  await openHostFile(it, 'escape/secret.txt', 'held open\n');
+
+  it.engine.remote('escape/secret.txt', 'held open\nand changed\n');
+  await until(
+    'the peer edit to reach the buffer',
+    () => it.applies.some((apply) => apply.path === 'escape/secret.txt'),
+    () => it.applies,
+  );
+  await answerApplies(it);
+  await until(
+    'the save boundary to judge the linked path',
+    () => it.probed.includes('escape/secret.txt'),
+    () => it.probed,
+  );
+  await decided();
+  assert.ok(
+    saveAsks(it, 'escape/secret.txt') > 0,
+    'a path through a link was judged a deletion and held back',
+  );
 });
 
 test('a burst of changes is one republish', async (t) => {

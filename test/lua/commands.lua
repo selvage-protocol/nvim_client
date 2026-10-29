@@ -12,6 +12,8 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 vim.cmd('runtime! plugin/selvage.lua')
 
+local capture = dofile(vim.fn.getcwd() .. '/test/helpers/capture.lua')
+capture.begin('commands')
 local failures = 0
 
 local function check(name, got, want)
@@ -101,6 +103,7 @@ vim.g.selvage_display_name = 'Test User'
 
 vim.fn.mkdir('.tmp', 'p')
 local path = '.tmp/lua-commands.txt'
+capture.capture('commands-answer-before-replace', path)
 vim.fn.writefile({ 'one' }, path)
 vim.cmd('edit ' .. vim.fn.fnameescape(path))
 
@@ -167,6 +170,7 @@ end
 -- from the start, so a bare command never answers from the person's own remembered
 -- addresses, and what they write is nowhere the person's own Neovim would read.
 vim.env.XDG_DATA_HOME = vim.fn.getcwd() .. '/.tmp/lua-commands-data'
+capture.capture('commands-data-first', vim.fn.getcwd() .. '/.tmp/lua-commands-data')
 vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 
 -- -- a bare command reaches the plugin's own guard ---------------------------------
@@ -466,6 +470,7 @@ check('  and it is still what the next host uses', table.concat(vim.fn.readfile(
 
 -- Nothing remembered and nothing configured: the report says so, and the box starts from the
 -- demo default, exactly as the first :SelvageHost question does.
+capture.capture('commands-data-reset-469', vim.fn.getcwd() .. '/.tmp/lua-commands-data')
 vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 vim.ui.input = builtin_input
 selvage = restart()
@@ -700,6 +705,7 @@ check('  and says nothing about it', said_since(before, 'That does not look like
 -- refuse with the name's own sentence rather than the link's.
 
 vim.g.selvage_display_name = nil
+capture.capture('commands-data-reset-703', vim.fn.getcwd() .. '/.tmp/lua-commands-data')
 vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 vim.ui.input = builtin_input
 joins_before = count_type('join')
@@ -807,6 +813,7 @@ handlers().on_message({ type = 'status', state = 'idle' })
 
 vim.g.selvage_display_name = nil
 vim.env.SELVAGE_DISPLAY_NAME = nil
+capture.capture('commands-data-reset-810', vim.fn.getcwd() .. '/.tmp/lua-commands-data')
 vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 check('the name in force is nil when nothing is configured', selvage.display_name(), nil)
 
@@ -1269,5 +1276,12 @@ vim.api.nvim_exec_autocmds('VimLeavePre', {})
 check('quitting with the session open takes the copied link back too', vim.fn.getreg('"'), '')
 selvage.leave()
 
+capture.capture('commands-data-final', vim.fn.getcwd() .. '/.tmp/lua-commands-data')
+capture.capture('commands-answer-final', '.tmp/lua-commands.txt')
+local capture_ok, capture_error = pcall(capture.finish)
+
+if failures == 0 and not capture_ok then
+  error(capture_error, 0)
+end
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

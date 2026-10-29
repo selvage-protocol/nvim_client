@@ -19,7 +19,12 @@ window, no buffer and no hold for it — and leaves the room's documents to `:Se
 
 `vim.g.selvage_auto_save = false` keeps the room's changes out of the files on disk: a host writes
 a document the room changed by default, while a guest's mirror is not refreshed either way, so a
-save in it is refused and the file keeps what it last held. `vim.g.selvage_open_on_join` and this
+save in it is refused and the file keeps what it last held. The default does not write a path the
+folder no longer holds: a file deleted under the host is left deleted, the room's changes staying
+in the buffer until a file is there again. That is the path's absence as the write is attempted,
+not a guarantee against a deletion racing it, and it holds back only a path the folder has held
+before — a buffer the person has not written yet has no file to have been deleted, and the room's
+change creates it. `vim.g.selvage_open_on_join` and this
 are read when a session starts, so a change to either applies to the next host or join.
 `vim.g.selvage_server_url` is the address `:SelvageHost` does not have to ask for, completed the
 same way an argument is, so a domain on its own there is enough and means `wss://<host>`. The page

@@ -77,6 +77,9 @@ check('hosting sends the command', sent[1] and sent[1].type, 'host')
 handlers().on_message({ type = 'status', state = 'hosting', role = 'host', roomId = 'r-test' })
 check('the shared buffer is opened in the room', sent[2] and sent[2].type, 'open')
 check('  under its path', sent[2] and sent[2].path, path)
+-- The file was on disk when the buffer was shared, and that observation goes with the open so the
+-- companion can tell a path the folder has held from one it never had.
+check('  with the file it saw behind it', sent[2] and sent[2].present, true)
 
 vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, { 'two' })
 check('a keystroke while the session is live is sent', sent[3] and sent[3].type, 'change')

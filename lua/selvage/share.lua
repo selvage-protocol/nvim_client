@@ -337,7 +337,10 @@ local function share(bufnr, path)
   state.documents[path] = document
   document:attach()
   apply_read_only(document)
-  state.process:send({ type = 'open', path = path, text = text })
+  -- `present` is the same observation the share just made: a name with nothing behind it is a
+  -- file the person has not written yet, and the room may create it, where a name that was there
+  -- and is now gone is a deletion the companion's save policy must not put back.
+  state.process:send({ type = 'open', path = path, text = text, present = behind ~= nil })
   -- The document may already have a peer's caret resolved against it, and this buffer's own
   -- caret is worth publishing the moment the room holds it.
   draw_presence(state.cursors)

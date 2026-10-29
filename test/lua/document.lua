@@ -9,6 +9,9 @@
 
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 
+local capture = dofile(vim.fn.getcwd() .. '/test/helpers/capture.lua')
+capture.begin('document')
+
 local Document = require('selvage.document')
 local utf16 = require('selvage.utf16')
 
@@ -392,6 +395,7 @@ check('a detached document leaves another callback on the buffer alone', other_s
 -- already ended.
 vim.fn.mkdir('.tmp', 'p')
 local reload_path = '.tmp/lua-document-reload.txt'
+capture.capture('document-reload-before-create', reload_path)
 vim.fn.writefile({ 'one' }, reload_path)
 vim.cmd('edit ' .. vim.fn.fnameescape(reload_path))
 local reload_sent = {}
@@ -401,6 +405,7 @@ end)
 reloaded:attach()
 reloaded:detach()
 vim.bo.autoread = true
+capture.capture('document-reload-before-replace', reload_path)
 vim.fn.writefile({ 'one', 'two' }, reload_path)
 vim.cmd('silent checktime')
 check('a detached document publishes nothing when its buffer is reloaded', #reload_sent, 0)
@@ -522,5 +527,99 @@ check('  and the last one is', utf16.valid('\xf4\x8f\xbf\xbf'), true)
 check('a continuation byte on its own is not', utf16.valid('\x80'), false)
 check('an empty string is', utf16.valid(''), true)
 check('  and so is the empty line a buffer always has', utf16.valid('\n'), true)
+-- -- the person's own write --------------------------------------------------
+--
+-- A shared buffer's `:w` is the person's write and not the room's, and it is the one that puts a
+-- file behind a path the folder never held: the companion is told so a later delete of that path
+-- is not recreated by the room's autosave. The room's own writes go through `Document:save` with
+-- `noautocmd`, so they never fire the callback this checks.
+do
+  local dir = '.tmp/lua-document-write'
+  vim.fn.mkdir(dir, 'p')
+  local file = dir .. '/written.txt'
+  capture.capture('document-write-before-replace', file)
+  vim.fn.writefile({ 'x' }, file)
+  vim.cmd('edit ' .. vim.fn.fnameescape(file))
+  local write_buf = vim.api.nvim_get_current_buf()
+  local written = {}
+  local written_doc = Document.new(write_buf, 'written.txt', function(message)
+    written[#written + 1] = message
+  end)
+  written_doc:attach()
+  vim.cmd('silent write')
+  local told = nil
+  for _, message in ipairs(written) do
+    if message.type == 'wrote' then
+      told = message.path
+    end
+  end
+  check('a manual write tells the companion the file is there', told, 'written.txt')
+  written_doc:detach()
+  vim.cmd('bwipeout!')
+end
+
+-- -- the person's write to another name ---------------------------------------
+--
+-- `:write other-name` writes the whole buffer to a file that is not the one the path was
+-- registered at and leaves the buffer named as it was. It is not a write of the shared file, so
+-- the room must not be told the path is there: that would mark a file the folder never held as one
+-- it did, and the room's first autosave for it would then be held back as a deletion.
+--
+-- The write has to stay non-forced to mean anything: `:write other-name` over a name already on
+-- disk is refused, so the scratch directory is this run's own and the buffer, its group and the
+-- directory go away whatever the checks said, however a repeated run is started.
+do
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, 'p')
+  local registered = dir .. '/registered.txt'
+  local other = dir .. '/other.txt'
+  local other_buf = nil
+  local other_doc = nil
+  local ok, err = pcall(function()
+    vim.fn.writefile({ 'x' }, registered)
+    vim.cmd('edit ' .. vim.fn.fnameescape(registered))
+    other_buf = vim.api.nvim_get_current_buf()
+    local other_name = vim.api.nvim_buf_get_name(other_buf)
+    local other_sent = {}
+    other_doc = Document.new(other_buf, 'registered.txt', function(message)
+      other_sent[#other_sent + 1] = message
+    end)
+    other_doc:attach()
+    local function last_wrote()
+      local last = nil
+      for _, message in ipairs(other_sent) do
+        if message.type == 'wrote' then
+          last = message.path
+        end
+      end
+      return last
+    end
+    vim.cmd('silent write ' .. vim.fn.fnameescape(other))
+    check('a write to another name tells the room nothing', last_wrote(), nil)
+    check('  and leaves the buffer named as it was', vim.api.nvim_buf_get_name(other_buf), other_name)
+    -- The person then writes the buffer's own file: the room hears about the registered path.
+    vim.cmd('silent write')
+    check('a write to the registered file tells the companion the file is there', last_wrote(), 'registered.txt')
+  end)
+  if other_doc ~= nil then
+    other_doc:detach()
+  end
+  if other_buf ~= nil and vim.api.nvim_buf_is_valid(other_buf) then
+    vim.cmd('bwipeout! ' .. other_buf)
+  end
+  capture.capture('document-write-othername', dir)
+  vim.fn.delete(dir, 'rf')
+  if not ok then
+    error(err)
+  end
+end
+
+capture.capture('document-reload-final', reload_path)
+capture.capture('document-write', '.tmp/lua-document-write')
+local capture_ok, capture_error = pcall(capture.finish)
+
+if failures == 0 and not capture_ok then
+  error(capture_error, 0)
+end
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)

@@ -67,10 +67,21 @@ export type Request =
    * applies to the cursors the front-end already draws.
    */
   | { type: 'rename'; displayName: string }
-  /** A buffer is now shared under `path`, and holds `text`. */
-  | { type: 'open'; path: string; text: string }
+  /**
+   * A buffer is now shared under `path`, and holds `text`. `present` says whether the host's own
+   * file was there when the buffer was shared: a path with nothing behind it is one the person
+   * has not written yet, so the room may create it, while one that was there and is now gone is
+   * a deletion the room's autosave must not put back.
+   */
+  | { type: 'open'; path: string; text: string; present?: boolean }
   /** The buffer is no longer shared; this client stops holding the path open. */
   | { type: 'close'; path: string }
+  /**
+   * The person wrote the shared buffer (`:w`) and the file is on disk. It is the host's own act
+   * rather than the room's autosave, so it is what tells this process the path has a file behind
+   * it and a later deletion of it is not a path to create again.
+   */
+  | { type: 'wrote'; path: string }
   /** A local edit: `[start, end)` of the buffer's text became `text`. */
   | { type: 'change'; path: string; start: number; end: number; text: string }
   /** The answer to an `applyEdit`: whether the buffer now holds it. */
@@ -284,8 +295,10 @@ export function isRequest(value: unknown): value is Request {
     case 'rename':
       return text('displayName');
     case 'open':
-      return text('path') && text('text');
+      return text('path') && text('text') && maybeFlag('present');
     case 'close':
+      return text('path');
+    case 'wrote':
       return text('path');
     case 'change':
       return text('path') && count('start') && count('end') && text('text');

@@ -15,6 +15,9 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 vim.cmd('runtime! plugin/selvage.lua')
 
+local capture = dofile(vim.fn.getcwd() .. '/test/helpers/capture.lua')
+capture.begin('grant')
+
 local failures = 0
 
 local function check(name, got, want)
@@ -99,6 +102,9 @@ local repo = vim.fn.getcwd()
 local grant = repo .. '/.tmp/lua-grant/inside'
 local elsewhere = repo .. '/.tmp/lua-grant/inside-elsewhere'
 local outside = repo .. '/.tmp/lua-grant/outside'
+capture.capture('grant-root-inside', grant)
+capture.capture('grant-root-elsewhere', elsewhere)
+capture.capture('grant-root-outside', outside)
 for _, directory in ipairs({ grant, elsewhere, outside }) do
   vim.fn.mkdir(directory, 'p')
 end
@@ -254,6 +260,7 @@ selvage.leave()
 -- every link, and the share path must not read straight through one and publish the target's
 -- bytes. Said once per path, the way a file outside the grant is.
 vim.fn.writefile({ 'not the room\'s' }, outside .. '/secret.txt')
+capture.capture('grant-linked-preclean', grant .. '/linked.txt')
 vim.fn.delete(grant .. '/linked.txt')
 local luv = vim.uv or vim.loop
 luv.fs_symlink(outside .. '/secret.txt', grant .. '/linked.txt')
@@ -283,6 +290,7 @@ vim.fn.mkdir(grant .. '/plain', 'p')
 vim.fn.writefile({ 'nor this' }, outside .. '/inner/deeper.txt')
 vim.fn.writefile({ 'behind the link' }, outside .. '/hidden.txt')
 vim.fn.writefile({ 'the room\'s own' }, grant .. '/plain/inner.txt')
+capture.capture('grant-escape-preclean', grant .. '/escape')
 vim.fn.delete(grant .. '/escape')
 luv.fs_symlink(outside, grant .. '/escape')
 set_cwd(grant)
@@ -307,5 +315,13 @@ check(
 )check('  while a file in a plain directory is shared', opens_of('plain/inner.txt', before_escaping_sends), 1)
 selvage.leave()
 
+capture.capture('grant-inside-final', grant)
+capture.capture('grant-elsewhere-final', elsewhere)
+capture.capture('grant-outside-final', outside)
+local capture_ok, capture_error = pcall(capture.finish)
+
+if failures == 0 and not capture_ok then
+  error(capture_error, 0)
+end
 print(failures == 0 and 'ALL OK' or (failures .. ' FAILED'))
 os.exit(failures == 0 and 0 or 1)
