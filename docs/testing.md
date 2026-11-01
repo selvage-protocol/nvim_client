@@ -19,8 +19,9 @@ The public workflows separate three kinds of evidence:
   job logs every resolved input SHA and uses read-only repository permissions with checkout
   credentials not persisted.
 
-The executable checker is pinned to a reviewed public specification commit; the canonical
-VS Code source deliberately follows `main` so a new upstream change cannot go unnoticed.
+The executable checker is pinned to a reviewed public specification commit. Separate
+canonical specification and VS Code checkouts follow `main`, so new guard or source changes
+cannot be hidden by the executable pin. The job logs the checker SHA separately from its data.
 When refreshing vendored sources, use the exact resolved canonical commit reported by the
 job. Do not freeze the canonical source ref or hand-edit copies to make a comparison pass.
 
@@ -54,22 +55,27 @@ Use a workspace containing Git repositories named `nvim_client`, `vscode_client`
 Supply a commit ref for every repository used, including the checker itself:
 
 ```sh
-bash scripts/ci-local.sh contracts /path/to/workspace SPECIFICATION_SHA \
+bash scripts/ci-local.sh contracts /path/to/workspace CHECKER_SHA \
+  --revision specification=SPECIFICATION_SHA \
   --revision nvim_client=HEAD --revision vscode_client=VSCODE_SHA
 ```
 
-The wrapper extracts the checker from the supplied specification commit with `git show`,
-not from an uncommitted script, and forwards `--revision specification=RESOLVED_SHA`.
-The equivalent public interface is:
+The wrapper extracts checker code from `CHECKER_SHA` with `git show`, not from an
+uncommitted script. That commit must be available in the specification's local Git object
+store; explicitly fetch it first in a shallow clone if needed. The separate
+`--revision specification=SPECIFICATION_SHA` chooses canonical guard data. Omitting a
+required data revision fails instead of substituting the checker commit. The equivalent
+public interface, with checker code in its own checkout, is:
 
 ```sh
-python3 /path/to/specification/scripts/check-workspace.py \
+python3 /path/to/contract_checker/scripts/check-workspace.py \
   --workspace /path/to/workspace --consumer nvim_client \
   --revision nvim_client=HEAD --revision vscode_client=VSCODE_SHA \
   --revision specification=SPECIFICATION_SHA
 ```
 
-For the direct form, use the checker checked out at `SPECIFICATION_SHA`. Neither form needs
+For the direct form, use checker code checked out at `CHECKER_SHA`, independently of the
+canonical `SPECIFICATION_SHA` under the workspace. Neither form needs
 an MCP checkout, private coordination files, or an implicit sibling source checkout. Missing
 repositories or refs fail rather than falling back to working-tree content. `HEAD` means the
 committed tree, so commit candidate changes before relying on the comparison. Contracts are

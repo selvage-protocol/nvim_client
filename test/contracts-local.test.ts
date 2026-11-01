@@ -49,13 +49,14 @@ test('contracts extracts the explicitly selected committed checker and forwards 
   const f = fixture();
   try {
     const result = f.run([f.workspace, 'checker-ref', '--revision', `${consumer}=candidate`,
-      '--revision', 'vscode_client=canonical']);
+      '--revision', 'vscode_client=canonical', '--revision', 'specification=canonical-spec']);
     assert.equal(result.status, 0, result.stderr);
     const calls = readFileSync(f.log, 'utf8');
-    assert.ok(calls.includes('rev-parse --verify checker-ref^{commit}'), calls);
+    assert.match(calls, /rev-parse --verify (?:--end-of-options )?checker-ref\^\{commit\}/);
     assert.ok(calls.includes(`show ${SHA}:scripts/check-workspace.py`), calls);
     assert.ok(calls.includes('checker committed checker bytes'), calls);
-    assert.ok(calls.includes(`--workspace ${f.workspace} --consumer ${consumer} --revision specification=${SHA} --revision ${consumer}=candidate --revision vscode_client=canonical`), calls);
+    assert.ok(calls.includes(`--workspace ${f.workspace} --consumer ${consumer} --revision ${consumer}=candidate --revision vscode_client=canonical --revision specification=canonical-spec`), calls);
+    assert.ok(!calls.includes(`--revision specification=${SHA}`), 'checker revision must not select canonical data');
   } finally {
     rmSync(f.dir, { recursive: true, force: true });
   }
@@ -66,7 +67,7 @@ test('contracts fails on missing explicit inputs, invalid refs, and checker fail
   try {
     assert.equal(f.run([]).status, 2);
     const args = [f.workspace, 'checker-ref', '--revision', `${consumer}=candidate`,
-      '--revision', 'vscode_client=canonical'];
+      '--revision', 'vscode_client=canonical', '--revision', 'specification=canonical-spec'];
     assert.equal(f.run(args, { MOCK_GIT_FAIL: '23' }).status, 23);
     assert.ok(!readFileSync(f.log, 'utf8').includes('python '));
     assert.equal(f.run(args, { MOCK_PYTHON_FAIL: '37' }).status, 37);
