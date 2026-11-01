@@ -3,8 +3,7 @@
 A Neovim client for the [Selvage session protocol](https://github.com/selvage-protocol/specification):
 share a link, come edit my code with me.
 
-Status: v1 in progress, and feature-frozen at what works: hosting, joining by invite and editing
-together work today, and this client grows no further while the release is prepared.
+Status: v1 in progress. Hosting, joining by invite and editing together work today.
 
 ![Neovim hosting a session: the session bar reads Sharing “taskboard” with both faces, and Grace’s caret, her selection and her initials are drawn in Ada’s window](docs/images/host-editing.png)
 
