@@ -155,7 +155,7 @@ export class Composed {
   private readonly folder: string;
 
   constructor() {
-    // `AGENTS.md` §5: scratch stays inside the checkout. Nothing here needs the folder to hold
+    // Keep scratch inside the checkout. Nothing here needs the folder to hold
     // anything — the listing is the test's own — but the host's watcher is handed a real one.
     this.folder = joinPath(process.cwd(), '.tmp', 'composed-room');
     mkdirSync(this.folder, { recursive: true });

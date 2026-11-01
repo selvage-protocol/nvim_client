@@ -2,8 +2,7 @@
 #
 # The sync engine and the bridge in `vendor/` are vendored, not authored here: the canonical
 # copies live in the VS Code client (`selvage-protocol/vscode_client`, its `src/engine` and
-# `src/bridge`). `DESIGN.md` §6 splits a client into a sync engine and an editor adapter, and
-# this repository is an editor adapter — the engine it drives is the one that already speaks
+# `src/bridge`). This repository is an editor adapter — the engine it drives already speaks
 # the wire, so it is copied rather than written a second time in a second language.
 #
 #   scripts/sync-engine.sh [path-to-vscode_client-checkout]

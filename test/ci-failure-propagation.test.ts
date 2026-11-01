@@ -2,7 +2,7 @@
  * `scripts/ci-local.sh`'s `all` mode, and the one thing about it a reader cannot see: a job that
  * fails part-way through has to stop the run.
  *
- * `all` runs the same jobs the `lint`, `checks`, `links` and `e2e` modes do. Each job is a shell
+ * `all` runs the same jobs the `lint`, `checks`, `links`, `lua` and `e2e` modes do. Each job is a shell
  * function, and a function that is the only command of its mode — or the last element of an `&&`
  * list — has `set -e` active inside it, so a command that fails ends the script. A function
  * invoked *before* the last element of an `&&` list is the exception: bash suspends `set -e`
@@ -99,6 +99,15 @@ const MOCKS: Record<string, string> = {
 };
 
 /** The two-instance proof the `e2e` job runs, stood in for by one that logs and succeeds. */
+const LUA_STUB = [
+  `#!${BASH}`,
+  'set -euo pipefail',
+  'printf "lua\\n" >>"$MOCK_LOG"',
+  'if [ "${MOCK_FAIL:-}" = lua ]; then exit "${MOCK_FAIL_STATUS:-37}"; fi',
+  'exit 0',
+  '',
+].join('\n');
+
 const E2E_STUB = [
   `#!${BASH}`,
   'set -euo pipefail',
@@ -113,6 +122,7 @@ function fixture(name: string): string {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, 'scripts', 'e2e'), { recursive: true });
   writeFileSync(join(dir, 'scripts', 'ci-local.sh'), readFileSync(join(ROOT, 'scripts', 'ci-local.sh')));
+  writeFileSync(join(dir, 'scripts', 'test-lua.sh'), LUA_STUB);
   const e2e = join(dir, 'scripts', 'e2e', 'run-two-instance.sh');
   writeFileSync(e2e, E2E_STUB);
   chmodSync(e2e, 0o755);
@@ -176,6 +186,7 @@ test('all runs every job, in order, when each tool succeeds', () => {
         'npm test',
         'nix build .#checks.x86_64-linux.dry-run-gating --no-link --print-build-logs',
         'lychee --config lychee.toml --no-progress README.md docs',
+        'lua',
         'e2e',
       ],
       run.output,
@@ -232,6 +243,18 @@ test('a failure in the last command of the checks job also stops all', () => {
       !run.lines.includes('e2e'),
       `the two-instance proof ran after the failure: ${run.lines.join(', ')}`,
     );
+  } finally {
+    remove(dir);
+  }
+});
+
+test('a Lua failure stops all before the two-instance proof', () => {
+  const dir = fixture('lua-fails');
+  try {
+    const run = runScript(dir, 'all', { command: 'lua', status: 37 });
+    assert.equal(run.status, 37, run.output);
+    assert.ok(run.lines.includes('lua'), run.output);
+    assert.ok(!run.lines.includes('e2e'), run.output);
   } finally {
     remove(dir);
   }

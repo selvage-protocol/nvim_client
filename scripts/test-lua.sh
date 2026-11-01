@@ -23,13 +23,20 @@
 #
 #   scripts/test-lua.sh
 #
-# Not part of the workflow: it needs a Neovim, and the runner has none. `npm test` covers the
-# companion, which is where every rule lives. The last file also needs `npm ci` to have run, the
-# same as running the plugin itself does.
+# Run by the public native CI job and `scripts/ci-local.sh all`. Requires Neovim >=0.12,
+# Node >=22.18, and `npm ci` in this checkout; the installed-plugin test starts the real companion.
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
+
+for tool in node nvim; do
+  command -v "$tool" >/dev/null || { printf 'Lua suite requires %s on PATH; see docs/testing.md\n' "$tool" >&2; exit 1; }
+done
+if [[ ! -d node_modules ]]; then
+  printf 'Lua suite requires npm ci in %s\n' "$repo_root" >&2
+  exit 1
+fi
 
 nvim --headless -l test/lua/document.lua
 nvim --headless -l test/lua/session.lua

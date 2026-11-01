@@ -12,8 +12,8 @@ local can_prompt = require('selvage.prompt').can_prompt
 local M = {}
 
 --- The server a bare `:SelvageHost` asks about when nothing was configured and nothing was
---- remembered: the public demo, whose live state is `ai_notes/docs/runbook-prod-demo.md`. The
---- value is a domain on its own on purpose — it is what a person would type — and
+--- remembered: the public demo. The value is a domain on its own on purpose — it is what
+--- a person would type — and
 --- `normalise_server_address` is what makes it a connection: a bare domain means the secure
 --- server, `wss://selvage-demo.dontblameme.dev`, on the port TLS uses. An overridable default,
 --- never a commitment — the answer is remembered, and an explicit argument and

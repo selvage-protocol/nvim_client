@@ -755,7 +755,7 @@ async function walkGoverning(
  * with, so the name it was opened under cannot be moved to something else in between.
  * `isShareableFile` is the same first half of the rule, one step earlier, and it is the half the
  * listing's own walk can afford: a walk does not read a file's bytes to decide whether to name
- * it, and the host's own disk is not read for a peer until the peer asks (`DESIGN.md` §4.2). A
+ * it, and the host's own disk is not read for a peer until the peer asks. A
  * file whose name declares a format no session carries is the listing's own line, drawn from the
  * name alone (`isBinaryNamedPath`); what is left to this read is a binary the name did not
  * declare, which is refused here.

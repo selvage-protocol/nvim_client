@@ -211,7 +211,7 @@ export class InProcessRoom {
    * A frame lost on a closing socket is what `PROTOCOL.md` §13.1's reciprocal request exists for
    * (NOTES.md §B.48): the receiver keeps what depended on it pending, no refusal follows, and only
    * a later request carries the history back. The count is spent by frames of every kind, because
-   * a room does not read one (`DESIGN.md` §4.5); what a test means by it is "whatever this
+   * a room does not read one; what a test means by it is "whatever this
    * connection sent before its socket went", and {@link drop} ends the allowance with the socket.
    */
   lose(seat: string, count = 1): void {
@@ -346,7 +346,7 @@ export class InProcessRoom {
     // `unknown_method`; no client here sends one, so saying nothing is the whole of it.
   }
 
-  /** A binary frame: the room's own job, and nobody's to read (`DESIGN.md` §4.5). */
+  /** A binary frame: relayed without reading the encrypted payload. */
   fromClientBinary(seat: Seat, bytes: Uint8Array): void {
     if (seat.room === undefined || !seat.open) {
       return;

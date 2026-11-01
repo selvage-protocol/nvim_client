@@ -45,7 +45,7 @@ local state = {
   room_documents = {},
   --- The room's grant: the paths the host listed when the session started, in the order the
   --- room carries them. A listing, never content — a path here may have no buffer and no text
-  --- behind it yet (`DESIGN.md` §4.2).
+  --- behind it yet.
   grant = {},
   --- The room paths this session refused to share, so the refusal is said once: a buffer that
   --- is not text a room can carry — not valid UTF-8, or a file whose bytes are not text at all —
@@ -66,7 +66,7 @@ local state = {
   unfetched = {},
   --- The folder this session's grant is rooted at, as it stood when the session started. The
   --- working directory can move under it at any moment (`:cd`, `:lcd`, `:tcd`) and the grant
-  --- does not: it is the folder the invite was offered from (`DESIGN.md` §4.2), not wherever
+  --- does not: it is the folder the invite was offered from, not wherever
   --- the person happens to be looking now.
   root = nil,
   --- The paths this session refused to share because they are outside that folder, so the

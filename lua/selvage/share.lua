@@ -118,7 +118,7 @@ end
 --- The room path a buffer is shared under, and the absolute name it is refused for when it
 --- is not one to share.
 ---
---- The grant is the folder the session was started in (`DESIGN.md` §4.2), so a name is
+--- The grant is the folder the session was started in (see docs/grant.md), so a name is
 --- measured against that and never against the working directory, which `:cd` moves at any
 --- moment. A name is absolute — Neovim resolves it when it sets one — and the separator in
 --- the prefix is what keeps a sibling whose name merely begins with the grant's out of it.

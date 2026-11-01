@@ -143,7 +143,7 @@ end
 --- room's shape is materialised on disk and its text is not, so an empty buffer is not an
 --- empty file.
 ---
---- `DESIGN.md` §4.2 leaves a listing partial by design, and every tool that reads the mirror —
+--- The mirror's content is fetched on demand, and every tool that reads the mirror —
 --- ripgrep, ctags, a language server — reads a partial project with it. The row is where that
 --- is visible while the file is in front of the person, rather than a sentence in `:messages`
 --- they have to remember.

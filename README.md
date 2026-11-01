@@ -126,6 +126,11 @@ key, so a link given wherever an address is asked for is refused and nothing is 
 - [Remote cursors](docs/remote-cursors.md): how a peer's caret, selection and sign are drawn, the
   follow, and the session bar.
 
+## Development
+
+[Testing and public CI](docs/testing.md) covers the companion, native Lua and two-instance
+suites, and the public copy-contract check with explicit repository revisions.
+
 ## Licence
 
 `MIT OR Apache-2.0`: `LICENSE-MIT` and `LICENSE-APACHE`.

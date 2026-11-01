@@ -59,9 +59,8 @@ jobs:
 
       - run: npm run typecheck
 
-      # The companion's suite only. The two-instance proof needs a built `selvaged` from the
-      # sibling `reference_server` repository and a real Neovim, neither of which this workflow
-      # checks out; `scripts/e2e/run-two-instance.sh` runs it locally.
+      # The companion suite. `native.yml` separately runs the Lua suite and two-instance proof
+      # with a real Neovim and a fresh public reference_server build.
       - run: npm test
 
       # The runner has no nix, so the pinned lychee release is installed here and the link check

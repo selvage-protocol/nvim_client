@@ -1,7 +1,6 @@
 -- A seat's colour, as this editor draws it.
 --
--- The room gives a peer a colour; how it is presented is the adapter's business (`DESIGN.md`
--- §4.3), and a terminal has 256 slots at best. `cterm` quantises a truecolor value to the nearest
+-- The room gives a peer a colour; this adapter presents it in a terminal with 256 slots at best. `cterm` quantises a truecolor value to the nearest
 -- slot, and a highlight group is made per seat: `peer_highlight` for the caret and the sign,
 -- `peer_fill` for the one-cell mark, and `peer_sign` for the two initials a row is drawn with.
 local api = vim.api
