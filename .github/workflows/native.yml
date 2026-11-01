@@ -24,8 +24,6 @@ jobs:
       RUST_VERSION: "1.99.1"
       NVIM_VERSION: "v0.12.0"
       NVIM_SHA256: "160b69125defb16e60b283b69be112fd4850d67ac8f9a752328c20ad43ec34af"
-      CARGO_TARGET_DIR: ${{ runner.temp }}/server-target
-      SELVAGE_SELVAGED: ${{ runner.temp }}/server-target/debug/selvaged
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +39,8 @@ jobs:
 
       - name: log the exact source inputs
         run: |
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/server-target" >> "$GITHUB_ENV"
+          echo "SELVAGE_SELVAGED=$RUNNER_TEMP/server-target/debug/selvaged" >> "$GITHUB_ENV"
           mkdir -p ci-evidence
           for repo in nvim_client reference_server; do
             printf '%s=' "$repo"
