@@ -3,8 +3,8 @@
 --
 --   nvim --headless -l test/lua/grant.lua      (or scripts/test-lua.sh)
 --
--- A buffer's room path is resolved against the folder the session was started in (`DESIGN.md`
--- §4.2). The *working directory* is not that folder: `:cd`, `:lcd` and `:tcd` move it at any
+-- A buffer's room path is resolved against the folder the session was started in (docs/grant.md).
+-- The *working directory* is not that folder: `:cd`, `:lcd` and `:tcd` move it at any
 -- moment, so a room whose reach followed it would share a file that was not shareable a moment
 -- ago — and stop sharing one that was. This file starts a session in one folder, moves the
 -- working directory to another, and asserts the grant did not follow in either direction: the

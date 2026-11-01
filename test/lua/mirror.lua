@@ -3,7 +3,7 @@
 --
 --   nvim --headless -l test/lua/mirror.lua      (or scripts/test-lua.sh)
 --
--- `DESIGN.md` §4.2 is the rule. A guest materialises the grant's *shape* so that anything that
+-- As docs/mirror.md describes, a guest materialises the grant's *shape* so that anything that
 -- reads the filesystem — ripgrep, ctags, a language server, a tree plugin — sees the whole room,
 -- and fetches a file's *content* when something needs it. The directory is a cache: the room is
 -- the truth, the session ends by removing it, and nothing in it is written back on its own.
@@ -903,7 +903,7 @@ check('  and the buffer is not left modified', vim.bo[buf].modified, false)
 
 -- The placeholder is not a source of truth: a file a tool wrote into the mirror is read back into
 -- the buffer like any file, and the room's copy is what replaces it — which is what the mirror
--- trades for native tooling (`DESIGN.md` §4.2).
+-- trades for native tooling.
 capture_mirror('mirror-before-leave-863')
 selvage.leave()
 root = join({}, GRANT)
@@ -1110,7 +1110,7 @@ check(
 check('  at info level', hint_at ~= nil and notices[hint_at].level or nil, vim.log.levels.INFO)
 
 -- The sentence is said once per session, and the mark is not: a project-wide search over the
--- mirror is partial by design (`DESIGN.md` §4.2), and the second empty file — and the tenth — is
+-- mirror is partial until fetched, and the second empty file — and the tenth — is
 -- as partial as the first. The row carries it, so it is visible while the file is in front of
 -- the person rather than remembered from a sentence in `:messages`.
 check(

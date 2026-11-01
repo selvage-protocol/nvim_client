@@ -1,0 +1,53 @@
+name: copy contracts
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: workspace/nvim_client
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: selvage-protocol/vscode_client
+          ref: main
+          path: workspace/vscode_client
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: selvage-protocol/specification
+          ref: 12795c817566897d0af4c13877d229f4555581f8
+          path: workspace/specification
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14.7"
+
+      - name: log the exact contract inputs
+        run: |
+          for repo in nvim_client vscode_client specification; do
+            printf '%s=' "$repo"
+            git -C "workspace/$repo" rev-parse HEAD
+          done
+
+      - name: compare committed public contracts
+        run: |
+          python3 workspace/specification/scripts/check-workspace.py \
+            --workspace "$GITHUB_WORKSPACE/workspace" --consumer nvim_client \
+            --revision nvim_client=HEAD --revision vscode_client=HEAD --revision specification=HEAD

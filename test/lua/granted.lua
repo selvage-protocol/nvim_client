@@ -3,8 +3,7 @@
 --
 --   nvim --headless -l test/lua/granted.lua      (or scripts/test-lua.sh)
 --
--- The grant is the room's listing of the host's working tree (`DESIGN.md` §4.2, `PROTOCOL.md`
--- §5). It is a listing and never content: a path in it may have no buffer here and no text
+-- The grant is the room's listing of the host's working tree (docs/grant.md). It is a listing and never content: a path in it may have no buffer here and no text
 -- behind it, and it becomes a `selvage://` buffer the moment somebody opens it — the host reads
 -- its working copy when the room asks. `test/lua/grant.lua` covers the folder a session shares,
 -- which is a different question: that one is where a *host's* buffers are measured against.

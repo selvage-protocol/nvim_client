@@ -9,8 +9,9 @@
 # and the keystroke reaches the other copy. Then `test/e2e/followundrawn.lua`: a follow into a
 # document the follower's window has not opened, which the follow opens and lands in.
 #
-# This is not part of `npm test` or CI: it needs a `nvim` on PATH and a real `selvaged`, which
-# it builds from the sibling `reference_server` checkout if there is not one already.
+# The public native CI job runs this with an explicit, freshly built SELVAGE_SELVAGED.
+# Locally it needs `npm ci`, Node >=22.18, Neovim >=0.12 on PATH and a real `selvaged`;
+# without an explicit binary it builds from the sibling `reference_server` if needed.
 #
 #   scripts/e2e/run-two-instance.sh
 #   SELVAGE_E2E_RECONNECT=0 scripts/e2e/run-two-instance.sh   # without the blip

@@ -8,16 +8,15 @@
 #   scripts/ci-local.sh lint     # actionlint over the workflow files
 #   scripts/ci-local.sh links    # lychee over README.md and docs/: every relative link and every
 #                                # URL the reader-facing prose carries
-#   scripts/ci-local.sh e2e      # the end-to-end proof: real Neovims against a real `selvaged`
-#   scripts/ci-local.sh all      # lint + checks + links + e2e
+#   scripts/ci-local.sh lua      # headless Lua suite; npm ci, Node >=22.18, Neovim >=0.12
+#   scripts/ci-local.sh e2e      # real Neovims; additionally requires SELVAGE_SELVAGED or a server checkout
+#   scripts/ci-local.sh contracts WORKSPACE SPEC_REF --revision nvim_client=REF --revision vscode_client=REF
+#   scripts/ci-local.sh all      # lint + checks + links + lua + e2e
 #
-# Keep the first, second and third of those in step with the workflow — they run the same commands,
-# so that a red job is found here rather than on a runner. `e2e` is this half of the gate that CI
-# cannot be: it needs a real Neovim and a built `selvaged` from the sibling `reference_server`
-# checkout, so `scripts/e2e/run-two-instance.sh` is run here and nowhere else. It takes a few
-# seconds, a real `nvim` per instance and an ephemeral loopback port, and it is the proof that
-# exercises the wire end to end — which is why `all` runs it rather than leaving it to whoever
-# remembers.
+# `native.yml` runs the Lua and two-instance suites against a fresh public server build.
+# Locally, set SELVAGE_SELVAGED to an explicit build to avoid the e2e script's sibling lookup.
+# Contracts are separate from `all`: the workspace and every compared revision must be explicit.
+# See docs/testing.md for prerequisites and examples.
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -71,6 +70,28 @@ job_links() {
   run_lychee --config lychee.toml --no-progress README.md docs
 }
 
+job_lua() {
+  say "lua: headless Neovim suite"
+  bash scripts/test-lua.sh
+}
+
+job_contracts() (
+  if [ "$#" -lt 2 ]; then
+    printf 'usage: %s contracts WORKSPACE SPEC_REF --revision nvim_client=REF --revision vscode_client=REF\n' "$0" >&2
+    exit 2
+  fi
+  workspace=$(cd -- "$1" && pwd)
+  specification_ref=$2
+  shift 2
+  checker=$(mktemp "$TMPDIR/check-workspace.XXXXXX.py")
+  trap 'rm -f "$checker"' EXIT
+  specification_sha=$(git -C "$workspace/specification" rev-parse --verify "${specification_ref}^{commit}")
+  say "contracts: specification=$specification_sha"
+  git -C "$workspace/specification" show "$specification_sha:scripts/check-workspace.py" > "$checker"
+  python3 "$checker" --workspace "$workspace" --consumer nvim_client \
+    --revision "specification=$specification_sha" "$@"
+)
+
 job_e2e() {
   say "e2e: two real Neovims against a real selvaged"
   bash scripts/e2e/run-two-instance.sh
@@ -80,10 +101,12 @@ case "${1:-all}" in
   checks) job_checks ;;
   lint) job_lint ;;
   links) job_links ;;
+  lua) job_lua ;;
   e2e) job_e2e ;;
-  all) job_lint; job_checks; job_links; job_e2e ;;
+  contracts) shift; job_contracts "$@" ;;
+  all) job_lint; job_checks; job_links; job_lua; job_e2e ;;
   *)
-    printf 'usage: %s [checks|lint|links|e2e|all]\n' "$0" >&2
+    printf 'usage: %s [checks|lint|links|lua|e2e|contracts WORKSPACE SPEC_REF --revision REPO=REF ...|all]\n' "$0" >&2
     exit 2
     ;;
 esac

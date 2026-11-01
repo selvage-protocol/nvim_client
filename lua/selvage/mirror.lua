@@ -1,4 +1,4 @@
--- The guest's mirror of the room: the grant's shape as a real directory (`DESIGN.md` §4.2).
+-- The guest's mirror of the room: the grant's shape as a real directory (see docs/mirror.md).
 --
 -- An editor's own extensions are separate processes. A language server, ripgrep, ctags, `fd` and a
 -- tree plugin read the filesystem and cannot see a virtual path, so a guest materialises the

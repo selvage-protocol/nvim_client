@@ -1,0 +1,98 @@
+name: native Neovim
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUST_VERSION: "1.99.1"
+      NVIM_VERSION: "v0.12.0"
+      NVIM_SHA256: "160b69125defb16e60b283b69be112fd4850d67ac8f9a752328c20ad43ec34af"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/server-target
+      SELVAGE_SELVAGED: ${{ runner.temp }}/server-target/debug/selvaged
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nvim_client
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: selvage-protocol/reference_server
+          ref: ${{ github.event_name == 'pull_request' && '8887ffa47522062c76a28b17cdf91c859f1f7169' || 'main' }}
+          path: reference_server
+          persist-credentials: false
+
+      - name: log the exact source inputs
+        run: |
+          mkdir -p ci-evidence
+          for repo in nvim_client reference_server; do
+            printf '%s=' "$repo"
+            git -C "$repo" rev-parse HEAD
+          done | tee ci-evidence/revisions.log
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.18.0"
+          cache: npm
+          cache-dependency-path: nvim_client/package-lock.json
+
+      - name: install pinned native tools
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          curl -fsSL -o "$RUNNER_TEMP/nvim.tar.gz" \
+            "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"
+          echo "$NVIM_SHA256  $RUNNER_TEMP/nvim.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: record tool versions
+        run: |
+          { node --version; npm --version; nvim --version; rustc +"$RUST_VERSION" --version; } \
+            | tee ci-evidence/tools.log
+
+      - name: build a fresh public reference server
+        timeout-minutes: 25
+        run: |
+          cargo +"$RUST_VERSION" build --locked --manifest-path reference_server/Cargo.toml -p selvaged \
+            2>&1 | tee ci-evidence/server-build.log
+          "$SELVAGE_SELVAGED" --version | tee ci-evidence/server-version.log
+
+      - name: install companion dependencies
+        working-directory: nvim_client
+        run: npm ci
+
+      - name: headless Lua suite
+        timeout-minutes: 10
+        working-directory: nvim_client
+        run: bash scripts/test-lua.sh 2>&1 | tee ../ci-evidence/lua.log
+
+      - name: two real Neovim instances
+        timeout-minutes: 10
+        working-directory: nvim_client
+        run: bash scripts/e2e/run-two-instance.sh 2>&1 | tee ../ci-evidence/two-instance.log
+
+      - name: retain failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-neovim-failure
+          path: ci-evidence/*.log
+          if-no-files-found: warn
+          retention-days: 7
