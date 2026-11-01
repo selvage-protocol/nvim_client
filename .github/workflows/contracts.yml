@@ -32,6 +32,13 @@ jobs:
         with:
           repository: selvage-protocol/specification
           ref: 12795c817566897d0af4c13877d229f4555581f8
+          path: contract_checker
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: selvage-protocol/specification
+          ref: main
           path: workspace/specification
           persist-credentials: false
 
@@ -41,6 +48,8 @@ jobs:
 
       - name: log the exact contract inputs
         run: |
+          printf 'checker='
+          git -C contract_checker rev-parse HEAD
           for repo in nvim_client vscode_client specification; do
             printf '%s=' "$repo"
             git -C "workspace/$repo" rev-parse HEAD
@@ -48,6 +57,6 @@ jobs:
 
       - name: compare committed public contracts
         run: |
-          python3 workspace/specification/scripts/check-workspace.py \
+          python3 contract_checker/scripts/check-workspace.py \
             --workspace "$GITHUB_WORKSPACE/workspace" --consumer nvim_client \
             --revision nvim_client=HEAD --revision vscode_client=HEAD --revision specification=HEAD

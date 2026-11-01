@@ -10,7 +10,7 @@
 #                                # URL the reader-facing prose carries
 #   scripts/ci-local.sh lua      # headless Lua suite; npm ci, Node >=22.18, Neovim >=0.12
 #   scripts/ci-local.sh e2e      # real Neovims; additionally requires SELVAGE_SELVAGED or a server checkout
-#   scripts/ci-local.sh contracts WORKSPACE SPEC_REF --revision nvim_client=REF --revision vscode_client=REF
+#   scripts/ci-local.sh contracts WORKSPACE CHECKER_REF --revision specification=REF --revision nvim_client=REF --revision vscode_client=REF
 #   scripts/ci-local.sh all      # lint + checks + links + lua + e2e
 #
 # `native.yml` runs the Lua and two-instance suites against a fresh public server build.
@@ -77,19 +77,18 @@ job_lua() {
 
 job_contracts() (
   if [ "$#" -lt 2 ]; then
-    printf 'usage: %s contracts WORKSPACE SPEC_REF --revision nvim_client=REF --revision vscode_client=REF\n' "$0" >&2
+    printf 'usage: %s contracts WORKSPACE CHECKER_REF --revision specification=REF --revision nvim_client=REF --revision vscode_client=REF\n' "$0" >&2
     exit 2
   fi
   workspace=$(cd -- "$1" && pwd)
-  specification_ref=$2
+  checker_ref=$2
   shift 2
   checker=$(mktemp "$TMPDIR/check-workspace.XXXXXX.py")
   trap 'rm -f "$checker"' EXIT
-  specification_sha=$(git -C "$workspace/specification" rev-parse --verify "${specification_ref}^{commit}")
-  say "contracts: specification=$specification_sha"
-  git -C "$workspace/specification" show "$specification_sha:scripts/check-workspace.py" > "$checker"
-  python3 "$checker" --workspace "$workspace" --consumer nvim_client \
-    --revision "specification=$specification_sha" "$@"
+  checker_sha=$(git -C "$workspace/specification" rev-parse --verify --end-of-options "${checker_ref}^{commit}")
+  say "contracts: checker=$checker_sha"
+  git -C "$workspace/specification" show "$checker_sha:scripts/check-workspace.py" > "$checker"
+  python3 "$checker" --workspace "$workspace" --consumer nvim_client "$@"
 )
 
 job_e2e() {
@@ -106,7 +105,7 @@ case "${1:-all}" in
   contracts) shift; job_contracts "$@" ;;
   all) job_lint; job_checks; job_links; job_lua; job_e2e ;;
   *)
-    printf 'usage: %s [checks|lint|links|lua|e2e|contracts WORKSPACE SPEC_REF --revision REPO=REF ...|all]\n' "$0" >&2
+    printf 'usage: %s [checks|lint|links|lua|e2e|contracts WORKSPACE CHECKER_REF --revision REPO=REF ...|all]\n' "$0" >&2
     exit 2
     ;;
 esac
