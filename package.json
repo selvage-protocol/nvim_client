@@ -19,12 +19,12 @@
   },
   "dependencies": {
     "lib0": "0.2.119",
-    "ws": "8.22.0",
+    "ws": "8.22.1",
     "y-protocols": "1.0.7",
     "yjs": "13.6.33"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/ws": "8.18.2",
     "typescript": "7.0.2"
   }

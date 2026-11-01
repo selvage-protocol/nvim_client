@@ -37,7 +37,7 @@ jobs:
       # `dry-run-gating`, whose Python supplies the PyYAML pinned below.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.14.7"
+          python-version: "3.14.8"
 
       - name: install the guard's dependency
         run: python3 -m pip install pyyaml==6.0.3
@@ -49,7 +49,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.18.0"
+          node-version: "26.13.0"
           cache: npm
 
       - name: the release workflow's retry preconditions

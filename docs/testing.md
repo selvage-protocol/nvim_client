@@ -8,7 +8,7 @@ The public workflows separate three kinds of evidence:
   Pull requests check a fixed public `reference_server` commit; weekly and manual runs
   resolve current server `main` to catch upstream behavioral drift. Every run logs the
   full source revisions and builds `selvaged` from scratch with `cargo build --locked`.
-  Node 22.18.0, Neovim v0.12.0 (verified archive digest), and
+  Node 26.13.0, Neovim v0.12.6 (verified archive digest), and
   Rust 1.99.1 are pinned. The job has a 45-minute timeout, shorter build/test step timeouts,
   and uploads build/test logs for seven days on failure. These are real native tests, not
   substitutes inferred from the companion suite.

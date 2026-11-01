@@ -1,7 +1,7 @@
 {
   description = "Selvage's Neovim client: the plugin, the dev shell, the server-free checks, and the two demo runners";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   outputs =
     { self, nixpkgs }:
@@ -19,7 +19,7 @@
       mkSelvage =
         pkgs:
         let
-          node = pkgs.nodejs_22;
+          node = pkgs.nodejs_26;
 
           # The companion is Node, and its imports (`yjs`, `ws`, `y-protocols`, `lib0`) resolve
           # from a `node_modules` beside it — built from the lock file rather than taken from a
@@ -106,7 +106,7 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           packages = [
-            pkgs.nodejs_22
+            pkgs.nodejs_26
             pkgs.neovim
           ];
         };

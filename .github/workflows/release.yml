@@ -85,7 +85,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: github.event_name == 'workflow_dispatch'
         with:
-          node-version: "22.18.0"
+          node-version: "26.13.0"
 
       # On a tag push the tag names the version, and nothing here computes anything.
       - name: resolve the release version
@@ -205,7 +205,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.18.0"
+          node-version: "26.13.0"
           cache: npm
 
       # A job retry can reuse a successful plan after remote tags have changed. Recheck both
