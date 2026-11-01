@@ -3,9 +3,16 @@
 A Neovim client for the [Selvage session protocol](https://github.com/selvage-protocol/specification):
 share a link, come edit my code with me.
 
-Status: v1 in progress. Hosting, joining by invite and editing together work today.
+Status: v1 in progress, and feature-frozen at what works: hosting, joining by invite and editing
+together work today, and this client grows no further while the release is prepared.
 
 ![Neovim hosting a session: the session bar reads Sharing “taskboard” with both faces, and Grace’s caret, her selection and her initials are drawn in Ada’s window](docs/images/host-editing.png)
+
+[The recording](docs/images/selvage-demo.mp4) is one run of the demo below: Neovim hosting,
+Neovim joining, both editing at once, a browser page as a third seat, and an MCP agent reading
+and editing the same file. The run itself is one command, from the server's checkout:
+`reference_server/scripts/demo/demo.sh` — [Get it working](https://selvage.dontblameme.dev/get-it-working)
+has the whole of it.
 
 ## Get it working
 
@@ -114,6 +121,7 @@ key, so a link given wherever an address is asked for is refused and nothing is 
 
 ## More
 
+- [The demo](docs/images/selvage-demo.mp4): one recording of the one-command demo, all four clients.
 - [With Nix](docs/install-nix.md): installing the plugin from the flake, under Home Manager and as
   an overlay.
 - [Command behaviour](docs/commands.md): what `:SelvageHost` and `:SelvageJoin` ask and refuse, the
