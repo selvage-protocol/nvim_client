@@ -11,8 +11,7 @@ together work today, and this client grows no further while the release is prepa
 [The recording](docs/images/selvage-demo.mp4) is one run of the demo below: Neovim hosting,
 Neovim joining, both editing at once, a browser page as a third seat, and an MCP agent reading
 and editing the same file. The run itself is one command, from the server's checkout:
-`reference_server/scripts/demo/demo.sh` — [Get it working](https://selvage.dontblameme.dev/get-it-working)
-has the whole of it.
+`reference_server/scripts/demo/demo.sh`, and `reference_server/docs/demo.md` says what it starts.
 
 ## Get it working
 
