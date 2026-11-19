@@ -94,6 +94,9 @@ local function connect_failure(connect, code, message)
     why = tostring(message or '')
   end
   if what == 'host' then
+    if connect.address == nil or connect.address == '' then
+      return 'could not host the session. ' .. why
+    end
     return ('could not host on %s. %s'):format(tostring(connect.address or ''), why)
   end
   return 'could not join the session. ' .. why

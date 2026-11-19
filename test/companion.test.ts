@@ -1545,7 +1545,7 @@ test('a line that is not a request is refused before it is queued', () => {
   for (const line of [
     '{"type":"presence","cursors":[]}',
     '{"type":"frobnicate"}',
-    '{"type":"host"}',
+    '{"type":"host","serverUrl":7}',
     '{"type":"change","path":"a","start":"0","end":1,"text":"x"}',
     '{"type":"save","id":7}',
     '7',
@@ -1559,12 +1559,13 @@ test('a line that is not a request is refused before it is queued', () => {
     true,
     'a whole request still passes',
   );
+  assert.equal(isRequest({ type: 'host' }), true, 'a bare host now passes');
   assert.equal(isRequest({ type: 'leave' }), true, 'and a bare one too');
 });
 
 test('a misshapen request handled directly is dropped, not answered', async () => {
   const it = harness('host');
-  await it.companion.handle({ type: 'host' } as unknown as Request);
+  await it.companion.handle({ type: 'host', serverUrl: 7 } as unknown as Request);
   assert.deepEqual(it.hosts, [], 'no room was opened for a host with no server');
   assert.deepEqual(it.sent, [], 'and nothing was answered');
 });

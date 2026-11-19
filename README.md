@@ -125,6 +125,7 @@ key, so a link given wherever an address is asked for is refused and nothing is 
   fetched into it.
 - [Remote cursors](docs/remote-cursors.md): how a peer's caret, selection and sign are drawn, the
   follow, and the session bar.
+- [Host-run relay](docs/host-run-relay.md): the relay in the host client and reaching guests over Tailscale
 
 ## Development
 
