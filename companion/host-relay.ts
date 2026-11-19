@@ -28,6 +28,8 @@ const ROOM_GRACE_MS = 30000;
 const PING_INTERVAL_MS = 30000;
 /** How many ping intervals may pass unanswered before the connection is dropped. */
 const MISSED_PINGS = 2;
+const HELLO_TIMEOUT_MS = 10000;
+const MAX_QUEUE_BYTES = 32 * 1024 * 1024;
 const MAX_PEERS_PER_ROOM = 128;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_DISPLAY_NAME = 32;
@@ -75,6 +77,7 @@ interface Connection {
   room: string | undefined;
   token: string | undefined;
   peer: Peer | undefined;
+  handshake: NodeJS.Timeout | undefined;
   ping: NodeJS.Timeout | undefined;
 }
 
@@ -115,10 +118,18 @@ function errorResponse(socket: WebSocket, id: unknown, code: string, message: st
   sendJson(socket, { v: WIRE, id, error: { code, message } });
 }
 
+function requestUrl(target: string | undefined, fallback: string): URL | undefined {
+  try {
+    return new URL(target ?? fallback, 'http://localhost');
+  } catch {
+    return undefined;
+  }
+}
+
 /** A fault before seating: the event, then the close the code names. */
 function refusal(socket: WebSocket, code: string, message: string, close: number): void {
   event(socket, 'session.error', { code, message });
-  socket.close(close, message.slice(0, 123));
+  socket.close(close, 'request refused');
 }
 
 function displayName(params: unknown): string | undefined {
@@ -194,10 +205,16 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
   const rooms = new Map<string, Room>();
   const connections = new Map<WebSocket, Connection>();
   const sockets = new Set<WebSocket>();
+  const httpSockets = new Set<import('node:net').Socket>();
   let stopping = false;
 
   const server = createServer((request: IncomingMessage, reply: ServerResponse) => {
-    const url = new URL(request.url ?? '/', 'http://localhost');
+    const url = requestUrl(request.url, '/');
+    if (url === undefined) {
+      reply.writeHead(400, { 'content-type': 'application/json' });
+      reply.end('{"error":"bad request target"}');
+      return;
+    }
     if (request.method !== 'GET' || url.pathname !== '/meta') {
       reply.writeHead(404, { 'content-type': 'application/json' });
       reply.end('{"error":"not found"}');
@@ -217,6 +234,11 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
     );
   });
 
+
+  server.on('connection', (socket: import('node:net').Socket) => {
+    httpSockets.add(socket);
+    socket.on('close', () => httpSockets.delete(socket));
+  });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_FRAME_BYTES,
@@ -291,9 +313,14 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
 
   function relay(peer: Peer, frame: Buffer): void {
     for (const other of peer.room.peers.values()) {
-      if (other.id !== peer.id && other.socket.readyState === WebSocket.OPEN) {
-        other.socket.send(frame, { binary: true });
+      if (other.id === peer.id || other.socket.readyState !== WebSocket.OPEN) {
+        continue;
       }
+      if (other.socket.bufferedAmount + frame.length > MAX_QUEUE_BYTES) {
+        other.socket.terminate();
+        continue;
+      }
+      other.socket.send(frame, { binary: true });
     }
   }
 
@@ -373,6 +400,10 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
     };
     room.peers.set(peer.id, peer);
     connection.peer = peer;
+    if (connection.handshake !== undefined) {
+      clearTimeout(connection.handshake);
+      connection.handshake = undefined;
+    }
 
     const reply = {
       v: WIRE,
@@ -453,23 +484,34 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
   }
 
   wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
-    sockets.add(socket);
-    const url = new URL(request.url ?? '/session', 'http://localhost');
+    const url = requestUrl(request.url, '/session');
+    if (url === undefined) {
+      socket.close(1002, 'bad request target');
+      return;
+    }
     const roomValues = url.searchParams.getAll('room');
     const tokenValues = url.searchParams.getAll('token');
+    if (roomValues.length > 1 || tokenValues.length > 1) {
+      refusal(socket, 'token_invalid', 'the URL repeats room or token', 4002);
+      return;
+    }
+    sockets.add(socket);
     const connection: Connection = {
       socket,
       room: roomValues.length === 1 ? roomValues[0] : undefined,
       token: tokenValues.length === 1 ? tokenValues[0] : undefined,
       peer: undefined,
+      handshake: undefined,
       ping: undefined,
     };
     connections.set(socket, connection);
+    connection.handshake = setTimeout(() => {
+      if (connection.peer === undefined) {
+        refusal(socket, 'hello_required', 'session.hello was not sent in time', 4000);
+      }
+    }, HELLO_TIMEOUT_MS);
+    connection.handshake.unref();
 
-    if (roomValues.length > 1 || tokenValues.length > 1) {
-      refusal(socket, 'token_invalid', 'the URL repeats room or token', 4002);
-      return;
-    }
 
     connection.ping = setInterval(() => {
       const peer = connection.peer;
@@ -512,6 +554,10 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
       }
     });
     socket.on('close', () => {
+      if (connection.handshake !== undefined) {
+        clearTimeout(connection.handshake);
+        connection.handshake = undefined;
+      }
       disconnect(connection);
       connections.delete(socket);
       sockets.delete(socket);
@@ -522,8 +568,8 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
   });
 
   server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const url = new URL(request.url ?? '/', 'http://localhost');
-    if (url.pathname !== '/session') {
+    const url = requestUrl(request.url, '/');
+    if (url === undefined || url.pathname !== '/session' || stopping) {
       socket.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n');
       return;
     }
@@ -564,10 +610,18 @@ export async function startHostRelay(options: HostRelayOptions = {}): Promise<Ho
       }
       rooms.clear();
       for (const socket of sockets) {
+        const connection = connections.get(socket);
+        if (connection?.handshake !== undefined) {
+          clearTimeout(connection.handshake);
+        }
         socket.terminate();
       }
       sockets.clear();
       connections.clear();
+      for (const socket of httpSockets) {
+        socket.destroy();
+      }
+      httpSockets.clear();
       await new Promise<void>((resolve) => {
         server.close(() => {
           resolve();

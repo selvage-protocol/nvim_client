@@ -766,7 +766,7 @@ export class Companion {
       }
     }
     let url = serverUrl;
-    if (url === undefined || url === '') {
+    if (url === undefined) {
       this.hostRelay = await startHostRelay();
       url = this.hostRelay.baseUrl;
     }

@@ -11,13 +11,15 @@ today.
 ## Reaching the host over Tailscale
 
 Install Tailscale on the host and on every guest and join the machines to the same tailnet.
-The host client reads `tailscale ip -4` and puts that address in the invite. Guests dial the
-invite over the tailnet, so no router port forward and no public address are needed. The
-listener stays off the public internet.
+The companion prefers `tailscale ip -4` for the address it puts in the invite. Guests dial that
+address over the tailnet, so no router port forward is needed. The relay listens on all local
+interfaces, so restrict inbound access with firewall or network rules. The invite address only
+says where guests should connect; it does not restrict where the listener answers.
 
-A host on the same LAN as its guests can advertise its LAN address instead. A host with a
-public address can advertise that directly, with whatever port forward and firewall rules
-it chooses.
+The companion falls back to the first non-internal LAN address, then `127.0.0.1`. It chooses
+automatically. A host with Tailscale cannot choose a LAN address for the invite from the command,
+and a router port forward does not change that address. Pass an explicit server URL to use a
+different relay instead.
 
 The invite is still a secret. It now carries the host's reachable address as well as the
 room key and the host public key.

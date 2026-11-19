@@ -181,10 +181,12 @@ vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 vim.ui.input = builtin_input
 vim.g.selvage_server_url = nil
 local before = #notices
+local hosts_before_bare = count_type('host')
 local raised = pcall(vim.cmd, 'SelvageHost')
 check('a bare :SelvageHost does not raise E471', raised, true)
+check('  and it sends one host request', count_type('host'), hosts_before_bare + 1)
 check('  and it does not ask for a server', prompted, nil)
-check('  and it hosts without a serverUrl', last_of('host') and last_of('host').serverUrl, nil)
+check('  and that request omits serverUrl', last_of('host') and last_of('host').serverUrl, nil)
 
 before = #notices
 raised = pcall(vim.cmd, 'SelvageJoin')
@@ -215,9 +217,9 @@ prompted = nil
 vim.cmd('SelvageHost')
 check('a configured address is not asked about', prompted, nil)
 check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:9999')
-vim.g.selvage_server_url = nil
 vim.cmd('SelvageHost ws://127.0.0.1:5555')
-check('an explicit address beats the remembered one', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+check('an explicit address beats the configured one', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+vim.g.selvage_server_url = nil
 prompted = nil
 vim.cmd('SelvageHost')
 check('  and the next bare host runs its own relay', prompted, nil)
