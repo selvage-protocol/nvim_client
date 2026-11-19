@@ -24,11 +24,14 @@ different relay instead.
 ## Tailcat without a tailnet
 
 [Tailcat](https://github.com/tailscale/tailcat) needs no Tailscale account or control plane.
-Bind the companion relay to `127.0.0.1`, run `tailcat serve <port>`, and hand out the printed
-`tc...` address with the invite. The guest runs
-`tailcat forward <tc-addr> 18080:<port>` and joins at `ws://127.0.0.1:18080/` with the room,
-token and fragment from the invite. Tailcat addresses are capabilities. Share them with the
-same care as the invite.
+The companion relay listens on all interfaces, so restrict inbound access with a firewall. Put a
+TLS terminator and rate limit in front of the relay and run `tailcat serve <port>` against that
+protected port. Hand the guest the printed `tc...` address and the port. Tailcat addresses are
+capabilities. Share them with the same care as the invite.
+
+The guest runs `tailcat forward <tc-addr> 18080:<port>`, then replaces only the invite's host and
+port with `127.0.0.1:18080`. Keep the `/session` path, query and fragment as the host sent them.
+The port comes from the invite and may change when the relay restarts.
 
 The invite is still a secret. It now carries the host's reachable address as well as the
 room key and the host public key.
