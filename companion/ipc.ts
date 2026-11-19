@@ -39,7 +39,8 @@ export interface PresenceCursor extends Omit<Cursor, 'anchor' | 'head' | 'colour
 /** A message the front-end sends. */
 export type Request =
   /**
-   * Mint a room on this server and become its host. Refused while a session is live: see
+   * Mint a room and become its host. Without `serverUrl` the companion runs the relay itself
+   * on an ephemeral port. Refused while a session is live: see
    * `refused`.
    *
    * `root` is the folder this session shares — the one the front-end stood in when the session
@@ -51,7 +52,7 @@ export type Request =
    */
   | {
       type: 'host';
-      serverUrl: string;
+      serverUrl?: string;
       displayName?: string;
       autoSave?: boolean;
       root?: string;
@@ -281,7 +282,7 @@ export function isRequest(value: unknown): value is Request {
   switch (fields['type']) {
     case 'host':
       return (
-        text('serverUrl') &&
+        maybeText('serverUrl') &&
         maybeText('displayName') &&
         maybeFlag('autoSave') &&
         maybeText('root')

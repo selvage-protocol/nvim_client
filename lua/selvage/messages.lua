@@ -66,6 +66,10 @@ local function connect_failure(connect, code, message)
   end
   local what = connect and connect.what or 'join'
   local why
+  if what == 'host' and (connect == nil or connect.address == nil or connect.address == '') then
+    local detail = tostring(message or '')
+    return 'could not host the session. ' .. (detail == '' and 'the local relay could not start.' or detail)
+  end
   if code == 'room_unknown' then
     why = 'That invite names a room the server does not have. Ask the host for a fresh invite.'
   elseif code == 'token_invalid' then
@@ -94,6 +98,9 @@ local function connect_failure(connect, code, message)
     why = tostring(message or '')
   end
   if what == 'host' then
+    if connect.address == nil or connect.address == '' then
+      return 'could not host the session. ' .. why
+    end
     return ('could not host on %s. %s'):format(tostring(connect.address or ''), why)
   end
   return 'could not join the session. ' .. why

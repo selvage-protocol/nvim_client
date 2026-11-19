@@ -175,65 +175,55 @@ vim.fn.delete(vim.fn.getcwd() .. '/.tmp/lua-commands-data', 'rf')
 
 -- -- a bare command reaches the plugin's own guard ---------------------------------
 --
--- `:SelvageHost` and `:SelvageJoin` take an optional argument. With none, they ask for it, and
--- where there is nobody to ask they refuse in this plugin's words.
+-- `:SelvageHost` and `:SelvageJoin` take an optional argument. A bare host runs the relay in
+-- the companion and sends no server address. A bare join still needs its invite.
 
 vim.ui.input = builtin_input
 vim.g.selvage_server_url = nil
 local before = #notices
+local hosts_before_bare = count_type('host')
 local raised = pcall(vim.cmd, 'SelvageHost')
 check('a bare :SelvageHost does not raise E471', raised, true)
-check('  and the refusal is the plugin\u{2019}s', said_since(before, 'a server address is needed') ~= nil, true)
-check('  and it names one', said_since(before, ':SelvageHost ws://127.0.0.1:8080') ~= nil, true)
+check('  and it sends one host request', count_type('host'), hosts_before_bare + 1)
+check('  and it does not ask for a server', prompted, nil)
+check('  and that request omits serverUrl', last_of('host') and last_of('host').serverUrl, nil)
 
 before = #notices
 raised = pcall(vim.cmd, 'SelvageJoin')
 check('a bare :SelvageJoin does not raise E471 either', raised, true)
 check('  and says what is missing', said_since(before, 'an invite link is needed') ~= nil, true)
 
--- With somebody to ask, an unremembered command asks once, starting from the demo
--- default. The answer is then reused without asking — across restarts — until an
--- explicit address or the setting uses another.
+-- An explicit address is the escape hatch: it is remembered and passed to the companion
+-- instead of the local relay.
 answer_with('ws://127.0.0.1:7777')
-vim.cmd('SelvageHost')
-check('a bare :SelvageHost asks for an address', prompted ~= nil, true)
-check('  in the plugin\u{2019}s words', prompted and prompted.prompt:find('Selvage server to host on', 1, true) ~= nil, true)
-check('  starting from the demo default', prompted and prompted.default, 'selvage-demo.dontblameme.dev')
-check('  and hosts on the answer', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
+vim.cmd('SelvageHost ws://127.0.0.1:7777')
+check('an explicit address is hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
+check('  and nothing is asked', prompted, nil)
 
--- The answer is remembered, so the next bare host proceeds on it with no question.
-prompted = nil
-vim.cmd('SelvageHost')
-check('  a remembered address is not asked about', prompted, nil)
-check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7777')
-
--- The address outlives this Neovim: it is written when a host starts, so a restart — a fresh
--- plugin with no memory of its own — proceeds on the file with no question either. Another
--- address arrives explicitly, which is the escape hatch that changes what is remembered.
+-- The address outlives this Neovim, but a later bare host still runs its own relay rather
+-- than reaching for the remembered one.
 vim.cmd('SelvageHost ws://127.0.0.1:7778')
 check('a host writes the address down', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
--- A restart loads the plugin with the real prompt in place, not this file's stand-in, so the
--- input is put back before the reload: otherwise the fresh plugin mistakes the stand-in for
--- the built-in and believes there is someone to ask where there is no one.
 vim.ui.input = builtin_input
 selvage = restart()
 prompted = nil
 vim.cmd('SelvageHost')
-check('  a restart proceeds on the address last used', prompted, nil)
-check('    and hosting again uses it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:7778')
+check('  a restart proceeds with its own relay', prompted, nil)
+check('    and sends no serverUrl', last_of('host') and last_of('host').serverUrl, nil)
 
--- An explicit address beats the remembered one: nothing is asked, and what was explicit
--- becomes what the next bare host reuses.
-answer_with(function(opts)
-  return opts.default
-end)
-vim.cmd('SelvageHost ws://127.0.0.1:5555')
-check('an explicit address is not asked about', prompted, nil)
-check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+-- A configured address still names a server, and an explicit argument still wins.
+vim.g.selvage_server_url = 'ws://127.0.0.1:9999'
 prompted = nil
 vim.cmd('SelvageHost')
-check('  and the next bare host reuses it without asking', prompted, nil)
-check('    and hosts on it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+check('a configured address is not asked about', prompted, nil)
+check('  and is the one hosted on', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:9999')
+vim.cmd('SelvageHost ws://127.0.0.1:5555')
+check('an explicit address beats the configured one', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:5555')
+vim.g.selvage_server_url = nil
+prompted = nil
+vim.cmd('SelvageHost')
+check('  and the next bare host runs its own relay', prompted, nil)
+check('    and sends no serverUrl', last_of('host') and last_of('host').serverUrl, nil)
 
 -- A configured address is not asked about at all, as it is in the other client.
 vim.g.selvage_server_url = 'ws://127.0.0.1:9999'
@@ -302,6 +292,9 @@ check(
   'wss://selvage-demo.dontblameme.dev'
 )
 before = #notices
+answer_with(function(opts)
+  return opts.default
+end)
 prompted = nil
 vim.cmd('SelvageChangeServer')
 check(
@@ -452,8 +445,8 @@ check(
 check('  and remembered for the next host', table.concat(vim.fn.readfile(last_server_file), '\n'), 'ws://127.0.0.1:6666')
 prompted = nil
 vim.cmd('SelvageHost')
-check('    and a bare host reuses it without asking', prompted, nil)
-check('      and hosts on it', last_of('host') and last_of('host').serverUrl, 'ws://127.0.0.1:6666')
+check('    and a bare host runs its own relay', prompted, nil)
+check('      and sends no serverUrl', last_of('host') and last_of('host').serverUrl, nil)
 
 -- Submitting the box unchanged changes nothing: a dismissed or unedited answer is not a change.
 before = #notices

@@ -24,6 +24,8 @@ import { NvimEditorHost } from './editor.ts';
 import { enumerateGrant, grantReport, readGrantedPresence } from './grant.ts';
 import type { GrantCut, GrantEnumeration, Presence } from './grant.ts';
 import { isRequest } from './ipc.ts';
+import { startHostRelay } from './host-relay.ts';
+import type { HostRelay } from './host-relay.ts';
 import { UnreadableInvite, hostRoom, joinRoom } from './relay.ts';
 import type { ListingSource } from './relay.ts';
 import type { Notification, PresenceCursor, Request } from './ipc.ts';
@@ -152,6 +154,8 @@ export class Companion {
   private stopListening?: () => void;
   /** The shared folder, watched while this process is hosting and closed with the session. */
   private grantWatcher?: FSWatcher;
+  /** The relay a bare host runs in this process, stopped with the session. */
+  private hostRelay?: HostRelay;
   /**
    * Whether the room's listing has already reached the front-end through the bridge's own
    * `grant` report. The bridge is constructed before the handshake's listing is read, so an
@@ -301,6 +305,7 @@ export class Companion {
       }
       await engine.disconnect();
     }
+    await this.stopHostRelay();
     this.send({ type: 'status', state: 'idle' });
   }
 
@@ -729,7 +734,7 @@ export class Companion {
    * before: a mint that threw opened no session to warn about.
    */
   private async hosting(
-    serverUrl: string,
+    serverUrl: string | undefined,
     displayName: string,
     root?: string,
   ): Promise<CompanionEngine> {
@@ -760,7 +765,18 @@ export class Companion {
         });
       }
     }
-    const engine = await this.engines.host(serverUrl, displayName, listing);
+    let url = serverUrl;
+    if (url === undefined) {
+      this.hostRelay = await startHostRelay();
+      url = this.hostRelay.baseUrl;
+    }
+    let engine: CompanionEngine;
+    try {
+      engine = await this.engines.host(url, displayName, listing);
+    } catch (error: unknown) {
+      await this.stopHostRelay();
+      throw error;
+    }
     // The state the mint sealed carries this listing, so the room has been handed it: from here
     // it is what `publishGrant` compares a fresh walk against.
     this.grantedListing = [...walked];
@@ -768,6 +784,13 @@ export class Companion {
     // that stopped short is a fact about the session, and one that never opened has none.
     this.reportListingCut(cut);
     return engine;
+  }
+
+  /** Stops the relay a bare host started. Idempotent, so every ending path may call it. */
+  private async stopHostRelay(): Promise<void> {
+    const relay = this.hostRelay;
+    this.hostRelay = undefined;
+    await relay?.stop();
   }
 
   /**

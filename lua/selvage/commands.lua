@@ -67,14 +67,18 @@ function M.host(url)
     return
   end
   local function with_url(address)
-    -- Whatever was typed — an argument, an answer to the first-run question, a remembered one — is
-    -- refused and completed here, so one place decides what a bare host means and the command that
-    -- reports an address reports the address a host would dial.
-    if refuse_server_address(address) then
-      return
+    -- A bare host passes no address: the companion runs the relay and the invite carries
+    -- the address it listens on. An argument or the setting still names a server to dial,
+    -- and that address is refused and completed here, so one place decides what a bare host
+    -- means and the command that reports an address reports the address a host would dial.
+    if address ~= nil then
+      if refuse_server_address(address) then
+        return
+      end
+      -- A session is given up only for an address that passed: an invite link pasted into this
+      -- command or its box is refused before the question, so it costs no room.
+      address = normalise_server_address(address)
     end
-    -- A session is given up only for an address that passed: an invite link pasted into this
-    -- command or its box is refused before the question, so it costs no room.
     if in_session() then
       local can_leave = confirm_leave(
         'you are in this session; hosting a session means leaving it first.',
@@ -85,25 +89,36 @@ function M.host(url)
       end
       end_session()
     end
-    address = normalise_server_address(address)
-    remember_last_server(address)
+    if address ~= nil then
+      remember_last_server(address)
+    end
     resolve_display_name(function(display_name)
       local process = ensure()
       if process ~= nil then
         capture_root()
         state.connect = { what = 'host', address = address }
-        process:send({
+        local request = {
           type = 'host',
-          serverUrl = address,
           displayName = display_name,
           autoSave = auto_save(),
           root = state.root,
-        })
+        }
+        if address ~= nil then
+          request.serverUrl = address
+        end
+        process:send(request)
       end
     end)
   end
   if wanted ~= '' then
     with_url(wanted)
+    return
+  end
+  -- A bare host with no configured server runs the relay here. The setting still names a
+  -- server to dial, and a remembered address is left for :SelvageChangeServer to report.
+  local configured = vim.g.selvage_server_url
+  if configured == nil or vim.trim(tostring(configured)) == '' then
+    with_url(nil)
     return
   end
   resolve_server_url(with_url)
