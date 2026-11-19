@@ -21,6 +21,15 @@ automatically. A host with Tailscale cannot choose a LAN address for the invite 
 and a router port forward does not change that address. Pass an explicit server URL to use a
 different relay instead.
 
+## Tailcat without a tailnet
+
+[Tailcat](https://github.com/tailscale/tailcat) needs no Tailscale account or control plane.
+Bind the companion relay to `127.0.0.1`, run `tailcat serve <port>`, and hand out the printed
+`tc...` address with the invite. The guest runs
+`tailcat forward <tc-addr> 18080:<port>` and joins at `ws://127.0.0.1:18080/` with the room,
+token and fragment from the invite. Tailcat addresses are capabilities. Share them with the
+same care as the invite.
+
 The invite is still a secret. It now carries the host's reachable address as well as the
 room key and the host public key.
 
