@@ -26,12 +26,32 @@ different relay instead.
 [Tailcat](https://github.com/tailscale/tailcat) needs no Tailscale account or control plane.
 The companion relay listens on all interfaces, so restrict inbound access with a firewall. Put a
 TLS terminator and rate limit in front of the relay and run `tailcat serve <port>` against that
-protected port. Hand the guest the printed `tc...` address and the port. Tailcat addresses are
-capabilities. Share them with the same care as the invite.
+protected port. Tailcat prints a `tc...` address. Send the guest that address, the protected
+port, and the complete invite URL the host copied.
 
-The guest runs `tailcat forward <tc-addr> 18080:<port>`, then replaces only the invite's host and
-port with `127.0.0.1:18080`. Keep the `/session` path, query and fragment as the host sent them.
-The port comes from the invite and may change when the relay restarts.
+An invite is one URL. Its `?room=…&token=…` query names the room and carries the join token. The
+text after `#` is the fragment: `#k=<room-key>&h=<host-key>`. The client needs both parts. Copy
+them exactly. With real values in place of the angle brackets, a host invite looks like this:
+
+```
+ws://<host-address>:<relay-port>/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
+```
+
+The guest forwards the protected port and changes only the invite's host and port. If that port
+is `8080`:
+
+```sh
+tailcat forward <tc-addr> 18080:8080
+```
+
+The guest then starts `:SelvageJoin` with this URL:
+
+```
+ws://127.0.0.1:18080/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
+```
+
+Keep `/session`, the full query and the full fragment. Change nothing else. Tailcat addresses
+are capabilities. Share the address and the invite with the same care.
 
 The invite is still a secret. It now carries the host's reachable address as well as the
 room key and the host public key.
