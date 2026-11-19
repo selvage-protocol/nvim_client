@@ -24,34 +24,36 @@ different relay instead.
 ## Tailcat without a tailnet
 
 [Tailcat](https://github.com/tailscale/tailcat) needs no Tailscale account or control plane.
-The companion relay listens on all interfaces, so restrict inbound access with a firewall. Put a
-TLS terminator and rate limit in front of the relay and run `tailcat serve <port>` against that
-protected port. Tailcat prints a `tc...` address. Send the guest that address, the protected
-port, and the complete invite URL the host copied.
+The companion relay listens on all interfaces, so restrict inbound access with a firewall. Put
+rate limiting in front of the relay. If a TLS terminator is also used, its certificate must name
+the host that appears in the invite. Run `tailcat serve <protected-port>` against the protected
+endpoint. Tailcat prints a `tc...` address. Send the guest that address, the protected port, and
+the complete invite URL the host copied.
 
 An invite is one URL. Its `?room=…&token=…` query names the room and carries the join token. The
 text after `#` is the fragment: `#k=<room-key>&h=<host-key>`. The client needs both parts. Copy
-them exactly. With real values in place of the angle brackets, a host invite looks like this:
+them exactly. With real values in place of the angle brackets, a wire invite looks like this:
 
 ```
-ws://<host-address>:<relay-port>/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
+ws://<host-address>:<protected-port>/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
 ```
 
-The guest forwards the protected port and changes only the invite's host and port. If that port
-is `8080`:
+The guest forwards the protected port to a local port. If that port is `8080`:
 
 ```sh
 tailcat forward <tc-addr> 18080:8080
 ```
 
-The guest then starts `:SelvageJoin` with this URL:
+Then the guest starts `:SelvageJoin` with the invite rewritten only in host and port:
 
 ```
 ws://127.0.0.1:18080/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
 ```
 
-Keep `/session`, the full query and the full fragment. Change nothing else. Tailcat addresses
-are capabilities. Share the address and the invite with the same care.
+Keep the invite's path, the whole query and the whole fragment. Change nothing else. A page-link
+invite keeps its `/page/` path. For a `wss://` invite, keep the hostname in the certificate and
+route it to `127.0.0.1` locally. Tailcat addresses are capabilities. Share the address and the
+invite with the same care.
 
 The invite is still a secret. It now carries the host's reachable address as well as the
 room key and the host public key.
