@@ -23,37 +23,32 @@ different relay instead.
 
 ## Tailcat without a tailnet
 
-[Tailcat](https://github.com/tailscale/tailcat) needs no Tailscale account or control plane.
-The companion relay listens on all interfaces, so restrict inbound access with a firewall. Put
-rate limiting in front of the relay. If a TLS terminator is also used, its certificate must name
-the host that appears in the invite. Run `tailcat serve <protected-port>` against the protected
-endpoint. Tailcat prints a `tc...` address. Send the guest that address, the protected port, and
-the complete invite URL the host copied.
+[Tailcat](https://github.com/tailscale/tailcat) carries the relay over WireGuard through DERP and
+NAT traversal. The companion relay listens on all interfaces, so restrict inbound access with a
+firewall and rate-limit the relay.
 
-An invite is one URL. Its `?room=…&token=…` query names the room and carries the join token. The
-text after `#` is the fragment: `#k=<room-key>&h=<host-key>`. The client needs both parts. Copy
-them exactly. With real values in place of the angle brackets, a wire invite looks like this:
+Host:
 
-```
-ws://<host-address>:<protected-port>/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
-```
+1. Run `:SelvageHost` with no address. Copy the invite URL.
+2. Read the port from the invite. In `ws://host:8080/session?…` it is `8080`.
+3. Run `tailcat serve 8080` with that port.
+4. Send the guest the printed `tc...` address, the port `8080`, and the full invite URL.
 
-The guest forwards the protected port to a local port. If that port is `8080`:
+The invite ends with a fragment such as `#k=<room-key>&h=<host-key>`. It is part of the URL. The
+guest must copy it unchanged.
 
-```sh
-tailcat forward <tc-addr> 18080:8080
-```
+Guest:
 
-Then the guest starts `:SelvageJoin` with the invite rewritten only in host and port:
+1. Run `tailcat forward <tc-addr> 18080:8080`.
+2. Insert `127.0.0.1:18080` in place of the invite's `host:port`. Keep `/session`, the `?room=…&token=…`
+   query and the `#k=…&h=…` fragment.
+3. Run `:SelvageJoin` with the new URL:
 
 ```
 ws://127.0.0.1:18080/session?room=<room-id>&token=<token>#k=<room-key>&h=<host-key>
 ```
 
-Keep the invite's path, the whole query and the whole fragment. Change nothing else. A page-link
-invite keeps its `/page/` path. For a `wss://` invite, keep the hostname in the certificate and
-route it to `127.0.0.1` locally. Tailcat addresses are capabilities. Share the address and the
-invite with the same care.
+Treat the `tc...` address and the invite as one secret.
 
 The invite is still a secret. It now carries the host's reachable address as well as the
 room key and the host public key.
