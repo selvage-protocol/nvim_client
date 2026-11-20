@@ -49,11 +49,28 @@ import type {
  * to put on disk: the same rule `isGrantedPath` holds a host's own enumeration to, so a conforming
  * host's listing never has one and the member is absent for it.
  */
+const grantChecks = new Map<string, boolean>();
+const GRANT_CHECK_LIMIT = 200_000;
+
 export function grantReport(
   paths: readonly string[],
 ): { kind: 'grant'; paths: readonly string[]; unsafe?: string[] } {
-  const unsafe = paths.filter((path) => !isGrantedPath(path));
-  return unsafe.length === 0 ? { kind: 'grant', paths } : { kind: 'grant', paths, unsafe };
+  // A grant event republishes the whole listing, and validation is a pure function of the path.
+  let unsafe: string[] | undefined;
+  for (const path of paths) {
+    let granted = grantChecks.get(path);
+    if (granted === undefined) {
+      granted = isGrantedPath(path);
+      if (grantChecks.size >= GRANT_CHECK_LIMIT) {
+        grantChecks.clear();
+      }
+      grantChecks.set(path, granted);
+    }
+    if (!granted) {
+      (unsafe ??= []).push(path);
+    }
+  }
+  return unsafe === undefined ? { kind: 'grant', paths } : { kind: 'grant', paths, unsafe };
 }
 
 /**

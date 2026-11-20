@@ -468,9 +468,9 @@ check('a whole-buffer change scales about linearly', ratio < 3, true)
 
 -- -- where in the document the rebuilt range sits --------------------------------
 --
--- A rebuild copies every row whichever shape the change takes, so it must not cost more to
--- keep the shadow of a change at the top of a document than at the bottom. Both sides are
--- ten rebuilds in a row and the cheapest of five runs, compared as a ratio so the assertion
+-- A same-size rebuild writes the changed row at either end, so it must not cost more to keep the
+-- shadow of a change at the top of a document than at the bottom. Both sides are
+-- a thousand rebuilds in a row and the cheapest of five runs, compared as a ratio so the assertion
 -- does not depend on the machine. `reshadow` is called directly because this is the rebuild's
 -- own cost; the buffer's is the same at either end, and the shadow it leaves behind then drifts
 -- from that buffer, which nothing here reads.
@@ -486,10 +486,10 @@ local function rebuild_cost(row)
   local best
   for round = 1, 5 do
     local started = os.clock()
-    for _ = 1, 10 do
+    for _ = 1, 1000 do
       spread_shared:reshadow(row, row, { 'replacement' })
     end
-    local elapsed = (os.clock() - started) / 10
+    local elapsed = (os.clock() - started) / 1000
     if best == nil or elapsed < best then
       best = elapsed
     end

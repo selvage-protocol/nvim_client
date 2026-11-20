@@ -27,6 +27,8 @@ function Document.new(bufnr, path, send)
     send = send,
     lines = api.nvim_buf_get_lines(bufnr, 0, -1, true),
     len16 = {},
+    -- The offset one past the last row, kept current so a long document's end is O(1).
+    prefix_end = 0,
     -- Counted the same way the companion counts it: one for a local change, one for an applied
     -- remote edit. An `applyEdit` carrying any other number was computed against a buffer this
     -- one has moved on from.
@@ -39,9 +41,12 @@ function Document.new(bufnr, path, send)
     -- text, and one flag cannot do both without knowing which of the two a write is.
     held_modifiable = nil,
   }, Document)
-  for index, line in ipairs(self.lines) do
-    self.len16[index] = utf16.len(line)
+  self.len16 = utf16.lengths(self.lines)
+  local total = 0
+  for index = 1, #self.len16 do
+    total = total + self.len16[index]
   end
+  self.prefix_end = total + #self.lines
   return self
 end
 
@@ -59,11 +64,35 @@ end
 
 --- The UTF-16 offset the row `row` (0-based) starts at.
 function Document:prefix(row)
+  if row >= #self.lines then
+    return self.prefix_end
+  end
   local offset = 0
   for index = 1, row do
     offset = offset + self.len16[index] + 1
   end
   return offset
+end
+
+--- The offsets at two rows in one traversal. `on_bytes` needs both ends of a change on every
+--- keystroke, and walking the shadow twice is the whole cost of a change near the end of a file.
+function Document:prefix_pair(first, last)
+  if first == last then
+    local offset = self:prefix(first)
+    return offset, offset
+  end
+  if last >= #self.lines then
+    return self:prefix(first), self:prefix(last)
+  end
+  local offset = 0
+  local at_first
+  for index = 1, last do
+    if index == first + 1 then
+      at_first = offset
+    end
+    offset = offset + self.len16[index] + 1
+  end
+  return at_first, offset
 end
 
 --- The (0-based row, byte column) a UTF-16 offset lands on.
@@ -90,27 +119,39 @@ end
 
 --- Replaces the shadow's rows `[first, last]` (0-based, inclusive) with `replacement`.
 function Document:reshadow(first, last, replacement)
-  local lines, len16 = {}, {}
-  local count = #self.lines
+  local lines, len16 = self.lines, self.len16
+  local count = #lines
   local added = #replacement
-  for index = 1, first do
-    lines[index] = self.lines[index]
-    len16[index] = self.len16[index]
+  local replacement_lengths = utf16.lengths(replacement)
+  local removed = math.max(0, math.min(last + 1, count) - first)
+  local shift = added - removed
+
+  local removed_units = 0
+  for index = first + 1, first + removed do
+    removed_units = removed_units + len16[index]
   end
-  -- The replacement and the tail have different lengths, so one destination index counts the
-  -- rows written so far: a `#` on the list being written is a search per row.
-  local at = first
+  -- Only the rows after the replacement move. A same-size edit moves none of them.
+  if shift ~= 0 then
+    local tail = last + 2
+    if tail <= count then
+      table.move(lines, tail, count, tail + shift, lines)
+      table.move(len16, tail, count, tail + shift, len16)
+    end
+    if shift < 0 then
+      for index = count + shift + 1, count do
+        lines[index] = nil
+        len16[index] = nil
+      end
+    end
+  end
+
+  local added_units = 0
   for index = 1, added do
-    at = at + 1
-    lines[at] = replacement[index]
-    len16[at] = utf16.len(replacement[index])
+    lines[first + index] = replacement[index]
+    len16[first + index] = replacement_lengths[index]
+    added_units = added_units + replacement_lengths[index]
   end
-  for index = last + 2, count do
-    at = at + 1
-    lines[at] = self.lines[index]
-    len16[at] = self.len16[index]
-  end
-  self.lines, self.len16 = lines, len16
+  self.prefix_end = self.prefix_end - removed_units - removed + added_units + added
 end
 
 --- Makes this document the room's to write and not the person's, or gives it back.
@@ -294,20 +335,21 @@ function Document:resync()
   if self.detached or not api.nvim_buf_is_valid(self.bufnr) then
     return
   end
+  local previous_end = self.prefix_end == 0 and 0 or self.prefix_end - 1
   local previous = self:text()
   self.lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, true)
-  for index, line in ipairs(self.lines) do
-    self.len16[index] = utf16.len(line)
+  self.len16 = utf16.lengths(self.lines)
+  local total = 0
+  for index = 1, #self.len16 do
+    total = total + self.len16[index]
   end
-  for index = #self.lines + 1, #self.len16 do
-    self.len16[index] = nil
-  end
+  self.prefix_end = total + #self.lines
   self.version = self.version + 1
   self.send({
     type = 'change',
     path = self.path,
     start = 0,
-    ['end'] = utf16.len(previous),
+    ['end'] = previous_end,
     text = self:text(),
   })
 end
@@ -371,17 +413,18 @@ function Document:on_bytes(
   -- not have. A buffer keeps one after its last line; the text, which is the lines joined, has
   -- none there, and the join above put that newline at the back rather than between two rows.
   if new_end_col == 0 and new_end_row >= new_count then
-    text = text:gsub('\n$', '')
+    if text:byte(-1) == 10 then text = text:sub(1, -2) end
   end
 
   -- The change's range in the offsets the text counts. A buffer counts a newline after every
   -- row, its last one included, and the text has none after its last: the row past the last is
   -- one unit past the end of the text, and every position at or past it is that end.
   local past_end = self:prefix(count) - 1
+  local start_prefix, end_prefix = self:prefix_pair(start_row, old_end_row)
   local start_at = start_row >= count and past_end + 1
-    or self:prefix(start_row) + utf16.of_byte(self:line(start_row), start_col)
+    or start_prefix + utf16.of_byte(self:line(start_row), start_col)
   local end_at = old_end_row >= count and past_end + 1
-    or self:prefix(old_end_row) + utf16.of_byte(self:line(old_end_row), old_end)
+    or end_prefix + utf16.of_byte(self:line(old_end_row), old_end)
 
   local from = math.min(start_at, past_end)
   local to = math.min(end_at, past_end)
