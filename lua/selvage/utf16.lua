@@ -13,22 +13,52 @@ local M = {}
 -- deprecation warning. Choose once rather than per keystroke.
 local modern = pcall(vim.str_utfindex, '', 'utf-16', 0)
 
---- Whether a string is ASCII, in which case every offset in it is its own byte offset.
+-- Only the out-of-range path needs a byte-level answer: the native length count cannot tell an
+-- invalid byte from ASCII. Keep the exact check there, where it costs nothing on a keystroke.
 local function ascii(s)
   return s:find('[\128-\255]') == nil
 end
 
 --- The number of UTF-16 code units in `s`.
 function M.len(s)
-  if ascii(s) then
-    return #s
+  if modern then
+    return vim.str_utfindex(s, 'utf-16', #s)
   end
-  return M.of_byte(s, #s)
+  local _, units = vim.str_utfindex(s, #s)
+  return units
+end
+
+--- The UTF-16 length of every line in a list, in the list's own order.
+---
+--- One conversion over the joined lines tells whether the list is all byte lengths. When it is,
+--- assigning each line's byte length replaces a per-line conversion. Short lists stay on the direct
+--- path: joining them costs more than it saves.
+function M.lengths(lines)
+  local count = #lines
+  local result = {}
+  if count == 0 then
+    return result
+  end
+  if count > 64 then
+    local joined = table.concat(lines, '\n')
+    if M.len(joined) == #joined then
+      for index = 1, count do
+        result[index] = #lines[index]
+      end
+      return result
+    end
+  end
+  for index = 1, count do
+    result[index] = M.len(lines[index])
+  end
+  return result
 end
 
 --- The UTF-16 offset of the byte offset `byte` in `s`.
 function M.of_byte(s, byte)
-  if ascii(s) then
+  -- An ASCII string used to answer from its byte length without checking the range. Keep that
+  -- answer, and pay for the check only where the native call would refuse it.
+  if (byte < 0 or byte > #s) and ascii(s) then
     return byte
   end
   if modern then
@@ -40,7 +70,9 @@ end
 
 --- The byte offset of the UTF-16 offset `units` in `s`.
 function M.to_byte(s, units)
-  if ascii(s) then
+  -- The native call refuses an offset past the text; an ASCII string used to answer from its own
+  -- length and return the offset as a byte index. Keep that answer here too.
+  if (units < 0 or units > #s) and ascii(s) then
     return units
   end
   if modern then

@@ -2,16 +2,16 @@
 --
 --   nvim --headless -l scripts/bench-reshadow.lua [lines]
 --
--- `Document:reshadow` copies the rows before the change, the replacement and the rows after it
--- into two fresh lists, so every shape copies the whole document. What differs between them is
--- which of the three loops does the copying, and the shape of the change decides that:
+-- `Document:reshadow` patches the shadow in place. The first two shapes replace one row with one
+-- row; the last replaces every row and measures the length of each replacement.
 --
---   at the start   `reshadow(0, 0, …)`        — the tail loop copies every row
---   at the end     `reshadow(last, last, …)`  — the head loop copies every row
---   whole buffer   `reshadow(0, #lines-1, …)` — the replacement loop copies every row
+--   at the start   `reshadow(0, 0, …)`        — one row at the front of the shadow
+--   at the end     `reshadow(last, last, …)`  — one row at the back
+--   whole buffer   `reshadow(0, #lines-1, …)` — every replacement row needs a UTF-16 length
 --
--- A row-by-row `#` on the list being written is a search per row, and it shows up as the spread
--- between those shapes. `on_bytes` is the same work end to end, through a real buffer.
+-- The whole-buffer figure also covers the batched length check, which turns an all-ASCII list
+-- into byte lengths in one pass. The `on_bytes` figures add the offset arithmetic, where the
+-- prefix is cheap in the first row and walks the shadow in the last.
 --
 -- Nothing here asserts a time: a millisecond bound is not a test. The figures are `os.clock`
 -- CPU time, the cheapest of five runs, at 20 000 lines unless another size is named.
